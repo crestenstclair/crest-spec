@@ -3,6 +3,9 @@
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "crest-spec": "src/cli/main.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
