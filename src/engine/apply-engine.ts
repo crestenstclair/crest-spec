@@ -14,6 +14,7 @@ export interface ApplyOptions {
   force?: boolean;
   maxRetries?: number;
   outputDir?: string;
+  concurrency?: number;
 }
 
 export interface ApplyResult {
@@ -50,6 +51,7 @@ export class ApplyEngine implements IApplyEngine {
   ): Promise<ApplyResult> {
     const maxRetries = options.maxRetries ?? 3;
     const outputDir = options.outputDir ?? ".";
+    const concurrency = options.concurrency ?? 1;
 
     const plan = this.planner.plan(registry, state);
     const effectiveHashes = this.hashComputer.computeAll(registry);
@@ -76,34 +78,67 @@ export class ApplyEngine implements IApplyEngine {
       errors: [],
     };
 
-    for (const action of actions) {
-      if (action.action === "destroy") {
-        const files = state.getFilesForResource(action.resourceId);
-        for (const file of files) {
-          state.deleteGeneratedFile(file.path);
-        }
-        state.deleteResource(action.resourceId);
-        state.recordAction(applyRecord.id, action.resourceId, "destroy", "success");
-        result.destroyed++;
-        continue;
-      }
+    // Handle destroys first (fast, no LLM)
+    const destroys = actions.filter((a) => a.action === "destroy");
+    const generates = actions.filter((a) => a.action !== "destroy");
 
+    for (const action of destroys) {
+      console.log(`  [destroy] ${action.resourceId}`);
+      const files = state.getFilesForResource(action.resourceId);
+      for (const file of files) {
+        state.deleteGeneratedFile(file.path);
+      }
+      state.deleteResource(action.resourceId);
+      state.recordAction(applyRecord.id, action.resourceId, "destroy", "success");
+      result.destroyed++;
+    }
+
+    const errorLogPath = join(outputDir, "apply-errors.log");
+    await Bun.write(errorLogPath, `Apply started at ${new Date().toISOString()}\n\n`);
+
+    const appendErrorLog = async (resourceId: string, error: string) => {
+      const entry = `--- ${resourceId} ---\n${error}\n\n`;
+      const existing = await Bun.file(errorLogPath).text();
+      await Bun.write(errorLogPath, existing + entry);
+    };
+
+    console.log(`\nPlan: ${generates.length} resources to generate (concurrency: ${concurrency})`);
+    console.log(`Error log: ${errorLogPath}`);
+    let completed = 0;
+
+    const processAction = async (action: (typeof generates)[0], index: number) => {
       const resource = registry.getById(action.resourceId);
-      if (!resource) continue;
+      if (!resource) return;
+
+      const label = `[${index + 1}/${generates.length}]`;
+      console.log(`\n  ${label} ${action.action} ${action.resourceId}`);
 
       const prompt = this.promptBuilder.build(resource, registry);
       const systemPrompt = this.promptBuilder.systemPrompt();
 
-      const loopResult = await this.constraintLoop.run({
-        resource,
-        registry,
-        llmClient,
-        prompt,
-        systemPrompt,
-        maxRetries,
-      });
+      let loopResult;
+      try {
+        loopResult = await this.constraintLoop.run({
+          resource,
+          registry,
+          llmClient,
+          prompt,
+          systemPrompt,
+          maxRetries,
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.log(`  ${label} CRASHED: ${msg.slice(0, 120)}`);
+        result.failed++;
+        result.errors.push(`${action.resourceId}: ${msg}`);
+        state.recordAction(applyRecord.id, action.resourceId, action.action, "failed");
+        await appendErrorLog(action.resourceId, `CRASH: ${msg}\n\nPrompt:\n${prompt}`);
+        completed++;
+        return;
+      }
 
       if (!loopResult.success) {
+        console.log(`  ${label} FAILED: ${loopResult.lastError?.slice(0, 120)}`);
         result.failed++;
         result.errors.push(`${action.resourceId}: ${loopResult.lastError}`);
         state.recordAction(applyRecord.id, action.resourceId, action.action, "failed");
@@ -119,10 +154,11 @@ export class ApplyEngine implements IApplyEngine {
           rejection_reason: loopResult.lastError,
           created_at: new Date().toISOString(),
         });
-        continue;
+        await appendErrorLog(action.resourceId, `INVARIANT: ${loopResult.lastError}\n\nPrompt:\n${prompt}`);
+        completed++;
+        return;
       }
 
-      // Upsert the resource first so generated_files FK constraint is satisfied
       state.upsertResource({
         id: resource.id,
         kind: resource.kind,
@@ -146,9 +182,7 @@ export class ApplyEngine implements IApplyEngine {
         try {
           const existing = await Bun.file(fullPath).text();
           existingHash = createHash("sha256").update(existing).digest("hex");
-        } catch {
-          // File does not exist yet
-        }
+        } catch {}
 
         if (existingHash !== contentHash) {
           await Bun.write(fullPath, content);
@@ -181,9 +215,28 @@ export class ApplyEngine implements IApplyEngine {
         created_at: new Date().toISOString(),
       });
 
+      const fileList = [...loopResult.files!.keys()].join(", ");
+      completed++;
+      console.log(`  ${label} OK → ${fileList} (${completed}/${generates.length} done)`);
       if (action.action === "create") result.created++;
       else result.modified++;
+    };
+
+    // Run with concurrency limit
+    const pending: Promise<void>[] = [];
+    for (let i = 0; i < generates.length; i++) {
+      const p = processAction(generates[i], i);
+      pending.push(p);
+      if (pending.length >= concurrency) {
+        await Promise.race(pending);
+        // Remove settled promises
+        for (let j = pending.length - 1; j >= 0; j--) {
+          const settled = await Promise.race([pending[j].then(() => true), Promise.resolve(false)]);
+          if (settled) pending.splice(j, 1);
+        }
+      }
     }
+    await Promise.all(pending);
 
     state.finishApply(applyRecord.id, result.failed > 0 ? "failed" : "ok");
     if (result.failed > 0) result.status = "failed";

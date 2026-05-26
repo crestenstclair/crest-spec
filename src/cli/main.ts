@@ -14,7 +14,8 @@ async function main(): Promise<number> {
   const projectDir = resolve(".");
 
   function getFlag(name: string): string | undefined {
-    const idx = args.indexOf(`-${name}`);
+    let idx = args.indexOf(`--${name}`);
+    if (idx === -1) idx = args.indexOf(`-${name}`);
     if (idx === -1) return undefined;
     return args[idx + 1];
   }
@@ -37,7 +38,8 @@ async function main(): Promise<number> {
       const target = getFlag("target");
       const force = hasFlag("force");
       const maxRetries = getFlag("retries") ? parseInt(getFlag("retries")!) : undefined;
-      return applyCommand(projectDir, specFile, { modelId, target, force, maxRetries });
+      const concurrency = getFlag("concurrency") ? parseInt(getFlag("concurrency")!) : 5;
+      return applyCommand(projectDir, specFile, { modelId, target, force, maxRetries, concurrency });
     }
 
     case "log": {

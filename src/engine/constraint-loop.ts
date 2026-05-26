@@ -43,25 +43,37 @@ export class ConstraintLoop implements IConstraintLoop {
 
   async run(input: ConstraintLoopInput): Promise<ConstraintLoopResult> {
     let lastError: string | null = null;
+    let lastFiles: Map<string, string> | null = null;
     let currentPrompt = input.prompt;
 
     for (let attempt = 0; attempt <= input.maxRetries; attempt++) {
+      if (attempt > 0) {
+        console.log(`      Retry ${attempt}/${input.maxRetries}: ${lastError?.slice(0, 80)}`);
+      }
+      console.log(`      Generating ${input.resource.id} (${input.resource.kind}) via ${input.llmClient.modelId}...`);
       const response = await input.llmClient.generate(currentPrompt, input.systemPrompt);
+      console.log(`      LLM responded (${response.length} chars)`);
       const files = this.parser.parse(response);
 
       if (files.size === 0) {
         lastError = "LLM returned no parseable code blocks";
-        currentPrompt = this.appendFeedback(input.prompt, lastError);
+        console.log(`      Parse failed: ${lastError}`);
+        currentPrompt = this.buildFixPrompt(input.prompt, lastError, lastFiles);
         continue;
       }
+      lastFiles = files;
+      console.log(`      Parsed ${files.size} file(s): ${[...files.keys()].join(", ")}`);
 
       if (!this.options.skipTypeCheck) {
+        console.log(`      Type checking...`);
         const typeError = await this.typeCheck(files);
         if (typeError) {
           lastError = typeError;
-          currentPrompt = this.appendFeedback(input.prompt, typeError);
+          console.log(`      Type check failed: ${typeError.slice(0, 100)}`);
+          currentPrompt = this.buildFixPrompt(input.prompt, typeError, files);
           continue;
         }
+        console.log(`      Type check passed`);
       }
 
       const invariantResults = this.invariantChecker.checkGenerated(
@@ -72,27 +84,52 @@ export class ConstraintLoop implements IConstraintLoop {
       const violations = invariantResults.filter((r) => r.status === "violated");
       if (violations.length > 0) {
         lastError = violations.map((v) => `${v.invariant}: ${v.detail}`).join("\n");
-        currentPrompt = this.appendFeedback(input.prompt, lastError);
+        console.log(`      Invariant violations: ${violations.length}`);
+        currentPrompt = this.buildFixPrompt(input.prompt, lastError, files);
         continue;
       }
 
       if (!this.options.skipTests) {
+        console.log(`      Running tests...`);
         const testError = await this.runTests(files);
         if (testError) {
           lastError = testError;
-          currentPrompt = this.appendFeedback(input.prompt, testError);
+          console.log(`      Tests failed: ${testError.slice(0, 100)}`);
+          currentPrompt = this.buildFixPrompt(input.prompt, testError, files);
           continue;
         }
+        console.log(`      Tests passed`);
       }
 
       return { success: true, files, retries: attempt, lastError: null };
     }
 
+    console.log(`      Exhausted retries`);
     return { success: false, files: null, retries: input.maxRetries, lastError };
   }
 
-  private appendFeedback(originalPrompt: string, error: string): string {
-    return `${originalPrompt}\n\n## Previous attempt failed\n\nYour previous output had the following error. Fix it:\n\n${error}`;
+  private buildFixPrompt(
+    originalPrompt: string,
+    error: string,
+    existingFiles: Map<string, string> | null,
+  ): string {
+    const sections = [originalPrompt];
+
+    if (existingFiles && existingFiles.size > 0) {
+      sections.push("\n## Your previous output\n");
+      for (const [path, content] of existingFiles) {
+        sections.push("```csharp");
+        sections.push(`// path: ${path}`);
+        sections.push(content.trim());
+        sections.push("```\n");
+      }
+    }
+
+    sections.push("## Error to fix\n");
+    sections.push("The code above has the following error. Output the COMPLETE corrected files (all of them, not just the changed one):\n");
+    sections.push(error);
+
+    return sections.join("\n");
   }
 
   private async typeCheck(_files: Map<string, string>): Promise<string | null> {

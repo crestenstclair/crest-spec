@@ -7,7 +7,23 @@ export interface IPromptBuilder {
 }
 
 export class PromptBuilder implements IPromptBuilder {
+  constructor(private readonly language: string = "csharp") {}
+
   systemPrompt(): string {
+    if (this.language === "csharp") {
+      return [
+        "You are a C# code generator for a Godot 4 project. You produce implementation files for declared software resources.",
+        "For each file you generate, output it as a fenced code block with a path annotation on the first line:",
+        "```csharp",
+        "// path: src/Example/File.cs",
+        "// ... file content ...",
+        "```",
+        "Generate the implementation file for each resource.",
+        "Use Godot 4 C# conventions: PascalCase for public members, nullable reference types enabled.",
+        "Use records or readonly structs for value objects. Use partial classes where appropriate for Godot nodes.",
+        "Do not add any commentary outside of code blocks.",
+      ].join("\n");
+    }
     return [
       "You are a TypeScript code generator. You produce implementation files for declared software resources.",
       "For each file you generate, output it as a fenced code block with a path annotation on the first line:",
@@ -15,7 +31,7 @@ export class PromptBuilder implements IPromptBuilder {
       "// path: src/example/file.ts",
       "// ... file content ...",
       "```",
-      "Generate both the implementation file and a test file for each resource.",
+      "Generate the implementation file for each resource.",
       "Use pure functions and immutable data structures unless the declaration specifies otherwise.",
       "All generated code must compile with strict TypeScript.",
       "Do not add any commentary outside of code blocks.",

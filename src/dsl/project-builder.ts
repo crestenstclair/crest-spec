@@ -86,6 +86,10 @@ export class ProjectBuilder {
   getRegistry(): IResourceRegistry & ResourceRegistry {
     return this.registry;
   }
+
+  getMeta(): Meta {
+    return this.projectMeta;
+  }
 }
 
 function mergeMetas(...metas: Meta[]): Meta {

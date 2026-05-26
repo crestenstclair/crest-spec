@@ -14,7 +14,7 @@ export {
   type IPromptBuilder,
   ConstraintLoop,
   type IConstraintLoop,
-  AnthropicLlmClient,
+  ClaudeCliClient,
   type ILlmClient,
   ResponseParser,
 } from "./engine/index.js";

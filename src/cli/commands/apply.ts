@@ -7,7 +7,7 @@ import { allRules } from "../../invariants/rules/index.js";
 import { PromptBuilder } from "../../engine/prompt-builder.js";
 import { ConstraintLoop } from "../../engine/constraint-loop.js";
 import { ApplyEngine } from "../../engine/apply-engine.js";
-import { AnthropicLlmClient } from "../../engine/llm-client.js";
+import { ClaudeCliClient } from "../../engine/llm-client.js";
 import { getActiveProject } from "../../dsl/singleton.js";
 import { Formatter } from "../formatter.js";
 
@@ -19,8 +19,10 @@ export async function applyCommand(
     target?: string;
     force?: boolean;
     maxRetries?: number;
+    concurrency?: number;
   },
 ): Promise<number> {
+  console.log(`Loading spec: ${specFile}`);
   await import(join(projectDir, specFile));
   const project = getActiveProject();
   if (!project) {
@@ -29,6 +31,8 @@ export async function applyCommand(
   }
 
   const registry = project.getRegistry();
+  console.log(`Loaded ${registry.getAll().length} resources from spec`);
+
   const state = new StateDatabase(join(projectDir, "crest-spec.db"));
 
   if (!state.acquireLock(`pid:${process.pid}`)) {
@@ -36,17 +40,24 @@ export async function applyCommand(
     console.error(Formatter.error(`Apply is locked by ${lock?.holder} since ${lock?.acquired_at}`));
     return 1;
   }
+  console.log(`Lock acquired (pid:${process.pid})`);
 
   try {
     const hashComputer = new HashComputer(options.modelId);
     const planner = new Planner(hashComputer);
-    const promptBuilder = new PromptBuilder();
+    const language = (project.getMeta().language as string) ?? "csharp";
+    console.log(`Language: ${language}`);
+    const promptBuilder = new PromptBuilder(language);
     const checker = new InvariantChecker(allRules());
+    const skipNativeChecks = language !== "typescript";
     const constraintLoop = new ConstraintLoop(checker, {
       projectRoot: projectDir,
+      skipTypeCheck: skipNativeChecks,
+      skipTests: skipNativeChecks,
     });
 
-    const llmClient = new AnthropicLlmClient(options.modelId);
+    console.log(`Using claude CLI (model: ${options.modelId})`);
+    const llmClient = new ClaudeCliClient(options.modelId);
     const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer);
 
     const result = await engine.apply(registry, state, llmClient, {
@@ -54,6 +65,7 @@ export async function applyCommand(
       force: options.force,
       maxRetries: options.maxRetries,
       outputDir: projectDir,
+      concurrency: options.concurrency,
     });
 
     console.log(`\nApply complete:`);
