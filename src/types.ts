@@ -11,7 +11,9 @@ export type ResourceKind =
   | "repository"
   | "applicationService"
   | "domainService"
-  | "factory";
+  | "factory"
+  | "assetKind"
+  | "asset";
 
 export interface Meta {
   rules?: string[];
@@ -151,5 +153,26 @@ export interface ApplicationServiceConfig {
 export interface DomainServiceConfig {
   purpose: string;
   uses?: AggregateRef[];
+  meta?: Meta;
+}
+
+export interface AssetKindConfig {
+  description: string;
+  prompts?: string[];
+  references?: string[];
+  filePattern?: string;
+  meta?: Meta;
+}
+
+export interface ResourceRef {
+  id: string;
+}
+
+export interface AssetDeclaration {
+  kind: string;
+  description?: string;
+  targets?: ResourceRef[];
+  prompts?: string[];
+  references?: string[];
   meta?: Meta;
 }
