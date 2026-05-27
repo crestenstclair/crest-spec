@@ -2,6 +2,8 @@ import type {
   ProjectConfig,
   ContextConfig,
   AdapterConfig,
+  AssetKindConfig,
+  AssetDeclaration,
   ContextRelationship,
   InvariantDescriptor,
   ResourceDescriptor,
@@ -67,6 +69,54 @@ export class ProjectBuilder {
       declaration: { implements: config.implements.name },
       meta: config.meta ?? {},
       dependencies: [{ targetId: config.implements.id, kind: "implements" }],
+    };
+    this.registry.register(descriptor);
+  }
+
+  assetKind(name: string, config: AssetKindConfig): void {
+    const id = `assetKind.${name}`;
+    const descriptor: ResourceDescriptor = {
+      id,
+      kind: "assetKind",
+      name,
+      context: null,
+      layer: null,
+      declaration: {
+        description: config.description,
+        filePattern: config.filePattern,
+      },
+      meta: {
+        prompts: config.prompts,
+        references: config.references,
+        ...config.meta,
+      },
+      dependencies: [],
+    };
+    this.registry.register(descriptor);
+  }
+
+  asset(name: string, config: AssetDeclaration): void {
+    const id = `asset.${name}`;
+    const dependencies = [
+      { targetId: `assetKind.${config.kind}`, kind: "uses" as const },
+      ...(config.targets ?? []).map((t) => ({ targetId: t.id, kind: "uses" as const })),
+    ];
+    const descriptor: ResourceDescriptor = {
+      id,
+      kind: "asset",
+      name,
+      context: null,
+      layer: null,
+      declaration: {
+        assetKind: config.kind,
+        description: config.description,
+      },
+      meta: {
+        prompts: config.prompts,
+        references: config.references,
+        ...config.meta,
+      },
+      dependencies,
     };
     this.registry.register(descriptor);
   }
