@@ -1,4 +1,4 @@
-import type { EntityConfig, ResourceDescriptor, Meta } from "../types.js";
+import type { EntityConfig, AssetDeclaration, ResourceDescriptor, Meta } from "../types.js";
 import type { IResourceRegistry } from "../registry/resource-registry.js";
 
 export class AggregateBuilder {
@@ -12,6 +12,33 @@ export class AggregateBuilder {
   ) {
     this.name = name;
     this.id = `aggregate.${contextName}.${name}`;
+  }
+
+  asset(name: string, config: AssetDeclaration): void {
+    const id = `asset.${this.contextName}.${this.name}.${name}`;
+    const dependencies = [
+      { targetId: `assetKind.${config.kind}`, kind: "uses" as const },
+      { targetId: this.id, kind: "uses" as const },
+      ...(config.targets ?? []).map((t) => ({ targetId: t.id, kind: "uses" as const })),
+    ];
+    const descriptor: ResourceDescriptor = {
+      id,
+      kind: "asset",
+      name,
+      context: this.contextName,
+      layer: null,
+      declaration: {
+        assetKind: config.kind,
+        description: config.description,
+      },
+      meta: {
+        prompts: config.prompts,
+        references: config.references,
+        ...config.meta,
+      },
+      dependencies,
+    };
+    this.registry.register(descriptor);
   }
 
   entity(name: string, config: EntityConfig): void {
