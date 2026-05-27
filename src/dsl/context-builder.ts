@@ -7,6 +7,7 @@ import type {
   DomainServiceConfig,
   AdapterConfig,
   EntityConfig,
+  AssetDeclaration,
   ResourceDescriptor,
   PortRef,
   AggregateRef,
@@ -165,6 +166,32 @@ export class ContextBuilder {
       declaration: { state: config.state },
       meta: this.mergeMeta(config.meta),
       dependencies: [],
+    };
+    this.registry.register(descriptor);
+  }
+
+  asset(name: string, config: AssetDeclaration): void {
+    const id = `asset.${this.name}.${name}`;
+    const dependencies = [
+      { targetId: `assetKind.${config.kind}`, kind: "uses" as const },
+      ...(config.targets ?? []).map((t) => ({ targetId: t.id, kind: "uses" as const })),
+    ];
+    const descriptor: ResourceDescriptor = {
+      id,
+      kind: "asset",
+      name,
+      context: this.name,
+      layer: null,
+      declaration: {
+        assetKind: config.kind,
+        description: config.description,
+      },
+      meta: {
+        prompts: config.prompts,
+        references: config.references,
+        ...config.meta,
+      },
+      dependencies,
     };
     this.registry.register(descriptor);
   }

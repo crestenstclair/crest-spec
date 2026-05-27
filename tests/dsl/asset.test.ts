@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { ProjectBuilder } from "../../src/dsl/project-builder";
+import { ContextBuilder } from "../../src/dsl/context-builder";
 
 describe("assetKind", () => {
   let app: ProjectBuilder;
@@ -86,6 +87,55 @@ describe("project-level asset", () => {
     });
     expect(resource!.dependencies).toContainEqual({
       targetId: "aggregate.Playback.Engine",
+      kind: "uses",
+    });
+  });
+});
+
+describe("context-level asset", () => {
+  let app: ProjectBuilder;
+  let composition: ContextBuilder;
+
+  beforeEach(() => {
+    app = new ProjectBuilder("test-project");
+    app.assetKind("godot-test-scene", {
+      description: "A Godot 4 test scene.",
+    });
+    composition = app.context("Composition", { purpose: "structural model" });
+  });
+
+  test("registers an asset with context inferred", () => {
+    composition.asset("phrase-flow", {
+      kind: "godot-test-scene",
+      description: "Tests phrase editing commands.",
+    });
+
+    const registry = app.getRegistry();
+    const resource = registry.getById("asset.Composition.phrase-flow");
+    expect(resource).not.toBeNull();
+    expect(resource!.kind).toBe("asset");
+    expect(resource!.context).toBe("Composition");
+    expect(resource!.declaration).toEqual({
+      assetKind: "godot-test-scene",
+      description: "Tests phrase editing commands.",
+    });
+    expect(resource!.dependencies).toContainEqual({
+      targetId: "assetKind.godot-test-scene",
+      kind: "uses",
+    });
+  });
+
+  test("registers target dependencies from context-level asset", () => {
+    composition.asset("multi-target", {
+      kind: "godot-test-scene",
+      description: "Tests multiple aggregates.",
+      targets: [{ id: "aggregate.Composition.Song" }],
+    });
+
+    const registry = app.getRegistry();
+    const resource = registry.getById("asset.Composition.multi-target");
+    expect(resource!.dependencies).toContainEqual({
+      targetId: "aggregate.Composition.Song",
       kind: "uses",
     });
   });
