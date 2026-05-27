@@ -45,15 +45,17 @@ export async function applyCommand(
   try {
     const hashComputer = new HashComputer(options.modelId);
     const planner = new Planner(hashComputer);
-    const language = (project.getMeta().language as string) ?? "csharp";
-    console.log(`Language: ${language}`);
-    const promptBuilder = new PromptBuilder(language);
+    const meta = project.getMeta();
+    const promptBuilder = PromptBuilder.fromMeta(meta);
+    console.log(`Language: ${promptBuilder.language}`);
     const checker = new InvariantChecker(allRules());
-    const skipNativeChecks = language !== "typescript";
+    const typeCheckCmd = meta.typeCheckCommand as string[] | undefined;
+    const testCmd = meta.testCommand as string[] | undefined;
     const constraintLoop = new ConstraintLoop(checker, {
       projectRoot: projectDir,
-      skipTypeCheck: skipNativeChecks,
-      skipTests: skipNativeChecks,
+      language: promptBuilder.language,
+      typeCheckCommand: typeCheckCmd,
+      testCommand: testCmd,
     });
 
     console.log(`Using claude CLI (model: ${options.modelId})`);

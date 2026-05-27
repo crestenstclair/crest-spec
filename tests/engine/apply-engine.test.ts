@@ -44,9 +44,9 @@ describe("ApplyEngine", () => {
 
     const hashComputer = new HashComputer("test-model");
     const planner = new Planner(hashComputer);
-    const promptBuilder = new PromptBuilder();
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
     const checker = new InvariantChecker([]);
-    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheck: true, skipTests: true });
+    const constraintLoop = new ConstraintLoop(checker);
 
     const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer);
     const result = await engine.apply(registry, state, llm, { outputDir: tempDir });
@@ -83,9 +83,9 @@ describe("ApplyEngine", () => {
 
     const llm = mockLlmClient("");
     const planner = new Planner(hashComputer);
-    const promptBuilder = new PromptBuilder();
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
     const checker = new InvariantChecker([]);
-    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheck: true, skipTests: true });
+    const constraintLoop = new ConstraintLoop(checker);
 
     const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer);
     const result = await engine.apply(registry, state, llm, { outputDir: tempDir });
@@ -105,9 +105,9 @@ describe("ApplyEngine", () => {
 
     const hashComputer = new HashComputer("test-model");
     const planner = new Planner(hashComputer);
-    const promptBuilder = new PromptBuilder();
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
     const checker = new InvariantChecker([]);
-    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheck: true, skipTests: true });
+    const constraintLoop = new ConstraintLoop(checker);
 
     const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer);
     await engine.apply(registry, state, llm, { outputDir: tempDir });

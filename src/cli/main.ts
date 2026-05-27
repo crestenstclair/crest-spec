@@ -38,7 +38,7 @@ async function main(): Promise<number> {
       const target = getFlag("target");
       const force = hasFlag("force");
       const maxRetries = getFlag("retries") ? parseInt(getFlag("retries")!) : undefined;
-      const concurrency = getFlag("concurrency") ? parseInt(getFlag("concurrency")!) : 5;
+      const concurrency = getFlag("concurrency") ? parseInt(getFlag("concurrency")!) : 2;
       return applyCommand(projectDir, specFile, { modelId, target, force, maxRetries, concurrency });
     }
 

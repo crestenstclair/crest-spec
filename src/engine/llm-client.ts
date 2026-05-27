@@ -28,7 +28,7 @@ export class ClaudeCliClient implements ILlmClient {
       delete env.CLAUDE_CODE_OAUTH_TOKEN;
       delete env.ANTHROPIC_AUTH_TOKEN;
       delete env.ANTHROPIC_API_KEY;
-      const proc = Bun.spawn(["claude", "-p", "--model", this.modelId, "--output-format", "stream-json", "--verbose"], {
+      const proc = Bun.spawn(["claude", "-p", "--bare", "--model", this.modelId, "--output-format", "stream-json", "--verbose"], {
         stdin: new TextEncoder().encode(fullPrompt),
         stdout: "pipe",
         stderr: "inherit",

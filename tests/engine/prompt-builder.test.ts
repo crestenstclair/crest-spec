@@ -9,7 +9,7 @@ describe("PromptBuilder", () => {
 
   beforeEach(() => {
     registry = new ResourceRegistry();
-    builder = new PromptBuilder();
+    builder = new PromptBuilder({ language: "csharp" });
   });
 
   test("includes resource declaration in prompt", () => {

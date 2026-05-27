@@ -19,8 +19,9 @@ export class ContractCompliance implements IInvariantRule {
       const contract = port.declaration.contract as Record<string, string> | undefined;
       if (!contract) continue;
 
+      const contentLower = allContent.toLowerCase();
       for (const methodName of Object.keys(contract)) {
-        if (!allContent.includes(methodName)) {
+        if (!contentLower.includes(methodName.toLowerCase())) {
           return {
             invariant: this.name,
             resourceId: resource.id,

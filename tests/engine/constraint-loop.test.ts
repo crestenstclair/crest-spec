@@ -25,10 +25,7 @@ describe("ConstraintLoop", () => {
       '```ts\n// path: src/ticks.ts\nexport type Ticks = number;\n```',
     ]);
 
-    const loop = new ConstraintLoop(checker, {
-      skipTypeCheck: true,
-      skipTests: true,
-    });
+    const loop = new ConstraintLoop(checker);
 
     const result = await loop.run({
       resource: registry.getById("vo.Ticks")!,
@@ -56,10 +53,7 @@ describe("ConstraintLoop", () => {
       '```ts\n// path: src/song.ts\nexport interface Song { id: string; }\n```',
     ]);
 
-    const loop = new ConstraintLoop(checker, {
-      skipTypeCheck: true,
-      skipTests: true,
-    });
+    const loop = new ConstraintLoop(checker);
 
     const result = await loop.run({
       resource: registry.getById("agg.Song")!,
@@ -84,10 +78,7 @@ describe("ConstraintLoop", () => {
     const badResponse = '```ts\n// path: src/song.ts\nimport { db } from "../infrastructure/db";\nexport interface Song {}\n```';
     const llm = mockLlmClient([badResponse, badResponse, badResponse, badResponse]);
 
-    const loop = new ConstraintLoop(checker, {
-      skipTypeCheck: true,
-      skipTests: true,
-    });
+    const loop = new ConstraintLoop(checker);
 
     const result = await loop.run({
       resource: registry.getById("agg.Song")!,
