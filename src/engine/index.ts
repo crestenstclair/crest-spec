@@ -3,3 +3,5 @@ export { PromptBuilder, type IPromptBuilder, type PromptConfig } from "./prompt-
 export { ClaudeCliClient, type ILlmClient } from "./llm-client.js";
 export { ConstraintLoop, type IConstraintLoop, type ConstraintLoopResult } from "./constraint-loop.js";
 export { ApplyEngine, type IApplyEngine, type ApplyOptions, type ApplyResult } from "./apply-engine.js";
+export { WaveComputer, type IWaveComputer } from "./wave-computer.js";
+export { WaveVerifier, type IWaveVerifier, type WaveVerificationResult, type WaveError } from "./wave-verifier.js";

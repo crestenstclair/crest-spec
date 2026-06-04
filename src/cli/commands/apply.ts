@@ -8,6 +8,8 @@ import { PromptBuilder } from "../../engine/prompt-builder.js";
 import { ConstraintLoop } from "../../engine/constraint-loop.js";
 import { ApplyEngine } from "../../engine/apply-engine.js";
 import { ClaudeCliClient } from "../../engine/llm-client.js";
+import { WaveComputer } from "../../engine/wave-computer.js";
+import { WaveVerifier } from "../../engine/wave-verifier.js";
 import { getActiveProject } from "../../dsl/singleton.js";
 import { Formatter } from "../formatter.js";
 
@@ -20,6 +22,7 @@ export async function applyCommand(
     force?: boolean;
     maxRetries?: number;
     concurrency?: number;
+    incremental?: boolean;
   },
 ): Promise<number> {
   console.log(`Loading spec: ${specFile}`);
@@ -51,16 +54,21 @@ export async function applyCommand(
     const checker = new InvariantChecker(allRules());
     const typeCheckCmd = meta.typeCheckCommand as string[] | undefined;
     const testCmd = meta.testCommand as string[] | undefined;
+    const incremental = options.incremental && !!typeCheckCmd;
     const constraintLoop = new ConstraintLoop(checker, {
       projectRoot: projectDir,
       language: promptBuilder.language,
       typeCheckCommand: typeCheckCmd,
       testCommand: testCmd,
+      skipTypeCheckInLoop: incremental,
     });
 
     console.log(`Using claude CLI (model: ${options.modelId})`);
+    if (incremental) console.log(`Incremental verification enabled (wave-based)`);
     const llmClient = new ClaudeCliClient(options.modelId);
-    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer);
+    const waveComputer = incremental ? new WaveComputer() : undefined;
+    const waveVerifier = incremental ? new WaveVerifier() : undefined;
+    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer, waveComputer, waveVerifier);
 
     const result = await engine.apply(registry, state, llmClient, {
       target: options.target,
@@ -68,6 +76,7 @@ export async function applyCommand(
       maxRetries: options.maxRetries,
       outputDir: projectDir,
       concurrency: options.concurrency,
+      waveVerifyCommand: incremental ? typeCheckCmd : undefined,
     });
 
     console.log(`\nApply complete:`);

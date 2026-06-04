@@ -7,8 +7,10 @@ import { StateDatabase } from "../../src/state/state-database";
 import { InvariantChecker } from "../../src/invariants/invariant-checker";
 import { PromptBuilder } from "../../src/engine/prompt-builder";
 import { ConstraintLoop } from "../../src/engine/constraint-loop";
+import { WaveComputer } from "../../src/engine/wave-computer";
 import { makeResource } from "../helpers";
 import type { ILlmClient } from "../../src/engine/llm-client";
+import type { IWaveVerifier, WaveVerificationResult } from "../../src/engine/wave-verifier";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -92,6 +94,145 @@ describe("ApplyEngine", () => {
 
     expect(result.status).toBe("ok");
     expect(result.created).toBe(0);
+  });
+
+  test("wave mode processes resources in dependency order", async () => {
+    const callOrder: string[] = [];
+
+    registry.register(makeResource({ id: "vo.K.Base", kind: "valueObject", name: "Base" }));
+    registry.register(
+      makeResource({
+        id: "agg.C.Top",
+        kind: "aggregate",
+        name: "Top",
+        dependencies: [{ targetId: "vo.K.Base", kind: "uses" }],
+      }),
+    );
+
+    const llm: ILlmClient = {
+      modelId: "test-model",
+      async generate(prompt: string): Promise<string> {
+        if (prompt.includes('## Resource: valueObject "Base"')) {
+          callOrder.push("vo.K.Base");
+          return '```ts\n// path: src/base.ts\nexport type Base = number;\n```';
+        }
+        callOrder.push("agg.C.Top");
+        return '```ts\n// path: src/top.ts\nexport class Top {}\n```';
+      },
+    };
+
+    let verifyCallCount = 0;
+    const verifier: IWaveVerifier = {
+      async verify(): Promise<WaveVerificationResult> {
+        verifyCallCount++;
+        return { passed: true, errors: [], rawOutput: "" };
+      },
+    };
+
+    const hashComputer = new HashComputer("test-model");
+    const planner = new Planner(hashComputer);
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
+    const checker = new InvariantChecker([]);
+    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheckInLoop: true, skipLlmVerify: true });
+    const waveComputer = new WaveComputer();
+
+    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer, waveComputer, verifier);
+    const result = await engine.apply(registry, state, llm, {
+      outputDir: tempDir,
+      waveVerifyCommand: ["true"],
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.created).toBe(2);
+    expect(callOrder).toEqual(["vo.K.Base", "agg.C.Top"]);
+    expect(verifyCallCount).toBe(2);
+  });
+
+  test("wave verification failure retries the failed resource", async () => {
+    registry.register(makeResource({ id: "vo.K.A", kind: "valueObject" }));
+
+    let generateCount = 0;
+    const llm: ILlmClient = {
+      modelId: "test-model",
+      async generate(): Promise<string> {
+        generateCount++;
+        return '```ts\n// path: src/a.ts\nexport type A = number;\n```';
+      },
+    };
+
+    let verifyCount = 0;
+    const verifier: IWaveVerifier = {
+      async verify(): Promise<WaveVerificationResult> {
+        verifyCount++;
+        if (verifyCount === 1) {
+          return {
+            passed: false,
+            errors: [{ resourceId: "vo.K.A", filePath: "src/a.ts", errorText: "error CS1234" }],
+            rawOutput: "error CS1234",
+          };
+        }
+        return { passed: true, errors: [], rawOutput: "" };
+      },
+    };
+
+    const hashComputer = new HashComputer("test-model");
+    const planner = new Planner(hashComputer);
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
+    const checker = new InvariantChecker([]);
+    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheckInLoop: true, skipLlmVerify: true });
+    const waveComputer = new WaveComputer();
+
+    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer, waveComputer, verifier);
+    const result = await engine.apply(registry, state, llm, {
+      outputDir: tempDir,
+      waveVerifyCommand: ["true"],
+    });
+
+    expect(result.status).toBe("ok");
+    expect(generateCount).toBe(2);
+    expect(verifyCount).toBe(2);
+  });
+
+  test("wave mode stops when retries exhausted", async () => {
+    registry.register(makeResource({ id: "vo.K.A", kind: "valueObject" }));
+    registry.register(
+      makeResource({
+        id: "agg.C.B",
+        kind: "aggregate",
+        dependencies: [{ targetId: "vo.K.A", kind: "uses" }],
+      }),
+    );
+
+    const llm = mockLlmClient('```ts\n// path: src/a.ts\nexport type A = number;\n```');
+
+    const verifier: IWaveVerifier = {
+      async verify(): Promise<WaveVerificationResult> {
+        return {
+          passed: false,
+          errors: [{ resourceId: "vo.K.A", filePath: "src/a.ts", errorText: "persistent error" }],
+          rawOutput: "persistent error",
+        };
+      },
+    };
+
+    const hashComputer = new HashComputer("test-model");
+    const planner = new Planner(hashComputer);
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
+    const checker = new InvariantChecker([]);
+    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheckInLoop: true, skipLlmVerify: true });
+    const waveComputer = new WaveComputer();
+
+    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer, waveComputer, verifier);
+    const result = await engine.apply(registry, state, llm, {
+      outputDir: tempDir,
+      waveVerifyCommand: ["true"],
+      waveMaxRetries: 1,
+    });
+
+    expect(result.status).toBe("failed");
+    // agg.C.B should never have been attempted since wave 1 failed
+    const bResource = state.getResource("agg.C.B");
+    expect(bResource).toBeNull();
   });
 
   test("records generation in state for audit trail", async () => {

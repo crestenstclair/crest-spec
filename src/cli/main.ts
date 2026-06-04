@@ -37,9 +37,10 @@ async function main(): Promise<number> {
     case "apply": {
       const target = getFlag("target");
       const force = hasFlag("force");
+      const incremental = hasFlag("incremental");
       const maxRetries = getFlag("retries") ? parseInt(getFlag("retries")!) : undefined;
       const concurrency = getFlag("concurrency") ? parseInt(getFlag("concurrency")!) : 2;
-      return applyCommand(projectDir, specFile, { modelId, target, force, maxRetries, concurrency });
+      return applyCommand(projectDir, specFile, { modelId, target, force, maxRetries, concurrency, incremental });
     }
 
     case "log": {
@@ -187,7 +188,8 @@ Options:
   -model <id>                   Model ID (default: claude-sonnet-4-6)
   -target <resource>            Target a specific resource
   --force                       Force re-render
-  -retries <n>                  Max retries (default: 3)`);
+  -retries <n>                  Max retries (default: 3)
+  --incremental                 Verify builds between dependency waves`);
       return command ? 1 : 0;
   }
 }

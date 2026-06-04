@@ -10,6 +10,7 @@ export interface ConstraintLoopOptions {
   language?: string;
   typeCheckCommand?: string[];
   testCommand?: string[];
+  skipTypeCheckInLoop?: boolean;
 }
 
 export interface ConstraintLoopInput {
@@ -66,7 +67,7 @@ export class ConstraintLoop implements IConstraintLoop {
       lastFiles = files;
       console.log(`      Parsed ${files.size} file(s): ${[...files.keys()].join(", ")}`);
 
-      if (this.options.typeCheckCommand) {
+      if (this.options.typeCheckCommand && !this.options.skipTypeCheckInLoop) {
         console.log(`      Type checking...`);
         const typeError = await this.runCommand(this.options.typeCheckCommand, "Type check");
         if (typeError) {
