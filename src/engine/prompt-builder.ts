@@ -51,8 +51,10 @@ export class PromptBuilder implements IPromptBuilder {
 
     lines.push("");
     lines.push("## Folder structure");
-    lines.push("Use FLAT folders per bounded context: `src/{ContextName}/`. No sub-folders like Domain/, Application/, Infrastructure/.");
-    lines.push("Tests go in: `tests/{ContextName}/`");
+    lines.push("Group files by resource within the bounded context: `src/{ContextName}/{ResourceName}/`.");
+    lines.push("Do NOT use architectural layer sub-folders like Domain/, Application/, Infrastructure/.");
+    lines.push("Tests mirror the same structure: `tests/{ContextName}/{ResourceName}/`.");
+    lines.push("Example: `src/Composition/Phrase/Phrase.cs`, `src/Composition/Phrase/IPhraseRepository.cs`, `tests/Composition/Phrase/PhraseTests.cs`");
 
     lines.push("");
     lines.push("## SOLID principles (mandatory)");

@@ -190,7 +190,7 @@ export class ConstraintLoop implements IConstraintLoop {
       "2. INTERFACES: Any class that another class depends on MUST have a corresponding interface. Check that interfaces exist for all injected dependencies.",
       "3. UNIT TESTS: There MUST be at least one test file that tests the resource through its public API using injected mocks/stubs.",
       "4. SINGLE RESPONSIBILITY: Each class should have one reason to change.",
-      "5. FOLDER STRUCTURE: Files must be in src/{ContextName}/ (flat, no Domain/Application/Infrastructure sub-folders). Tests in tests/{ContextName}/.",
+      "5. FOLDER STRUCTURE: Files must be in src/{ContextName}/{ResourceName}/ (grouped by resource, no Domain/Application/Infrastructure layer sub-folders). Tests in tests/{ContextName}/{ResourceName}/.",
       "6. VALUE OBJECTS: Must be records or readonly structs, not mutable classes.",
       "",
       "Only report REAL violations. Do not nitpick naming or style beyond these rules.",
