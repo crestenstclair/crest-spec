@@ -7,6 +7,8 @@ export interface IPlanner {
   plan(registry: IResourceRegistry, state: IStateDatabase): Plan;
 }
 
+const STRUCTURAL_KINDS = new Set(["project", "context", "assetKind"]);
+
 export class Planner implements IPlanner {
   constructor(private readonly hashComputer: IHashComputer) {}
 
@@ -20,6 +22,7 @@ export class Planner implements IPlanner {
     const cascadeReasons = new Map<string, string>();
 
     for (const resource of ordered) {
+      if (STRUCTURAL_KINDS.has(resource.kind)) continue;
       const stored = state.getResource(resource.id);
       const newHash = effectiveHashes.get(resource.id)!;
 
