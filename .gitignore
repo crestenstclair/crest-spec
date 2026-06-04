@@ -32,3 +32,14 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# test project (generated output)
+test-project/
+
+# state databases
+*.db
+*.db-shm
+*.db-wal
+
+# apply error logs
+apply-errors.log
