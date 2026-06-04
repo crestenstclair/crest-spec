@@ -58,31 +58,38 @@ export class WaveVerifier implements IWaveVerifier {
     output: string,
     fileToResource: Map<string, string>,
   ): WaveError[] {
+    const lines = output.split("\n");
     const errors: WaveError[] = [];
     const seen = new Set<string>();
 
-    for (const line of output.split("\n")) {
-      if (!line.includes("error")) continue;
-
-      let matched = false;
+    const matchFile = (text: string): { filePath: string; resourceId: string } | null => {
       for (const [filePath, resourceId] of fileToResource) {
-        if (line.includes(filePath)) {
-          const key = `${resourceId}:${line}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            errors.push({ resourceId, filePath, errorText: line.trim() });
-          }
-          matched = true;
-          break;
+        if (text.includes(filePath)) {
+          return { filePath, resourceId };
+        }
+      }
+      return null;
+    };
+
+    const WINDOW = 10;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.includes("error") && !line.includes("Error") && !line.includes("fail")) continue;
+
+      let match = matchFile(line);
+      if (!match) {
+        for (let j = 1; j <= WINDOW && !match; j++) {
+          if (i + j < lines.length) match = matchFile(lines[i + j]);
+          if (!match && i - j >= 0) match = matchFile(lines[i - j]);
         }
       }
 
-      if (!matched) {
-        const key = `__unknown__:${line}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          errors.push({ resourceId: "__unknown__", filePath: "", errorText: line.trim() });
-        }
+      const resourceId = match?.resourceId ?? "__unknown__";
+      const filePath = match?.filePath ?? "";
+      const key = `${resourceId}:${line.trim()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        errors.push({ resourceId, filePath, errorText: line.trim() });
       }
     }
 

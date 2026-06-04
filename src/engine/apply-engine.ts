@@ -250,7 +250,7 @@ export class ApplyEngine implements IApplyEngine {
             );
 
             if (failedIds.size === 0) {
-              failedIds.add(wave[0].resourceId);
+              for (const a of wave) failedIds.add(a.resourceId);
             }
 
             console.log(`  Retrying ${failedIds.size} resource(s): ${[...failedIds].join(", ")}`);
