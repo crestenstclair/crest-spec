@@ -1,4 +1,4 @@
-# A standalone gamepad-controlled MIDI synthesizer
+[# A standalone gamepad-controlled MIDI synthesizer
 
 *(working name: instrument-core)*
 
@@ -142,3 +142,4 @@ By phase 1 you hear your MIDI source. By phase 4 it's a multitimbral sound modul
 - **How far to take MIDI 2.0 now** — internal-model readiness is cheap and assumed; adopting real UMP *transport* (ALSA UMP / PipeWire / CoreMIDI) and MIDI-CI capability negotiation is a later, optional step gated on usable device support.
 - **Sample streaming vs. all-in-RAM** — RAM is simplest and fine on a desktop/Deck; streaming only matters if sample libraries get very large.
 - **Voice pooling** — strictly per-patch pools vs. a shared pool with per-patch limits (affects how gracefully one patch can borrow headroom from another).
+](https://github.com/amplitude/platform-infra/actions/runs/26983274520/job/79627293321?pr=417)
