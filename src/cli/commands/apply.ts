@@ -54,13 +54,14 @@ export async function applyCommand(
     const checker = new InvariantChecker(allRules());
     const typeCheckCmd = meta.typeCheckCommand as string[] | undefined;
     const testCmd = meta.testCommand as string[] | undefined;
-    const incremental = options.incremental && !!typeCheckCmd;
+    const incremental = options.incremental && (!!typeCheckCmd || !!testCmd);
     const constraintLoop = new ConstraintLoop(checker, {
       projectRoot: projectDir,
       language: promptBuilder.language,
       typeCheckCommand: typeCheckCmd,
       testCommand: testCmd,
       skipTypeCheckInLoop: incremental,
+      skipTestsInLoop: incremental,
     });
 
     console.log(`Using claude CLI (model: ${options.modelId})`);
@@ -77,6 +78,7 @@ export async function applyCommand(
       outputDir: projectDir,
       concurrency: options.concurrency,
       waveVerifyCommand: incremental ? typeCheckCmd : undefined,
+      waveTestCommand: incremental ? testCmd : undefined,
     });
 
     console.log(`\nApply complete:`);

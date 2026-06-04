@@ -5,8 +5,9 @@ SPEC      := crest-spec.ts
 CLI       := bun run ../src/cli/main.ts
 MODEL     := claude-sonnet-4-6
 TEST_DIR  := test-project
+FIXTURE   := fixtures/test-spec.ts
 
-.PHONY: help test plan apply apply-inc apply-target validate graph clean reset nuke
+.PHONY: help test setup plan apply apply-inc apply-target validate graph clean reset nuke
 
 # Show available targets
 help:
@@ -19,6 +20,7 @@ help:
 	@echo "    make graph         dump resource dependency graph (DOT)"
 	@echo ""
 	@echo "  Generate (against test-project/):"
+	@echo "    make setup         create test-project/ from fixtures/test-spec.ts"
 	@echo "    make apply         generate all resources (flat mode)"
 	@echo "    make apply-inc     generate with incremental wave verification"
 	@echo "    make apply-target T=<id>  generate a single resource"
@@ -38,30 +40,44 @@ help:
 test:
 	bun test tests/engine/ tests/registry/ tests/planner/ tests/invariants/ tests/dsl/ tests/cli/
 
+# ── Setup ────────────────────────────────────────────────
+
+# Create test-project/ and copy the fixture spec into it
+setup:
+	@mkdir -p $(TEST_DIR)
+	@cp $(FIXTURE) $(TEST_DIR)/$(SPEC)
+	@echo "Created $(TEST_DIR)/ with $(SPEC) from $(FIXTURE)"
+
+# Ensure test-project exists before any command that needs it
+$(TEST_DIR)/$(SPEC): $(FIXTURE)
+	@$(MAKE) --no-print-directory setup
+
+# ── Inspect ──────────────────────────────────────────────
+
 # Check structural invariants without generating
-validate:
+validate: $(TEST_DIR)/$(SPEC)
 	cd $(TEST_DIR) && $(CLI) validate --spec $(SPEC)
 
 # Show the plan (what would be created/modified/destroyed)
-plan:
+plan: $(TEST_DIR)/$(SPEC)
 	cd $(TEST_DIR) && $(CLI) plan --spec $(SPEC) --model $(MODEL)
 
 # Dump the resource dependency graph as DOT
-graph:
+graph: $(TEST_DIR)/$(SPEC)
 	cd $(TEST_DIR) && $(CLI) graph --spec $(SPEC)
 
 # ── Generate ─────────────────────────────────────────────
 
 # Generate all resources in flat concurrent mode
-apply:
+apply: $(TEST_DIR)/$(SPEC)
 	cd $(TEST_DIR) && $(CLI) apply --spec $(SPEC) --model $(MODEL)
 
 # Generate with incremental wave verification (build between waves)
-apply-inc:
+apply-inc: $(TEST_DIR)/$(SPEC)
 	cd $(TEST_DIR) && $(CLI) apply --spec $(SPEC) --model $(MODEL) --incremental
 
 # Generate a single resource by ID (e.g., make apply-target T=aggregate.Catalog.Product)
-apply-target:
+apply-target: $(TEST_DIR)/$(SPEC)
 	@test -n "$(T)" || (echo "Usage: make apply-target T=<resource-id>" && exit 1)
 	cd $(TEST_DIR) && $(CLI) apply --spec $(SPEC) --model $(MODEL) --target $(T)
 
@@ -81,4 +97,4 @@ reset: clean
 # Remove the entire test-project directory
 nuke:
 	rm -rf $(TEST_DIR)
-	@echo "Nuked $(TEST_DIR)/ — run 'make setup' or create it manually"
+	@echo "Nuked $(TEST_DIR)/ — run 'make setup' to recreate"

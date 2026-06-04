@@ -20,6 +20,7 @@ export interface ApplyOptions {
   outputDir?: string;
   concurrency?: number;
   waveVerifyCommand?: string[];
+  waveTestCommand?: string[];
   waveMaxRetries?: number;
 }
 
@@ -197,74 +198,88 @@ export class ApplyEngine implements IApplyEngine {
       }
       await Promise.all(pending);
 
-      if (options.waveVerifyCommand && this.waveVerifier) {
-        const waveResourceIds = new Set(wave.map((a) => a.resourceId));
-        const waveFileMap = new Map<string, string>();
-        for (const [filePath, resourceId] of ctx.fileToResource) {
-          if (waveResourceIds.has(resourceId)) {
-            waveFileMap.set(filePath, resourceId);
-          }
-        }
+      const verifySteps: { label: string; command: string[] }[] = [];
+      if (options.waveVerifyCommand) {
+        verifySteps.push({ label: "type check", command: options.waveVerifyCommand });
+      }
+      if (options.waveTestCommand) {
+        verifySteps.push({ label: "tests", command: options.waveTestCommand });
+      }
+
+      if (verifySteps.length > 0 && this.waveVerifier) {
+        const allFileMap = new Map<string, string>(ctx.fileToResource);
 
         let verified = false;
         for (let attempt = 0; attempt <= waveMaxRetries; attempt++) {
-          console.log(`\n  Wave ${w + 1} verification${attempt > 0 ? ` (retry ${attempt})` : ""}...`);
-          const verifyResult = await this.waveVerifier.verify(
-            waveFileMap,
-            options.waveVerifyCommand,
-            options.outputDir ?? ".",
-          );
+          let stepFailed = false;
 
-          if (verifyResult.passed) {
-            console.log(`  Wave ${w + 1} verification passed`);
-            verified = true;
+          for (const step of verifySteps) {
+            const tag = `Wave ${w + 1} ${step.label}`;
+            console.log(`\n  ${tag}${attempt > 0 ? ` (retry ${attempt})` : ""}...`);
+            const verifyResult = await this.waveVerifier.verify(
+              allFileMap,
+              step.command,
+              options.outputDir ?? ".",
+            );
+
+            if (verifyResult.passed) {
+              console.log(`  ${tag} passed`);
+              continue;
+            }
+
+            console.log(`  ${tag} failed (${verifyResult.errors.length} errors)`);
+            stepFailed = true;
+
+            if (attempt >= waveMaxRetries) {
+              console.log(`  Wave ${w + 1} exhausted ${waveMaxRetries} retries`);
+              for (const err of verifyResult.errors) {
+                if (err.resourceId !== "__unknown__") {
+                  ctx.result.errors.push(`${err.resourceId}: ${err.errorText}`);
+                }
+              }
+              ctx.result.failed += wave.length;
+              ctx.result.status = "failed";
+              return;
+            }
+
+            const waveResourceIds = new Set(wave.map((a) => a.resourceId));
+            const failedIds = new Set(
+              verifyResult.errors
+                .map((e) => e.resourceId)
+                .filter((id) => id !== "__unknown__" && waveResourceIds.has(id)),
+            );
+
+            if (failedIds.size === 0) {
+              failedIds.add(wave[0].resourceId);
+            }
+
+            console.log(`  Retrying ${failedIds.size} resource(s): ${[...failedIds].join(", ")}`);
+
+            for (const resourceId of failedIds) {
+              const action = wave.find((a) => a.resourceId === resourceId);
+              if (!action) continue;
+
+              const resource = ctx.registry.getById(resourceId);
+              if (!resource) continue;
+
+              const waveErrors = verifyResult.errors
+                .filter((e) => e.resourceId === resourceId || e.resourceId === "__unknown__")
+                .map((e) => e.errorText)
+                .join("\n");
+
+              await this.processAction(
+                action,
+                globalIndex + wave.indexOf(action),
+                ctx,
+                waveErrors,
+              );
+            }
             break;
           }
 
-          console.log(`  Wave ${w + 1} verification failed (${verifyResult.errors.length} errors)`);
-
-          if (attempt >= waveMaxRetries) {
-            console.log(`  Wave ${w + 1} exhausted ${waveMaxRetries} retries`);
-            for (const err of verifyResult.errors) {
-              if (err.resourceId !== "__unknown__") {
-                ctx.result.errors.push(`${err.resourceId}: ${err.errorText}`);
-              }
-            }
-            ctx.result.failed += wave.length;
-            ctx.result.status = "failed";
-            return;
-          }
-
-          const failedIds = new Set(
-            verifyResult.errors
-              .map((e) => e.resourceId)
-              .filter((id) => id !== "__unknown__"),
-          );
-
-          if (failedIds.size === 0) {
-            failedIds.add(wave[0].resourceId);
-          }
-
-          console.log(`  Retrying ${failedIds.size} resource(s): ${[...failedIds].join(", ")}`);
-
-          for (const resourceId of failedIds) {
-            const action = wave.find((a) => a.resourceId === resourceId);
-            if (!action) continue;
-
-            const resource = ctx.registry.getById(resourceId);
-            if (!resource) continue;
-
-            const waveErrors = verifyResult.errors
-              .filter((e) => e.resourceId === resourceId || e.resourceId === "__unknown__")
-              .map((e) => e.errorText)
-              .join("\n");
-
-            await this.processAction(
-              action,
-              globalIndex + wave.indexOf(action),
-              ctx,
-              waveErrors,
-            );
+          if (!stepFailed) {
+            verified = true;
+            break;
           }
         }
 

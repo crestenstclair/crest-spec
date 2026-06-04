@@ -11,6 +11,7 @@ export interface ConstraintLoopOptions {
   typeCheckCommand?: string[];
   testCommand?: string[];
   skipTypeCheckInLoop?: boolean;
+  skipTestsInLoop?: boolean;
 }
 
 export interface ConstraintLoopInput {
@@ -92,7 +93,7 @@ export class ConstraintLoop implements IConstraintLoop {
         continue;
       }
 
-      if (this.options.testCommand) {
+      if (this.options.testCommand && !this.options.skipTestsInLoop) {
         console.log(`      Running tests...`);
         const testError = await this.runCommand(this.options.testCommand, "Tests");
         if (testError) {
