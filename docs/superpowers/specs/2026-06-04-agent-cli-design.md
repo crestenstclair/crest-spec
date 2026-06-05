@@ -6,13 +6,13 @@ crest-spec's `apply` command runs as a batch: plan all resources, invoke the LLM
 
 ## Goal
 
-Add a session-based CLI mode (`crest-spec agent`) that lets an external orchestrator drive the apply process one resource at a time. The orchestrator (a Claude Code skill, workflow, or manual session) controls pacing, spawns sub-agents with scoped prompts, and can pause or redirect between resources.
+Add a session-based CLI mode (`crest-spec agent`) that lets a Claude Code skill drive the apply process one resource at a time. The skill controls pacing, spawns sub-agents with scoped prompts from crest-spec, and pauses for human review between resources.
 
 ## Design
 
 ### CLI Commands
 
-Six subcommands under `crest-spec agent`. All output JSON to stdout. Human-readable logs go to stderr.
+Seven subcommands under `crest-spec agent`. All output JSON to stdout. Human-readable logs go to stderr.
 
 | Command | Purpose |
 |---------|---------|
@@ -20,6 +20,7 @@ Six subcommands under `crest-spec agent`. All output JSON to stdout. Human-reada
 | `agent next` | Return next available resource(s) in current wave. Advances waves automatically. |
 | `agent context <id>` | Return the scoped prompt (system + resource + dependency files + module tree) for a resource. |
 | `agent validate <id>` | Run validation checks (invariants, type check, tests) against files currently on disk. |
+| `agent note <id> <text>` | Save a note for a resource. Notes from dependencies are included in downstream `context` calls. |
 | `agent commit <id>` | Accept a validated resource: update state DB, record generation audit trail. |
 | `agent finish` | Finalize apply record, release lock, clean up session. |
 
@@ -55,13 +56,21 @@ Six subcommands under `crest-spec agent`. All output JSON to stdout. Human-reada
 When all resources are committed: `{"wave": -1, "resources": [], "done": true}`
 
 **`agent context <id>`**
+
+The prompt includes notes from dependency resources (most recent apply only). These appear as a `## Notes from dependencies` section appended to the prompt, giving the sub-agent access to design decisions and context from upstream work.
+
 ```json
 {
   "resourceId": "vo.Kernel.MidiGroup",
   "systemPrompt": "You are a rust code generator...",
-  "prompt": "## Resource: valueObject \"MidiGroup\" (vo.Kernel.MidiGroup)\n..."
+  "prompt": "## Resource: valueObject \"MidiGroup\" (vo.Kernel.MidiGroup)\n...",
+  "dependencyNotes": {
+    "vo.Kernel.NoteNumber": ["Used newtype pattern wrapping u7, validated in constructor"]
+  }
 }
 ```
+
+The `dependencyNotes` field is informational (for the skill to inspect). The notes are already embedded in `prompt`.
 
 **`agent validate <id>`**
 ```json
@@ -72,6 +81,20 @@ When all resources are committed: `{"wave": -1, "resources": [], "done": true}`
     "Type check failed:\nsrc/Kernel/MidiGroup/mod.rs:12 - expected u8, found i32",
     "Invariant violated: must be 0-15 - no range check in constructor"
   ]
+}
+```
+
+**`agent note <id> <text>`**
+
+Notes are free-form text saved by the sub-agent (or skill) after implementing a resource. They capture decisions, patterns, gotchas, and context that would help downstream agents working on dependent resources.
+
+Multiple notes can be saved per resource (appended, not replaced). Notes persist across sessions — they're tied to the resource, not the apply.
+
+```json
+{
+  "resourceId": "vo.Kernel.MidiGroup",
+  "noteId": 1,
+  "saved": true
 }
 ```
 
@@ -103,7 +126,7 @@ Discovers files on disk using the same convention as `validate` (`src/{Context}/
 
 All session state lives in the database. No side-channel files.
 
-**New table:**
+**New tables:**
 ```sql
 CREATE TABLE IF NOT EXISTS agent_sessions (
   apply_id INTEGER PRIMARY KEY REFERENCES applies(id),
@@ -112,48 +135,69 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   hashes_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  resource_id TEXT NOT NULL,
+  apply_id INTEGER NOT NULL REFERENCES applies(id),
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_notes_resource ON agent_notes(resource_id);
 ```
 
 - `plan_json`: serialized `PlannedAction[]` snapshot from `begin`
 - `waves_json`: serialized `string[][]` (resource IDs per wave, computed by WaveComputer)
 - `hashes_json`: serialized `Record<string, string>` (effective hashes for all resources)
 
+**Notes lifecycle:** Notes are tied to a resource ID and an apply ID. They persist across sessions — when a resource is re-generated in a later apply, its old notes remain queryable. `agent context` includes notes from the *most recent apply* for each dependency, giving downstream agents the freshest context without noise from stale runs.
+
 **Session identification:** The active session is the `applies` row with `status = 'running'`. The lock ensures only one exists.
 
 **Wave progression:** `agent next` reads the session's `waves_json`, checks `apply_actions` for the running apply to see which resources have `outcome = 'success'`, and returns resources from the earliest wave that has uncommitted resources.
 
-### Orchestrator Flow
+### Orchestrator: Claude Code Skill
+
+The orchestrator is a Claude Code skill that drives the session. The skill runs in the main Claude session, which means:
+
+- The human sees every step and can intervene naturally via conversation
+- Sub-agents are spawned via the `Agent` tool with the scoped prompt from `agent context`
+- The skill pauses between resources for human review (no auto-advance without approval)
+- The human can redirect, skip resources, modify sub-agent output, or abort at any point
+
+**Skill flow:**
 
 ```
-1. orchestrator runs: crest-spec agent begin
-   -> gets plan with waves
+1. skill runs: crest-spec agent begin
+   -> shows plan to human, asks to proceed
 
-2. orchestrator runs: crest-spec agent next
-   -> gets next resource(s) available
+2. skill runs: crest-spec agent next
+   -> shows next resource(s) to human
 
 3. for each resource:
-   a. orchestrator runs: crest-spec agent context <id>
+   a. skill runs: crest-spec agent context <id>
       -> gets scoped prompt
 
-   b. orchestrator spawns sub-agent with prompt as guidance
+   b. skill spawns sub-agent (Agent tool) with prompt as guidance
       -> sub-agent writes files to disk
 
-   c. orchestrator runs: crest-spec agent validate <id>
+   c. skill runs: crest-spec agent validate <id>
       -> if errors: feed errors to sub-agent, sub-agent fixes, goto (c)
-      -> if passed: continue
+      -> if passed: show result to human
 
-   d. orchestrator runs: crest-spec agent commit <id>
+   d. skill runs: crest-spec agent note <id> "design decisions, patterns, gotchas"
+      -> sub-agent's insights saved for downstream agents
+
+   e. human approves -> skill runs: crest-spec agent commit <id>
       -> resource recorded in state DB
 
-4. orchestrator runs: crest-spec agent next
+4. skill runs: crest-spec agent next
    -> if done: false, goto 3
    -> if done: true, continue
 
-5. orchestrator runs: crest-spec agent finish
-   -> session finalized
+5. skill runs: crest-spec agent finish
+   -> session finalized, summary shown to human
 ```
-
-Between any of these steps, the human can intervene: inspect files, modify the sub-agent's output, skip a resource, or abort entirely.
 
 ### Validation Details
 
