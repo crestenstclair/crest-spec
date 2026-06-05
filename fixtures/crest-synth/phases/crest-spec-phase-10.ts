@@ -1208,3 +1208,174 @@ app.invariants([
     meta: { rationale: "changing parameter IDs breaks saved automation in DAW projects" },
   }),
 ]);
+
+// ── Asset Kinds ─────────────────────────────────────────
+
+app.assetKind("cargo-manifest", {
+  description: "Rust Cargo.toml project manifest",
+  filePattern: "Cargo.toml",
+  prompts: [
+    "Use edition 2021",
+    "Only include dependencies actually needed by the generated code",
+    "Include [lib] section with path = \"src/lib.rs\"",
+  ],
+});
+
+app.assetKind("makefile", {
+  description: "GNU Makefile for build automation",
+  filePattern: "Makefile",
+  prompts: [
+    "Include targets: build, test, clean, check, run",
+    "Use cargo for all Rust operations",
+  ],
+});
+
+app.assetKind("rust-module-declaration", {
+  description: "Rust mod.rs or lib.rs module declaration file",
+  prompts: [
+    "Only output module declarations (pub mod) and re-exports",
+    "Add #![allow(non_snake_case)] if any module name uses PascalCase",
+    "Do not add any implementation code",
+  ],
+});
+
+// ── Project Assets ──────────────────────────────────────
+
+app.asset("RootCargoToml", {
+  kind: "cargo-manifest",
+  description: "Root Cargo.toml for the crest-synth project",
+  prompts: [
+    "Package name: crest-synth, version 0.1.0",
+    "Dependencies likely needed: cpal (audio output), midir (MIDI input), eframe/egui (GUI), gilrs (gamepad), fundsp (effects DSP), serde + serde_json (preset serialization), nih-plug (plugin hosting framework)",
+  ],
+});
+
+app.asset("BuildMakefile", {
+  kind: "makefile",
+  description: "Build automation for the crest-synth project",
+  prompts: ["Default target: build", "test: cargo test", "check: cargo check", "clean: cargo clean"],
+});
+
+app.asset("LibRs", {
+  kind: "rust-module-declaration",
+  description: "Root src/lib.rs module declarations",
+  prompts: ["File path: src/lib.rs", "Declare modules: kernel, Shell, Synth, RealTime, Patch, Modulation, SampleLibrary, Effects, Presets, Plugin"],
+});
+
+// ── Adapter Assets ──────────────────────────────────────
+
+app.asset("CpalAudioOutputAdapter", {
+  kind: "rust-module-declaration",
+  description: "CpalAudioOutput adapter: cpal cross-platform audio output",
+  prompts: ["File path: src/adapters/cpal_audio_output.rs", "Implement AudioOutput port using cpal"],
+});
+
+app.asset("MidirInputAdapter", {
+  kind: "rust-module-declaration",
+  description: "MidirInput adapter: midir cross-platform MIDI I/O",
+  prompts: ["File path: src/adapters/midir_input.rs", "Implement MidiInput port using midir"],
+});
+
+app.asset("Midi2NormalizerAdapter", {
+  kind: "rust-module-declaration",
+  description: "Midi2Normalizer adapter: MIDI 1.0 to internal model upconversion",
+  prompts: ["File path: src/adapters/midi2_normalizer.rs", "Implement MidiNormalizer port using midi2 crate"],
+});
+
+app.asset("EframeWindowAdapter", {
+  kind: "rust-module-declaration",
+  description: "EframeWindow adapter: winit + wgpu window shell",
+  prompts: ["File path: src/adapters/eframe_window.rs", "Implement AppWindow port using eframe"],
+});
+
+app.asset("GilrsGamepadAdapter", {
+  kind: "rust-module-declaration",
+  description: "GilrsGamepad adapter: cross-platform gamepad input",
+  prompts: ["File path: src/adapters/gilrs_gamepad.rs", "Implement GamepadInput port using gilrs"],
+});
+
+app.asset("EguiRendererAdapter", {
+  kind: "rust-module-declaration",
+  description: "EguiRenderer adapter: immediate-mode UI renderer",
+  prompts: ["File path: src/adapters/egui_renderer.rs", "Implement GuiRenderer port using egui"],
+});
+
+app.asset("FundspEffectsAdapter", {
+  kind: "rust-module-declaration",
+  description: "FundspEffects adapter: composable DSP effects",
+  prompts: ["File path: src/adapters/fundsp_effects.rs", "Implement EffectProcessor port using fundsp"],
+});
+
+app.asset("SerdePresetCodecAdapter", {
+  kind: "rust-module-declaration",
+  description: "SerdePresetCodec adapter: JSON/bincode preset serialization",
+  prompts: ["File path: src/adapters/serde_preset_codec.rs", "Implement PresetCodec port using serde_json and bincode"],
+});
+
+app.asset("NihPlugHostAdapter", {
+  kind: "rust-module-declaration",
+  description: "NihPlugHost adapter: CLAP/VST3 plugin framework",
+  prompts: ["File path: src/adapters/nih_plug_host.rs", "Implement PluginHost port using nih-plug"],
+});
+
+// ── Context Module Assets ───────────────────────────────
+
+kernel.asset("KernelMod", {
+  kind: "rust-module-declaration",
+  description: "src/kernel/mod.rs module declarations for Kernel context",
+  prompts: ["File path: src/kernel/mod.rs", "Declare modules for: MidiGroup, MidiChannel, ChannelAddress, NoteId, NoteNumber, Velocity, MidiEvent, SampleRate, AudioFrame, Frequency, Amplitude"],
+});
+
+shell.asset("ShellMod", {
+  kind: "rust-module-declaration",
+  description: "src/Shell/mod.rs module declarations for Shell context",
+  prompts: ["File path: src/Shell/mod.rs", "Declare modules for: AudioOutput, MidiInput, MidiNormalizer, AppWindow, GamepadInput, GuiRenderer, GamepadAction, ControllerGlyph, GamepadNavigator, GlyphResolver"],
+});
+
+synth.asset("SynthMod", {
+  kind: "rust-module-declaration",
+  description: "src/Synth/mod.rs module declarations for Synth context",
+  prompts: ["File path: src/Synth/mod.rs", "Declare modules for: EnvelopeStage, OscillatorConfig, FilterConfig, AmpEnvelopeConfig, SamplePlayerConfig, Voice, SynthEngine, VoiceAllocator, AudioRenderer"],
+});
+
+realtime.asset("RealTimeMod", {
+  kind: "rust-module-declaration",
+  description: "src/RealTime/mod.rs module declarations for RealTime context",
+  prompts: ["File path: src/RealTime/mod.rs", "Declare modules for: BoundaryMessage, ParameterSnapshot, EventRingBuffer, ParameterBridge, DeferredDeallocator"],
+});
+
+patchCtx.asset("PatchMod", {
+  kind: "rust-module-declaration",
+  description: "src/Patch/mod.rs module declarations for Patch context",
+  prompts: ["File path: src/Patch/mod.rs", "Declare modules for: MpeZone, ChannelSubscription, VoicePoolConfig, Patch, PatchId, ChannelDispatcher, PatchMixer, GlobalMixer, PatchRepository"],
+});
+
+modulation.asset("ModulationMod", {
+  kind: "rust-module-declaration",
+  description: "src/Modulation/mod.rs module declarations for Modulation context",
+  prompts: ["File path: src/Modulation/mod.rs", "Declare modules for: PerNoteExpression, ModSourceType, ModDestinationType, LfoConfig, ModEnvelopeConfig, ModMatrix, ModRouting, ModulationProcessor"],
+});
+
+sampleLib.asset("SampleLibraryMod", {
+  kind: "rust-module-declaration",
+  description: "src/SampleLibrary/mod.rs module declarations for SampleLibrary context",
+  prompts: ["File path: src/SampleLibrary/mod.rs", "Declare modules for: SampleSetId, SampleMetadata, KeyVelocityRange, InterpolationMode, SampleSet, SampleZone, SampleLoader, SampleInterpolator, SampleSetRepository"],
+});
+
+effectsCtx.asset("EffectsMod", {
+  kind: "rust-module-declaration",
+  description: "src/Effects/mod.rs module declarations for Effects context",
+  prompts: ["File path: src/Effects/mod.rs", "Declare modules for: EffectChainId, ReverbConfig, ChorusConfig, DelayConfig, EffectChain, EffectSlot, EffectProcessor, EffectChainRepository"],
+});
+
+presets.asset("PresetsMod", {
+  kind: "rust-module-declaration",
+  description: "src/Presets/mod.rs module declarations for Presets context",
+  prompts: ["File path: src/Presets/mod.rs", "Declare modules for: PresetId, PresetMetadata, Preset, PresetBank, Setup, PresetCodec, PresetBrowser, PresetRepository"],
+});
+
+plugin.asset("PluginMod", {
+  kind: "rust-module-declaration",
+  description: "src/Plugin/mod.rs module declarations for Plugin context",
+  prompts: ["File path: src/Plugin/mod.rs", "Declare modules for: PluginFormat, ParameterId, ParameterRange, PluginHost, PluginInstance, PluginParameter, PluginShell"],
+});

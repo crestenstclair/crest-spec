@@ -561,3 +561,91 @@ app.invariants([
     meta: { rationale: "building MPE later means feeding data into sources that already exist, not adding new types" },
   }),
 ]);
+
+// ── Asset Kinds ─────────────────────────────────────────
+
+app.assetKind("cargo-manifest", {
+  description: "Rust Cargo.toml project manifest",
+  filePattern: "Cargo.toml",
+  prompts: [
+    "Use edition 2021",
+    "Only include dependencies actually needed by the generated code",
+    "Include [lib] section with path = \"src/lib.rs\"",
+  ],
+});
+
+app.assetKind("makefile", {
+  description: "GNU Makefile for build automation",
+  filePattern: "Makefile",
+  prompts: [
+    "Include targets: build, test, clean, check, run",
+    "Use cargo for all Rust operations",
+  ],
+});
+
+app.assetKind("rust-module-declaration", {
+  description: "Rust mod.rs or lib.rs module declaration file",
+  prompts: [
+    "Only output module declarations (pub mod) and re-exports",
+    "Add #![allow(non_snake_case)] if any module name uses PascalCase",
+    "Do not add any implementation code",
+  ],
+});
+
+// ── Project Assets ──────────────────────────────────────
+
+app.asset("RootCargoToml", {
+  kind: "cargo-manifest",
+  description: "Root Cargo.toml for the crest-synth project",
+  prompts: ["Package name: crest-synth, version 0.1.0", "No external dependencies needed (pure Rust)"],
+});
+
+app.asset("BuildMakefile", {
+  kind: "makefile",
+  description: "Build automation for the crest-synth project",
+  prompts: ["Default target: build", "test: cargo test", "check: cargo check", "clean: cargo clean"],
+});
+
+app.asset("LibRs", {
+  kind: "rust-module-declaration",
+  description: "Root src/lib.rs module declarations",
+  prompts: ["File path: src/lib.rs", "Declare modules: kernel, Shell, Synth, RealTime, Patch, Modulation"],
+});
+
+// ── Context Module Assets ───────────────────────────────
+
+kernel.asset("KernelMod", {
+  kind: "rust-module-declaration",
+  description: "src/kernel/mod.rs module declarations for Kernel context",
+  prompts: ["File path: src/kernel/mod.rs", "Declare modules for: MidiGroup, MidiChannel, ChannelAddress, NoteId, NoteNumber, Velocity, MidiEvent, SampleRate, AudioFrame, Frequency, Amplitude"],
+});
+
+shell.asset("ShellMod", {
+  kind: "rust-module-declaration",
+  description: "src/Shell/mod.rs module declarations for Shell context",
+  prompts: ["File path: src/Shell/mod.rs", "Declare modules for: AudioOutput, MidiInput, MidiNormalizer, AppWindow"],
+});
+
+synth.asset("SynthMod", {
+  kind: "rust-module-declaration",
+  description: "src/Synth/mod.rs module declarations for Synth context",
+  prompts: ["File path: src/Synth/mod.rs", "Declare modules for: EnvelopeStage, OscillatorConfig, FilterConfig, AmpEnvelopeConfig, Voice, SynthEngine, VoiceAllocator, AudioRenderer"],
+});
+
+realtime.asset("RealTimeMod", {
+  kind: "rust-module-declaration",
+  description: "src/RealTime/mod.rs module declarations for RealTime context",
+  prompts: ["File path: src/RealTime/mod.rs", "Declare modules for: BoundaryMessage, ParameterSnapshot, EventRingBuffer, ParameterBridge, DeferredDeallocator"],
+});
+
+patchCtx.asset("PatchMod", {
+  kind: "rust-module-declaration",
+  description: "src/Patch/mod.rs module declarations for Patch context",
+  prompts: ["File path: src/Patch/mod.rs", "Declare modules for: MpeZone, ChannelSubscription, VoicePoolConfig, Patch, PatchId, ChannelDispatcher, PatchMixer, GlobalMixer, PatchRepository"],
+});
+
+modulation.asset("ModulationMod", {
+  kind: "rust-module-declaration",
+  description: "src/Modulation/mod.rs module declarations for Modulation context",
+  prompts: ["File path: src/Modulation/mod.rs", "Declare modules for: PerNoteExpression, ModSourceType, ModDestinationType, LfoConfig, ModEnvelopeConfig, ModMatrix, ModRouting, ModulationProcessor"],
+});

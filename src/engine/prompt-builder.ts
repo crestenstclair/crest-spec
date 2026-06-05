@@ -44,7 +44,8 @@ export class PromptBuilder implements IPromptBuilder {
 
     lines.push("");
     lines.push("## Output format");
-    lines.push("For each file, output a fenced code block with a path annotation:");
+    lines.push("For each file, output a fenced code block with a path annotation on the first line.");
+    lines.push("Use `// path:` for languages with C-style comments, or `# path:` for Makefile, TOML, YAML, etc.");
     lines.push(`\`\`\`${lang}`);
     lines.push("// path: src/ContextName/FileName.ext");
     lines.push("```");
@@ -86,6 +87,11 @@ export class PromptBuilder implements IPromptBuilder {
         lines.push(`- ${rule}`);
       }
     }
+
+    lines.push("");
+    lines.push("## Shared module files");
+    lines.push("Do NOT generate top-level `lib.rs` or context-level `mod.rs` files (e.g. `src/lib.rs`, `src/Kernel/mod.rs`).");
+    lines.push("Those files are managed separately as assets. Only generate `mod.rs` files within your own resource subdirectory.");
 
     lines.push("");
     lines.push("## Required output");

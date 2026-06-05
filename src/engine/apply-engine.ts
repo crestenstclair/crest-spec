@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { mkdir } from "fs/promises";
+import { mkdir, readdir, unlink } from "fs/promises";
 import { dirname, join } from "path";
 import type { IResourceRegistry } from "../registry/resource-registry.js";
 import type { IStateDatabase } from "../state/state-database.js";
@@ -107,6 +107,10 @@ export class ApplyEngine implements IApplyEngine {
       console.log(`  [destroy] ${action.resourceId}`);
       const files = state.getFilesForResource(action.resourceId);
       for (const file of files) {
+        const fullPath = join(outputDir, file.path);
+        try {
+          await unlink(fullPath);
+        } catch {}
         state.deleteGeneratedFile(file.path);
       }
       state.deleteResource(action.resourceId);
@@ -308,6 +312,12 @@ export class ApplyEngine implements IApplyEngine {
     let prompt = this.promptBuilder.build(resource, ctx.registry);
     const systemPrompt = this.promptBuilder.systemPrompt();
 
+    const outputDir = ctx.options.outputDir ?? ".";
+    const moduleTreeContext = await this.buildModuleTreeContext(outputDir);
+    if (moduleTreeContext) {
+      prompt = prompt + moduleTreeContext;
+    }
+
     const existingFilesContext = await this.buildExistingFilesContext(resource, ctx);
     if (existingFilesContext) {
       prompt = prompt + existingFilesContext;
@@ -361,8 +371,6 @@ export class ApplyEngine implements IApplyEngine {
       await ctx.appendErrorLog(action.resourceId, `INVARIANT: ${loopResult.lastError}\n\nPrompt:\n${prompt}`);
       return;
     }
-
-    const outputDir = ctx.options.outputDir ?? ".";
 
     ctx.state.upsertResource({
       id: resource.id,
@@ -483,5 +491,44 @@ export class ApplyEngine implements IApplyEngine {
       "Fix these errors in your output:\n",
       waveErrors,
     ].join("\n");
+  }
+
+  private async buildModuleTreeContext(outputDir: string): Promise<string | null> {
+    const srcDir = join(outputDir, "src");
+    try {
+      await readdir(srcDir);
+    } catch {
+      return null;
+    }
+
+    const tree = await this.scanDir(srcDir, "src");
+    if (tree.length === 0) return null;
+
+    const sections: string[] = [];
+    sections.push("\n\n## Current Project Module Tree");
+    sections.push("Use these exact module paths in `use` statements. Do NOT guess casing.");
+    sections.push("```");
+    sections.push(tree.join("\n"));
+    sections.push("```");
+    return sections.join("\n");
+  }
+
+  private async scanDir(dirPath: string, prefix: string): Promise<string[]> {
+    const lines: string[] = [];
+    try {
+      const entries = await readdir(dirPath, { withFileTypes: true });
+      const dirs = entries.filter((e) => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+      const files = entries.filter((e) => e.isFile() && e.name.endsWith(".rs")).sort((a, b) => a.name.localeCompare(b.name));
+
+      for (const f of files) {
+        lines.push(`${prefix}/${f.name}`);
+      }
+      for (const d of dirs) {
+        lines.push(`${prefix}/${d.name}/`);
+        const subLines = await this.scanDir(join(dirPath, d.name), `${prefix}/${d.name}`);
+        lines.push(...subLines);
+      }
+    } catch {}
+    return lines;
   }
 }

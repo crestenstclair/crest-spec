@@ -4,7 +4,7 @@ export interface IResponseParser {
 
 export class ResponseParser implements IResponseParser {
   private static readonly BLOCK_REGEX = /```[\w]*\n([\s\S]*?)```/g;
-  private static readonly PATH_REGEX = /^\/\/\s*path:\s*(.+)$/m;
+  private static readonly PATH_REGEX = /^(?:\/\/|#)\s*path:\s*(.+)$/m;
 
   parse(response: string): Map<string, string> {
     const files = new Map<string, string>();

@@ -68,6 +68,41 @@ export const y = 2;
     expect(files.has("src/real.ts")).toBe(true);
   });
 
+  test("parses hash-style path annotations for non-C languages", () => {
+    const input = `\`\`\`makefile
+# path: Makefile
+.PHONY: build test clean
+
+build:
+\tcargo build
+
+test:
+\tcargo test
+\`\`\``;
+
+    const files = parser.parse(input);
+    expect(files.size).toBe(1);
+    expect(files.has("Makefile")).toBe(true);
+    const content = files.get("Makefile")!;
+    expect(content).not.toContain("# path:");
+    expect(content).toContain("cargo build");
+  });
+
+  test("parses TOML files with hash-style path annotation", () => {
+    const input = `\`\`\`toml
+# path: Cargo.toml
+[package]
+name = "crest-synth"
+version = "0.1.0"
+edition = "2021"
+\`\`\``;
+
+    const files = parser.parse(input);
+    expect(files.size).toBe(1);
+    expect(files.has("Cargo.toml")).toBe(true);
+    expect(files.get("Cargo.toml")).toContain("[package]");
+  });
+
   test("returns empty map for input with no code blocks", () => {
     const files = parser.parse("No code here.");
     expect(files.size).toBe(0);
