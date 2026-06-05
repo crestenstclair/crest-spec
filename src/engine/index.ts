@@ -6,3 +6,4 @@ export { ApplyEngine, type IApplyEngine, type ApplyOptions, type ApplyResult } f
 export { WaveComputer, type IWaveComputer } from "./wave-computer.js";
 export { WaveVerifier, type IWaveVerifier, type WaveVerificationResult, type WaveError } from "./wave-verifier.js";
 export { ResourceValidator, type IResourceValidator, type ValidationResult, type ResourceValidatorOptions } from "./resource-validator.js";
+export { AgentSession, type BeginResult, type NextResult, type ContextResult, type NoteResult, type CommitResult, type FinishResult } from "./agent-session.js";
