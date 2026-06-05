@@ -1,0 +1,35 @@
+    Blocking waiting for file lock on build directory
+   0.367543083s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for crest-synth v0.1.0 (/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth)/Check { test: false }/TargetInner { ..: lib_target("crest-synth", ["lib"], "/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/src/lib.rs", Edition2021) }
+   0.368287750s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.368763041s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for coreaudio-sys v0.2.16/Check { test: false }/TargetInner { ..: lib_target("coreaudio_sys", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/coreaudio-sys-0.2.16/src/lib.rs", Edition2015) }
+   0.368771541s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.372461625s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for cpal v0.15.3/Check { test: false }/TargetInner { ..: lib_target("cpal", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/cpal-0.15.3/src/lib.rs", Edition2021) }
+   0.372472875s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.372894000s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for core-foundation-sys v0.8.7/Check { test: false }/TargetInner { ..: lib_target("core_foundation_sys", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/core-foundation-sys-0.8.7/src/lib.rs", Edition2018) }
+   0.372901625s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.373136416s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for coreaudio-rs v0.11.3/Check { test: false }/TargetInner { ..: lib_target("coreaudio", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/coreaudio-rs-0.11.3/src/lib.rs", Edition2018) }
+   0.373143875s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.373635375s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for bitflags v1.3.2/Check { test: false }/TargetInner { ..: lib_target("bitflags", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/bitflags-1.3.2/src/lib.rs", Edition2018) }
+   0.373642083s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.374230750s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for dasp_sample v0.11.0/Check { test: false }/TargetInner { ..: lib_target("dasp_sample", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/dasp_sample-0.11.0/src/lib.rs", Edition2018) }
+   0.374241833s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.374760750s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for mach2 v0.4.3/Check { test: false }/TargetInner { ..: lib_target("mach2", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/mach2-0.4.3/src/lib.rs", Edition2015) }
+   0.374771833s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.375597625s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for libc v0.2.186/Check { test: false }/TargetInner { ..: lib_target("libc", ["lib"], "/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-6f17d22bba15001f/libc-0.2.186/src/lib.rs", Edition2021) }
+   0.375603541s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.375732416s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for crest-synth v0.1.0 (/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth)/Check { test: true }/TargetInner { ..: lib_target("crest-synth", ["lib"], "/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/src/lib.rs", Edition2021) }
+   0.375737208s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.375857333s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for crest-synth v0.1.0 (/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth)/Check { test: false }/TargetInner { name: "crest-synth", doc: true, ..: with_path("/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/src/main.rs", Edition2021) }
+   0.375861583s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+   0.375971875s  INFO cargo::core::compiler::fingerprint: fingerprint dirty for crest-synth v0.1.0 (/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth)/Check { test: true }/TargetInner { name: "crest-synth", doc: true, ..: with_path("/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/src/main.rs", Edition2021) }
+   0.375976208s  INFO cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+    Checking libc v0.2.186
+    Checking core-foundation-sys v0.8.7
+    Checking bitflags v1.3.2
+    Checking dasp_sample v0.11.0
+    Checking coreaudio-sys v0.2.16
+    Checking mach2 v0.4.3
+    Checking coreaudio-rs v0.11.3
+    Checking cpal v0.15.3
+    Checking crest-synth v0.1.0 (/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth)
+    Finished dev [unoptimized + debuginfo] target(s) in 1.23s

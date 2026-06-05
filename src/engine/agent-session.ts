@@ -13,6 +13,7 @@ export interface BeginResult {
   plan: { resourceId: string; action: string; reason: string }[];
   waves: string[][];
   totalResources: number;
+  orchestratorInstructions: string;
 }
 
 export interface NextResult {
@@ -26,6 +27,7 @@ export interface ContextResult {
   systemPrompt: string;
   prompt: string;
   dependencyNotes: Record<string, string[]>;
+  dispatchInstructions: string;
 }
 
 export interface NoteResult {
@@ -108,6 +110,7 @@ export class AgentSession {
       plan: planSummary,
       waves: waveIds,
       totalResources: generates.length,
+      orchestratorInstructions: AgentSession.orchestratorInstructions(),
     };
   }
 
@@ -182,7 +185,13 @@ export class AgentSession {
       prompt += sections.join("\n");
     }
 
-    return { resourceId, systemPrompt, prompt, dependencyNotes };
+    return {
+      resourceId,
+      systemPrompt,
+      prompt,
+      dependencyNotes,
+      dispatchInstructions: AgentSession.dispatchInstructions(resourceId),
+    };
   }
 
   note(resourceId: string, content: string): NoteResult {
@@ -274,6 +283,80 @@ export class AgentSession {
     registry: IResourceRegistry,
   ): Promise<ValidationResult> {
     return this.validator.validateAsync(resourceId, files, registry);
+  }
+
+  static orchestratorInstructions(): string {
+    return [
+      "=" .repeat(78),
+      "  CRITICAL: ORCHESTRATOR RULES — YOU ARE A DISPATCHER, NOT A CODE GENERATOR",
+      "=" .repeat(78),
+      "",
+      "You are an orchestration agent. Your job is to drive the agent CLI and",
+      "dispatch sub-agents. You MUST NOT write implementation code yourself.",
+      "",
+      "DO:",
+      "  - Run `agent next` to get the current wave of resources",
+      "  - Run `agent context <id>` to get the sub-agent prompt for each resource",
+      "  - Spawn a sub-agent (Agent tool) for each resource, passing it the",
+      "    systemPrompt and prompt from the context output",
+      "  - Parse the sub-agent's output for fenced code blocks with `// path:` or",
+      "    `# path:` annotations and write each file to disk",
+      "  - Run `agent note <id>` with a summary of the sub-agent's decisions",
+      "  - Run `agent commit <id>` after files are on disk",
+      "  - Run `agent next` again; repeat until done",
+      "  - Run `agent finish` to finalize the session",
+      "",
+      "DO NOT:",
+      "  - Write implementation code directly — every file must come from a sub-agent",
+      "  - Absorb the context prompts and generate code inline",
+      "  - Skip the sub-agent step for any resource, even simple ones",
+      "  - Modify the sub-agent's output unless it fails to compile",
+      "",
+      "DISPATCH PATTERN:",
+      '  const ctx = `agent context <id>` // returns { systemPrompt, prompt }',
+      "  sub-agent = Agent({",
+      '    prompt: ctx.systemPrompt + "\\n\\n" + ctx.prompt,',
+      '    description: "Generate <resource-id>"',
+      "  })",
+      "  // Parse code blocks from sub-agent output → write to disk",
+      "",
+      "Resources within the same wave are independent — dispatch them in parallel",
+      "when possible. Resources in later waves depend on earlier ones, so waves",
+      "must be processed sequentially.",
+      "=" .repeat(78),
+    ].join("\n");
+  }
+
+  static dispatchInstructions(resourceId: string): string {
+    return [
+      "=" .repeat(78),
+      "  DISPATCH INSTRUCTIONS",
+      "=" .repeat(78),
+      "",
+      "You MUST spawn a sub-agent to generate code for this resource.",
+      "Do NOT write the code yourself.",
+      "",
+      "1. Combine systemPrompt + prompt into a single sub-agent prompt",
+      "2. Spawn the sub-agent using your Agent tool:",
+      `   Agent({ prompt: <combined>, description: "Generate ${resourceId}" })`,
+      "3. The sub-agent will return fenced code blocks with path annotations:",
+      "   ```rust",
+      "   // path: src/Context/Resource.rs",
+      "   <code>",
+      "   ```",
+      "   or for non-Rust files:",
+      "   ```toml",
+      "   # path: Cargo.toml",
+      "   <content>",
+      "   ```",
+      "4. Parse each code block, extract the path from the annotation, and write",
+      "   the file to disk at that path (relative to the project root)",
+      "5. After writing all files, run `agent note` and `agent commit`",
+      "",
+      "If the sub-agent's output fails to compile, you may re-dispatch with",
+      "additional context (e.g., compiler errors), but do NOT hand-edit the code.",
+      "=" .repeat(78),
+    ].join("\n");
   }
 
   finish(): FinishResult {

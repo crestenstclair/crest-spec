@@ -1,0 +1,7 @@
+cargo:rerun-if-env-changed=COREAUDIO_SDK_PATH
+cargo:rustc-link-lib=framework=AudioUnit
+cargo:rustc-link-lib=framework=AudioToolbox
+cargo:rustc-link-lib=framework=CoreAudio
+cargo:rustc-link-lib=framework=OpenAL
+cargo:rustc-link-lib=framework=CoreMIDI
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS

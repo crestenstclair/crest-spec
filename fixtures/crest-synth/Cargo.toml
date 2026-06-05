@@ -1,0 +1,15 @@
+[package]
+name = "crest-synth"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "crest-synth"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "=0.15.3"
+coreaudio-sys = "=0.2.16"
