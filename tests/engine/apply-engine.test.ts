@@ -235,6 +235,63 @@ describe("ApplyEngine", () => {
     expect(bResource).toBeNull();
   });
 
+  test("wave mode injects existing dependency files into wave 2+ prompts", async () => {
+    const capturedPrompts: Map<string, string> = new Map();
+
+    registry.register(makeResource({ id: "vo.K.Base", kind: "valueObject", name: "Base" }));
+    registry.register(
+      makeResource({
+        id: "repo.C.Things",
+        kind: "repository",
+        name: "Things",
+        dependencies: [{ targetId: "vo.K.Base", kind: "uses" }],
+      }),
+    );
+
+    const llm: ILlmClient = {
+      modelId: "test-model",
+      async generate(prompt: string): Promise<string> {
+        if (prompt.includes('## Resource: valueObject "Base"')) {
+          capturedPrompts.set("vo.K.Base", prompt);
+          return '```ts\n// path: src/Base/Base.ts\nexport type Base = { id: string };\n```';
+        }
+        capturedPrompts.set("repo.C.Things", prompt);
+        return '```ts\n// path: src/Things/ThingsRepo.ts\nimport { Base } from "../Base/Base";\n```';
+      },
+    };
+
+    const verifier: IWaveVerifier = {
+      async verify(): Promise<WaveVerificationResult> {
+        return { passed: true, errors: [], rawOutput: "" };
+      },
+    };
+
+    const hashComputer = new HashComputer("test-model");
+    const planner = new Planner(hashComputer);
+    const promptBuilder = new PromptBuilder({ language: "typescript" });
+    const checker = new InvariantChecker([]);
+    const constraintLoop = new ConstraintLoop(checker, { skipTypeCheckInLoop: true, skipLlmVerify: true });
+    const waveComputer = new WaveComputer();
+
+    const engine = new ApplyEngine(planner, promptBuilder, constraintLoop, hashComputer, waveComputer, verifier);
+    const result = await engine.apply(registry, state, llm, {
+      outputDir: tempDir,
+      waveVerifyCommand: ["true"],
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.created).toBe(2);
+
+    const basePrompt = capturedPrompts.get("vo.K.Base")!;
+    expect(basePrompt).not.toContain("Existing Generated Files");
+
+    const repoPrompt = capturedPrompts.get("repo.C.Things")!;
+    expect(repoPrompt).toContain("Existing Generated Files");
+    expect(repoPrompt).toContain("src/Base/Base.ts");
+    expect(repoPrompt).toContain("export type Base = { id: string };");
+    expect(repoPrompt).toContain("DO NOT regenerate");
+  });
+
   test("records generation in state for audit trail", async () => {
     registry.register(
       makeResource({ id: "vo.Comp.Ticks", kind: "valueObject" }),

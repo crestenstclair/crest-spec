@@ -308,6 +308,11 @@ export class ApplyEngine implements IApplyEngine {
     let prompt = this.promptBuilder.build(resource, ctx.registry);
     const systemPrompt = this.promptBuilder.systemPrompt();
 
+    const existingFilesContext = await this.buildExistingFilesContext(resource, ctx);
+    if (existingFilesContext) {
+      prompt = prompt + existingFilesContext;
+    }
+
     if (waveError) {
       prompt = this.buildWaveFixPrompt(prompt, waveError, resource);
     }
@@ -425,6 +430,45 @@ export class ApplyEngine implements IApplyEngine {
       if (action.action === "create") ctx.result.created++;
       else ctx.result.modified++;
     }
+  }
+
+  private async buildExistingFilesContext(
+    resource: ResourceDescriptor,
+    ctx: ActionContext,
+  ): Promise<string | null> {
+    if (ctx.fileToResource.size === 0) return null;
+
+    const depIds = new Set(resource.dependencies.map((d) => d.targetId));
+    if (depIds.size === 0) return null;
+
+    const existingFiles: { path: string; content: string; resourceId: string }[] = [];
+    const outputDir = ctx.options.outputDir ?? ".";
+
+    for (const [filePath, resourceId] of ctx.fileToResource) {
+      if (!depIds.has(resourceId)) continue;
+      if (filePath.startsWith("tests/") || filePath.includes(".test.") || filePath.includes(".spec.")) continue;
+
+      try {
+        const content = await Bun.file(join(outputDir, filePath)).text();
+        existingFiles.push({ path: filePath, content, resourceId });
+      } catch {}
+    }
+
+    if (existingFiles.length === 0) return null;
+
+    const sections: string[] = [];
+    sections.push("\n\n## Existing Generated Files (from dependencies)");
+    sections.push("The following files were already generated for resources this one depends on.");
+    sections.push("DO NOT regenerate or overwrite these files. Import from them as needed.\n");
+
+    for (const file of existingFiles) {
+      sections.push(`### ${file.path} (from ${file.resourceId})`);
+      sections.push("```");
+      sections.push(file.content);
+      sections.push("```\n");
+    }
+
+    return sections.join("\n");
   }
 
   private buildWaveFixPrompt(
