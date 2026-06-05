@@ -10,6 +10,8 @@ import type {
   GenerationRecord,
   InvariantCheckRecord,
   LockRecord,
+  AgentSessionRecord,
+  AgentNoteRecord,
 } from "./types.js";
 
 export interface IStateDatabase {
@@ -44,6 +46,16 @@ export interface IStateDatabase {
 
   getApplies(limit?: number): ApplyRecord[];
   getApplyActions(applyId: number): ActionRecord[];
+
+  createAgentSession(session: AgentSessionRecord): void;
+  getAgentSession(applyId: number): AgentSessionRecord | null;
+  getActiveAgentSession(): AgentSessionRecord | null;
+  deleteAgentSession(applyId: number): void;
+
+  addAgentNote(note: Omit<AgentNoteRecord, "id">): number;
+  getAgentNotes(resourceId: string): AgentNoteRecord[];
+  getAgentNotesForApply(resourceId: string, applyId: number): AgentNoteRecord[];
+  getLatestAgentNotes(resourceId: string): AgentNoteRecord[];
 }
 
 export class StateDatabase implements IStateDatabase {
@@ -275,5 +287,84 @@ export class StateDatabase implements IStateDatabase {
     return this.db
       .query("SELECT * FROM apply_actions WHERE apply_id = ?")
       .all(applyId) as ActionRecord[];
+  }
+
+  createAgentSession(session: AgentSessionRecord): void {
+    this.db
+      .query(
+        `INSERT INTO agent_sessions (apply_id, plan_json, waves_json, hashes_json, created_at)
+         VALUES ($apply_id, $plan_json, $waves_json, $hashes_json, $created_at)`,
+      )
+      .run({
+        $apply_id: session.apply_id,
+        $plan_json: session.plan_json,
+        $waves_json: session.waves_json,
+        $hashes_json: session.hashes_json,
+        $created_at: session.created_at,
+      });
+  }
+
+  getAgentSession(applyId: number): AgentSessionRecord | null {
+    return this.db
+      .query("SELECT * FROM agent_sessions WHERE apply_id = ?")
+      .get(applyId) as AgentSessionRecord | null;
+  }
+
+  getActiveAgentSession(): AgentSessionRecord | null {
+    return this.db
+      .query(
+        `SELECT s.* FROM agent_sessions s
+         JOIN applies a ON a.id = s.apply_id
+         WHERE a.status = 'running'
+         LIMIT 1`,
+      )
+      .get() as AgentSessionRecord | null;
+  }
+
+  deleteAgentSession(applyId: number): void {
+    this.db.query("DELETE FROM agent_sessions WHERE apply_id = ?").run(applyId);
+  }
+
+  addAgentNote(note: Omit<AgentNoteRecord, "id">): number {
+    this.db
+      .query(
+        `INSERT INTO agent_notes (resource_id, apply_id, content, created_at)
+         VALUES ($resource_id, $apply_id, $content, $created_at)`,
+      )
+      .run({
+        $resource_id: note.resource_id,
+        $apply_id: note.apply_id,
+        $content: note.content,
+        $created_at: note.created_at,
+      });
+    const row = this.db.query("SELECT last_insert_rowid() as id").get() as { id: number };
+    return row.id;
+  }
+
+  getAgentNotes(resourceId: string): AgentNoteRecord[] {
+    return this.db
+      .query("SELECT * FROM agent_notes WHERE resource_id = ? ORDER BY created_at")
+      .all(resourceId) as AgentNoteRecord[];
+  }
+
+  getAgentNotesForApply(resourceId: string, applyId: number): AgentNoteRecord[] {
+    return this.db
+      .query(
+        "SELECT * FROM agent_notes WHERE resource_id = ? AND apply_id = ? ORDER BY created_at",
+      )
+      .all(resourceId, applyId) as AgentNoteRecord[];
+  }
+
+  getLatestAgentNotes(resourceId: string): AgentNoteRecord[] {
+    return this.db
+      .query(
+        `SELECT n.* FROM agent_notes n
+         WHERE n.resource_id = ?
+         AND n.apply_id = (
+           SELECT MAX(apply_id) FROM agent_notes WHERE resource_id = ?
+         )
+         ORDER BY n.created_at`,
+      )
+      .all(resourceId, resourceId) as AgentNoteRecord[];
   }
 }
