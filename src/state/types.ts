@@ -75,3 +75,19 @@ export interface LockRecord {
   holder: string;
   acquired_at: string;
 }
+
+export interface AgentSessionRecord {
+  apply_id: number;
+  plan_json: string;
+  waves_json: string;
+  hashes_json: string;
+  created_at: string;
+}
+
+export interface AgentNoteRecord {
+  id: number;
+  resource_id: string;
+  apply_id: number;
+  content: string;
+  created_at: string;
+}
