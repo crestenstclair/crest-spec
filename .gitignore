@@ -43,3 +43,6 @@ test-project/
 
 # apply error logs
 apply-errors.log
+
+# worktrees
+.worktrees
