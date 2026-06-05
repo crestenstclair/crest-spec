@@ -5,3 +5,4 @@ export { ConstraintLoop, type IConstraintLoop, type ConstraintLoopResult } from 
 export { ApplyEngine, type IApplyEngine, type ApplyOptions, type ApplyResult } from "./apply-engine.js";
 export { WaveComputer, type IWaveComputer } from "./wave-computer.js";
 export { WaveVerifier, type IWaveVerifier, type WaveVerificationResult, type WaveError } from "./wave-verifier.js";
+export { ResourceValidator, type IResourceValidator, type ValidationResult, type ResourceValidatorOptions } from "./resource-validator.js";
