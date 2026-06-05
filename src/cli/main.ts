@@ -165,6 +165,35 @@ async function main(): Promise<number> {
       return 0;
     }
 
+    case "agent": {
+      const subcommand = args[1];
+      if (!subcommand) {
+        console.log(`crest-spec agent — interactive sub-agent orchestration
+
+Subcommands:
+  begin                         Start an agent session
+  next                          Get next resource(s) to implement
+  context <resource-id>         Get scoped prompt for a resource
+  validate <resource-id>        Validate files on disk for a resource
+  note <resource-id> <text>     Save a note for a resource
+  commit <resource-id>          Commit a resource to state
+  finish                        Finalize the session`);
+        return 0;
+      }
+      const { agentCommand } = await import("./commands/agent.js");
+      const target = getFlag("target");
+      const force = hasFlag("force");
+      const skipTypecheck = hasFlag("skip-typecheck");
+      const skipTests = hasFlag("skip-tests");
+      const subArgs = args.slice(2).filter((a) => !a.startsWith("--") && !a.startsWith("-"));
+      return agentCommand(projectDir, specFile, modelId, subcommand, subArgs, {
+        target,
+        force,
+        skipTypecheck,
+        skipTests,
+      });
+    }
+
     default:
       console.log(`crest-spec — declarative DDD specification tool
 
@@ -182,6 +211,14 @@ Commands:
   unlock                        Clear a stale lock
   vacuum --before DATE          Prune old history
   sql                           Open sqlite3 shell
+  agent                         Interactive sub-agent orchestration
+  agent begin                   Start an agent session
+  agent next                    Get next resource(s) to implement
+  agent context <resource-id>   Get scoped prompt for a resource
+  agent validate <resource-id>  Validate files on disk
+  agent note <id> <text>        Save a note for a resource
+  agent commit <resource-id>    Commit a resource to state
+  agent finish                  Finalize the session
 
 Options:
   -spec <file>                  Spec file (default: crest-spec.ts)
