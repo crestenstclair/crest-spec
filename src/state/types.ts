@@ -85,7 +85,7 @@ export interface AgentSessionRecord {
 }
 
 export interface AgentNoteRecord {
-  id: number;
+  id?: number;
   resource_id: string;
   apply_id: number;
   content: string;

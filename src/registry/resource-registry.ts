@@ -21,9 +21,6 @@ export class ResourceRegistry implements IResourceRegistry {
   private projectInvariants: InvariantDescriptor[] = [];
 
   register(descriptor: ResourceDescriptor): void {
-    if (this.resources.has(descriptor.id)) {
-      throw new Error(`Duplicate resource ID: ${descriptor.id}`);
-    }
     this.resources.set(descriptor.id, descriptor);
   }
 

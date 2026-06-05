@@ -7,7 +7,7 @@ import { InvariantChecker } from "../../src/invariants/invariant-checker";
 import { PromptBuilder } from "../../src/engine/prompt-builder";
 import { ConstraintLoop } from "../../src/engine/constraint-loop";
 import { WaveComputer } from "../../src/engine/wave-computer";
-import { getActiveProject, resetSingleton } from "../../src/dsl/singleton";
+import { getActiveProject } from "../../src/dsl/singleton";
 import type { ILlmClient } from "../../src/engine/llm-client";
 import type { IWaveVerifier, WaveVerificationResult } from "../../src/engine/wave-verifier";
 import type { ResourceDescriptor } from "../../src/types";
@@ -104,7 +104,10 @@ describe("Phased crest-synth apply", () => {
 
   for (let phase = 1; phase <= 10; phase++) {
     test(`phase ${phase}`, async () => {
-      resetSingleton();
+      // Phase files use an additive import chain rooted in base.ts.
+      // base.ts calls project() once (on first load) and sets the singleton.
+      // Subsequent phase imports add resources to the same registry via upsert.
+      // We do NOT resetSingleton() here — the singleton accumulates correctly.
       await import(join(PHASE_DIR, `crest-spec-phase-${phase}.ts`));
       const project = getActiveProject();
       expect(project).not.toBeNull();
@@ -194,11 +197,11 @@ describe("Phased crest-synth apply", () => {
       }
 
       // Re-apply with no changes: should be a no-op
-      resetSingleton();
-      await import(join(PHASE_DIR, `crest-spec-phase-${phase}.ts?reload=${phase}`));
-      const project2 = getActiveProject();
-      const registry2 = project2!.getRegistry();
-      const plan2 = planner.plan(registry2, state);
+      // We reuse the registry already loaded above — phase files now use an
+      // additive import chain rooted in base.ts, so module caching prevents
+      // re-executing project() via a fresh import. The registry is the same
+      // object regardless, so planning against it again is sufficient.
+      const plan2 = planner.plan(registry, state);
 
       expect(plan2.actions.length).toBe(0);
       console.log(`  Re-apply: plan is empty (no changes) ✓`);

@@ -1,299 +1,17 @@
-import { project, command, event, invariant, layer } from "../../../src/index.js";
+import { command, event, invariant } from "../../../src/index.js";
+import { app, kernel, shell, synth, voice, realtime } from "./crest-spec-phase-3.js";
+export { app, kernel, shell, synth, voice, realtime } from "./crest-spec-phase-3.js";
 
 // Phase 4: Multiple patches subscribed to channels
 // A list of patches, each subscribing to a (group, channel) address.
 // Dispatch incoming events to subscribers. Per-patch voice pools. A global mix.
 
-const app = project("crest-synth", {
-  layers: ["domain", "application", "infrastructure"],
-  rules: [
-    layer("domain").dependsOn([]),
-    layer("application").dependsOn(["domain"]),
-    layer("infrastructure").dependsOn(["domain", "application"]),
-  ],
-  meta: {
-    language: "rust",
-    style: "idiomatic Rust; lock-free audio thread; gamepad-driven UI",
-    avoid: [
-      "heap allocation on audio thread",
-      "mutex locks on audio thread",
-      "blocking I/O on audio thread",
-    ],
-  },
-});
-
-// ── Kernel ──────────────────────────────────────────────
-
-const kernel = app.context("Kernel", {
-  purpose: "shared value types for MIDI addressing, audio primitives, and note identity",
-  ubiquitousLanguage: {
-    "MidiEvent": "normalized internal event addressed by (group, channel) with high-res values and note-id",
-    "NoteId": "unique identifier for a sounding note, enabling per-note expression",
-    "ChannelAddress": "a (group, channel) pair — 256 addressable destinations",
-  },
-});
-
-kernel.valueObject("MidiGroup", {
-  from: "u8",
-  description: "MIDI 2.0 group index (0-15)",
-  invariants: ["must be 0-15"],
-});
-
-kernel.valueObject("MidiChannel", {
-  from: "u8",
-  description: "MIDI channel (0-15 within a group)",
-  invariants: ["must be 0-15"],
-});
+// ── Kernel additions ────────────────────────────────────
+// ChannelAddress is new in phase 4 — the Patch context needs it.
 
 kernel.valueObject("ChannelAddress", {
   state: { group: "MidiGroup", channel: "MidiChannel" },
   description: "a (group, channel) pair — the 256-destination address space for MIDI 2.0",
-});
-
-kernel.valueObject("NoteId", {
-  from: "u32",
-  description: "unique identifier for a sounding note, enabling per-note expression",
-});
-
-kernel.valueObject("NoteNumber", {
-  from: "u8",
-  description: "MIDI note number (0-127)",
-  invariants: ["must be 0-127"],
-});
-
-kernel.valueObject("Velocity", {
-  from: "f64",
-  description: "normalized note velocity (0.0-1.0), upconverted from MIDI 1.0 7-bit to high-res",
-  invariants: ["must be 0.0-1.0"],
-});
-
-kernel.valueObject("MidiEvent", {
-  state: {
-    group: "MidiGroup",
-    channel: "MidiChannel",
-    noteId: "NoteId",
-    kind: "MidiEventKind",
-    noteNumber: "NoteNumber",
-    velocity: "Velocity",
-    value: "f64",
-  },
-  description: "normalized internal event: (group, channel) addressed, high-res values, note-id tagged",
-});
-
-kernel.valueObject("SampleRate", {
-  from: "u32",
-  description: "audio sample rate in Hz (e.g. 44100, 48000)",
-  invariants: ["must be positive"],
-});
-
-kernel.valueObject("AudioFrame", {
-  state: { left: "f32", right: "f32" },
-  description: "one stereo sample pair",
-});
-
-kernel.valueObject("Frequency", {
-  from: "f64",
-  description: "frequency in Hz",
-  invariants: ["must be positive"],
-});
-
-kernel.valueObject("Amplitude", {
-  from: "f64",
-  description: "linear amplitude (0.0 = silence, 1.0 = unity)",
-  invariants: ["must be non-negative"],
-});
-
-// ── Shell ───────────────────────────────────────────────
-
-const shell = app.context("Shell", {
-  purpose: "application shell: wires audio output, MIDI input, and the window to the engine",
-});
-
-shell.port("AudioOutput", {
-  contract: {
-    openStream: "SampleRate -> AudioStream",
-    writeBuffer: "[AudioFrame] -> ()",
-  },
-});
-
-shell.port("MidiInput", {
-  contract: {
-    listPorts: "() -> Vec<MidiPortInfo>",
-    connect: "MidiPortId -> MidiConnection",
-    nextEvent: "() -> Option<RawMidiMessage>",
-  },
-});
-
-shell.port("MidiNormalizer", {
-  contract: {
-    normalize: "RawMidiMessage -> MidiEvent",
-  },
-});
-
-shell.port("AppWindow", {
-  contract: {
-    create: "WindowConfig -> Window",
-    runLoop: "FrameCallback -> ()",
-  },
-});
-
-// ── Synth ───────────────────────────────────────────────
-
-const synth = app.context("Synth", {
-  purpose: "polyphonic synthesis engine: voice management, oscillator, filter, envelope",
-  ubiquitousLanguage: {
-    "Voice": "a single sounding note with its own oscillator, filter, and envelope state",
-    "VoiceStealing": "reusing the oldest or quietest voice when polyphony limit is reached",
-    "EnvelopeStage": "current phase of an ADSR envelope: attack, decay, sustain, release, idle",
-  },
-});
-
-synth.valueObject("EnvelopeStage", {
-  from: "enum",
-  description: "ADSR envelope phase: Idle, Attack, Decay, Sustain, Release",
-});
-
-synth.valueObject("OscillatorConfig", {
-  state: {
-    waveform: "Waveform",
-    detune: "f64",
-    pulseWidth: "f64",
-  },
-  description: "oscillator parameters: waveform shape, detune in cents, pulse width for square",
-});
-
-synth.valueObject("FilterConfig", {
-  state: {
-    cutoff: "Frequency",
-    resonance: "f64",
-    filterType: "FilterType",
-  },
-  description: "resonant filter parameters",
-  invariants: ["resonance must be 0.0-1.0", "cutoff must be within audible range"],
-});
-
-synth.valueObject("AmpEnvelopeConfig", {
-  state: {
-    attack: "f64",
-    decay: "f64",
-    sustain: "f64",
-    release: "f64",
-  },
-  description: "ADSR envelope times (seconds) and sustain level (0.0-1.0)",
-  invariants: [
-    "attack, decay, release must be non-negative",
-    "sustain must be 0.0-1.0",
-  ],
-});
-
-const voice = synth.aggregate("Voice", {
-  root: true,
-  purpose: "a single sounding note: oscillator + filter + amp envelope",
-  state: {
-    noteId: "NoteId",
-    noteNumber: "NoteNumber",
-    velocity: "Velocity",
-    frequency: "Frequency",
-    oscillatorPhase: "f64",
-    filterState: "FilterState",
-    envelopeStage: "EnvelopeStage",
-    envelopeLevel: "Amplitude",
-    active: "bool",
-  },
-  commands: [
-    command("NoteOn", { noteId: "NoteId", noteNumber: "NoteNumber", velocity: "Velocity" }),
-    command("NoteOff", { noteId: "NoteId" }),
-  ],
-  events: [
-    event("VoiceActivated", { noteId: "NoteId", noteNumber: "NoteNumber", frequency: "Frequency" }),
-    event("VoiceReleased", { noteId: "NoteId" }),
-    event("VoiceFinished", { noteId: "NoteId" }),
-    event("VoiceStolen", { oldNoteId: "NoteId", newNoteId: "NoteId" }),
-  ],
-  invariants: [
-    "frequency derived from noteNumber and any pitch modulation",
-    "envelope progresses Idle -> Attack -> Decay -> Sustain -> Release -> Idle",
-    "voice is reclaimable only when envelope reaches Idle",
-  ],
-});
-
-synth.port("SynthEngine", {
-  contract: {
-    renderBlock: "(Voice, OscillatorConfig, FilterConfig) -> [AudioFrame]",
-    noteOn: "(Voice, NoteOn) -> Voice",
-    noteOff: "(Voice, NoteOff) -> Voice",
-    isFinished: "Voice -> bool",
-  },
-});
-
-synth.domainService("VoiceAllocator", {
-  purpose: "assigns incoming notes to voices, stealing the oldest/quietest when the pool is full",
-  uses: [voice],
-});
-
-synth.domainService("AudioRenderer", {
-  purpose: "iterates all active voices, renders each through the engine, and mixes to output",
-  uses: [voice],
-});
-
-// ── RealTime ────────────────────────────────────────────
-
-const realtime = app.context("RealTime", {
-  purpose: "lock-free boundary between the audio thread and non-real-time threads",
-  ubiquitousLanguage: {
-    "EventRingBuffer": "lock-free SPSC ring buffer for discrete messages to the audio thread (rtrb)",
-    "ParameterSnapshot": "triple-buffered latest-wins parameter state readable by the audio thread",
-    "DeferredDrop": "memory retired by the audio thread and freed later on a non-RT thread (basedrop)",
-  },
-});
-
-realtime.valueObject("BoundaryMessage", {
-  state: {
-    kind: "BoundaryMessageKind",
-    payload: "Vec<u8>",
-    sequenceNumber: "u64",
-  },
-  description: "a discrete message crossing the RT boundary via the ring buffer",
-});
-
-realtime.valueObject("ParameterSnapshot", {
-  state: {
-    oscillator: "OscillatorConfig",
-    filter: "FilterConfig",
-    ampEnvelope: "AmpEnvelopeConfig",
-    version: "u64",
-  },
-  description: "latest-wins snapshot of all synth parameters, readable by the audio thread without locking",
-});
-
-realtime.port("EventRingBuffer", {
-  contract: {
-    push: "BoundaryMessage -> Result<(), Full>",
-    pop: "() -> Option<BoundaryMessage>",
-  },
-  meta: {
-    notes: "SPSC lock-free ring buffer (rtrb). Producer: MIDI/UI thread. Consumer: audio thread.",
-  },
-});
-
-realtime.port("ParameterBridge", {
-  contract: {
-    write: "ParameterSnapshot -> ()",
-    read: "() -> &ParameterSnapshot",
-  },
-  meta: {
-    notes: "triple_buffer: writer publishes a new snapshot; reader always gets the latest without blocking",
-  },
-});
-
-realtime.port("DeferredDeallocator", {
-  contract: {
-    retire: "Arc<T> -> ()",
-    collect: "() -> ()",
-  },
-  meta: {
-    notes: "basedrop: audio thread retires owned memory; a background thread frees it later",
-  },
 });
 
 // ── Patch ───────────────────────────────────────────────
@@ -301,7 +19,7 @@ realtime.port("DeferredDeallocator", {
 // voice pool, and a channel subscription. Incoming MIDI dispatches to
 // every patch subscribed to that (group, channel) address.
 
-const patch = app.context("Patch", {
+export const patchCtx = app.context("Patch", {
   purpose: "patch management: each patch is a complete instrument subscribed to a MIDI channel",
   ubiquitousLanguage: {
     "Patch": "a complete instrument: engine + parameters + voice pool + channel subscription",
@@ -311,7 +29,7 @@ const patch = app.context("Patch", {
   },
 });
 
-patch.valueObject("MpeZone", {
+patchCtx.valueObject("MpeZone", {
   state: {
     managerChannel: "MidiChannel",
     memberChannelStart: "MidiChannel",
@@ -324,7 +42,7 @@ patch.valueObject("MpeZone", {
   ],
 });
 
-patch.valueObject("ChannelSubscription", {
+patchCtx.valueObject("ChannelSubscription", {
   state: {
     address: "ChannelAddress",
     mpeZone: "Option<MpeZone>",
@@ -332,7 +50,7 @@ patch.valueObject("ChannelSubscription", {
   description: "what a patch listens to: a single (group, channel) or an MPE zone",
 });
 
-patch.valueObject("VoicePoolConfig", {
+patchCtx.valueObject("VoicePoolConfig", {
   state: {
     maxVoices: "u8",
     stealingPolicy: "StealingPolicy",
@@ -341,7 +59,7 @@ patch.valueObject("VoicePoolConfig", {
   invariants: ["maxVoices must be at least 1"],
 });
 
-const patchAggregate = patch.aggregate("Patch", {
+export const patchAggregate = patchCtx.aggregate("Patch", {
   root: true,
   purpose: "a complete instrument: engine type, parameters, voice pool, channel subscription",
   state: {
@@ -382,22 +100,22 @@ const patchAggregate = patch.aggregate("Patch", {
   ],
 });
 
-patch.valueObject("PatchId", {
+patchCtx.valueObject("PatchId", {
   from: "u32",
   description: "unique identifier for a patch in the patch list",
 });
 
-patch.domainService("ChannelDispatcher", {
+patchCtx.domainService("ChannelDispatcher", {
   purpose: "routes incoming MidiEvents to every patch subscribed to the event's (group, channel) address",
   uses: [patchAggregate],
 });
 
-patch.domainService("PatchMixer", {
+patchCtx.domainService("PatchMixer", {
   purpose: "sums audio output from all active patches, applying per-patch gain and pan",
   uses: [patchAggregate],
 });
 
-const globalMixer = patch.aggregate("GlobalMixer", {
+export const globalMixer = patchCtx.aggregate("GlobalMixer", {
   root: true,
   purpose: "master mix bus: sums all patch outputs and applies master gain",
   state: {
@@ -411,7 +129,7 @@ const globalMixer = patch.aggregate("GlobalMixer", {
   ],
 });
 
-patch.repository("PatchRepository", {
+patchCtx.repository("PatchRepository", {
   of: patchAggregate,
   contract: {
     findById: "PatchId -> Option<Patch>",
@@ -422,6 +140,7 @@ patch.repository("PatchRepository", {
 });
 
 // ── Invariants ──────────────────────────────────────────
+// Accumulates all invariants from phase 3 plus new ones for phase 4.
 
 app.invariants([
   invariant("audio thread must never allocate heap memory", {
@@ -439,6 +158,7 @@ app.invariants([
   invariant("retired memory from the audio thread is freed via DeferredDeallocator, never directly", {
     meta: { rationale: "basedrop ensures free() never runs on the audio thread" },
   }),
+  // New in phase 4:
   invariant("each patch has an independent voice pool; one patch's polyphony cannot exhaust another's", {
     meta: { rationale: "a busy pad patch must not starve a bass patch of voices" },
   }),
@@ -447,57 +167,7 @@ app.invariants([
   }),
 ]);
 
-// ── Asset Kinds ─────────────────────────────────────────
-
-app.assetKind("cargo-manifest", {
-  description: "Rust Cargo.toml project manifest",
-  filePattern: "Cargo.toml",
-  prompts: [
-    "Use edition 2021",
-    "Only include dependencies actually needed by the generated code",
-    "Include [lib] section with path = \"src/lib.rs\"",
-  ],
-});
-
-app.assetKind("makefile", {
-  description: "GNU Makefile for build automation",
-  filePattern: "Makefile",
-  prompts: [
-    "Include targets: build, test, clean, check, run",
-    "Use cargo for all Rust operations",
-  ],
-});
-
-app.assetKind("rust-module-declaration", {
-  description: "Rust mod.rs or lib.rs module declaration file",
-  prompts: [
-    "Only output module declarations (pub mod) and re-exports",
-    "Add #![allow(non_snake_case)] if any module name uses PascalCase",
-    "Do not add any implementation code",
-  ],
-});
-
-// ── Project Assets ──────────────────────────────────────
-
-app.asset("RootCargoToml", {
-  kind: "cargo-manifest",
-  description: "Root Cargo.toml for the crest-synth project",
-  prompts: [
-    "Package name: crest-synth, version 0.1.0",
-    "No external dependencies needed for phase 4 (pure Rust)",
-  ],
-});
-
-app.asset("BuildMakefile", {
-  kind: "makefile",
-  description: "Build automation for the crest-synth project",
-  prompts: [
-    "Default target: build",
-    "test: cargo test",
-    "check: cargo check",
-    "clean: cargo clean",
-  ],
-});
+// ── Module Assets ───────────────────────────────────────
 
 app.asset("LibRs", {
   kind: "rust-module-declaration",
@@ -508,8 +178,6 @@ app.asset("LibRs", {
   ],
 });
 
-// ── Context Module Assets ───────────────────────────────
-
 kernel.asset("KernelMod", {
   kind: "rust-module-declaration",
   description: "src/kernel/mod.rs module declarations for Kernel context",
@@ -519,34 +187,7 @@ kernel.asset("KernelMod", {
   ],
 });
 
-shell.asset("ShellMod", {
-  kind: "rust-module-declaration",
-  description: "src/Shell/mod.rs module declarations for Shell context",
-  prompts: [
-    "File path: src/Shell/mod.rs",
-    "Declare modules for: AudioOutput, MidiInput, MidiNormalizer, AppWindow",
-  ],
-});
-
-synth.asset("SynthMod", {
-  kind: "rust-module-declaration",
-  description: "src/Synth/mod.rs module declarations for Synth context",
-  prompts: [
-    "File path: src/Synth/mod.rs",
-    "Declare modules for: EnvelopeStage, OscillatorConfig, FilterConfig, AmpEnvelopeConfig, Voice, SynthEngine, VoiceAllocator, AudioRenderer",
-  ],
-});
-
-realtime.asset("RealTimeMod", {
-  kind: "rust-module-declaration",
-  description: "src/RealTime/mod.rs module declarations for RealTime context",
-  prompts: [
-    "File path: src/RealTime/mod.rs",
-    "Declare modules for: BoundaryMessage, ParameterSnapshot, EventRingBuffer, ParameterBridge, DeferredDeallocator",
-  ],
-});
-
-patch.asset("PatchMod", {
+patchCtx.asset("PatchMod", {
   kind: "rust-module-declaration",
   description: "src/Patch/mod.rs module declarations for Patch context",
   prompts: [
