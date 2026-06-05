@@ -1,0 +1,18 @@
+{
+  "name": "krusty-spec",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "crest-spec": "src/cli/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.98.0"
+  }
+}
