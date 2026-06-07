@@ -3,16 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/engine"
+	"github.com/crestenstclair/crest-spec/internal/mcp"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -55,7 +59,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	_ = agent.New(
+	ag := agent.New(
 		cfg.AgentPath,
 		cfg.APIKey,
 		cfg.DefaultModel,
@@ -63,8 +67,32 @@ func main() {
 		cfg.Timeout,
 	)
 
-	log.Info().Str("db", dbPath).Msg("crest-spec ready (engine/mcp not yet wired)")
-	<-ctx.Done()
+	eng := engine.New(ag, nil, cfg)
+
+	srv := mcp.New(eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)
+
+	if cfg.HTTPAddr != "" {
+		httpMux := http.NewServeMux()
+		httpMux.HandleFunc("POST /mcp", srv.ServeHTTP)
+		httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
+		go func() {
+			log.Info().Str("addr", cfg.HTTPAddr).Msg("HTTP transport started")
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("HTTP server error")
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			httpSrv.Shutdown(shutdownCtx)
+		}()
+	}
+
+	log.Info().Str("db", dbPath).Msg("crest-spec ready")
+	if err := srv.Run(ctx); err != nil {
+		log.Error().Err(err).Msg("server error")
+	}
 	log.Info().Msg("shutting down")
 }
 
