@@ -29,12 +29,7 @@ func (s *Spec) recordAttempts(applyID, resourceID, model string, records []Attem
 	}
 }
 
-type DispatchOpts struct {
-	SessionID  string
-	ResourceID string
-	Model      string
-}
-
+// DispatchResult is the outcome of dispatching a single resource.
 type DispatchResult struct {
 	ResourceID  string             `json:"resource_id"`
 	Status      string             `json:"status"`
@@ -45,12 +40,37 @@ type DispatchResult struct {
 	DurationMS  int64              `json:"duration_ms"`
 }
 
+// ProgressUpdate contains detailed progress info sent during dispatch.
+type ProgressUpdate struct {
+	ResourceID string `json:"resource_id"`
+	State      string `json:"state"` // "generating", "committed", "rejected", "errored"
+	Attempts   int    `json:"attempts"`
+	Total      int    `json:"total"`
+	Completed  int    `json:"completed"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ProgressFunc is called after each resource completes during dispatch.
+// The MCP handler uses this to send progress notifications over the wire.
+type ProgressFunc func(update ProgressUpdate)
+
+// DispatchOpts configures a single-resource dispatch.
+type DispatchOpts struct {
+	SessionID  string
+	ResourceID string
+	Model      string
+	OnProgress ProgressFunc
+}
+
+// RunWaveOpts configures a full wave dispatch.
 type RunWaveOpts struct {
 	SessionID      string
 	Model          string
 	ModelOverrides map[string]string
+	OnProgress     ProgressFunc
 }
 
+// RunWaveResult is the outcome of dispatching all resources in a wave.
 type RunWaveResult struct {
 	WaveIndex    int               `json:"wave_index"`
 	Done         bool              `json:"done"`
@@ -71,15 +91,36 @@ func (s *Spec) Dispatch(ctx context.Context, opts DispatchOpts) (*DispatchResult
 		model = s.cfg.GenerateModel
 	}
 
-	return s.dispatchResource(ctx, opts.SessionID, sess.ApplyID, opts.ResourceID, model), nil
+	if opts.OnProgress != nil {
+		opts.OnProgress(ProgressUpdate{
+			ResourceID: opts.ResourceID, State: "generating",
+			Total: 1, Completed: 0,
+		})
+	}
+
+	result := s.dispatchResource(ctx, opts.SessionID, sess.ApplyID, opts.ResourceID, model)
+
+	if opts.OnProgress != nil {
+		opts.OnProgress(ProgressUpdate{
+			ResourceID: result.ResourceID, State: result.Status,
+			Attempts: result.Attempts, Total: 1, Completed: 1,
+			Error: result.Error,
+		})
+	}
+
+	return result, nil
 }
 
-func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourceID, model string) *DispatchResult {
+func (s *Spec) dispatchResource(
+	ctx context.Context, sessionID, applyID, resourceID, model string,
+) *DispatchResult {
 	startTime := time.Now()
 
 	ctxResult, err := s.Context(ctx, sessionID, resourceID)
 	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", 0, "")
+		s.store.UpdateSessionResourceState(
+			sessionID, resourceID, string(StateErrored), err.Error(), "", 0, "",
+		)
 		return &DispatchResult{
 			ResourceID: resourceID, Status: "errored", Error: err.Error(),
 			DurationMS: time.Since(startTime).Milliseconds(),
@@ -91,7 +132,9 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 
 	loopResult, err := runConstraintLoop(ctx, s.engine, loopOpts)
 	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", 1, "")
+		s.store.UpdateSessionResourceState(
+			sessionID, resourceID, string(StateErrored), err.Error(), "", 1, "",
+		)
 		return &DispatchResult{
 			ResourceID: resourceID, Status: "errored", Error: err.Error(),
 			Attempts: 1, DurationMS: time.Since(startTime).Milliseconds(),
@@ -101,10 +144,14 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 	s.recordAttempts(applyID, resourceID, model, loopResult.AttemptRecords)
 
 	if loopResult.Outcome == "rejected" {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), loopResult.RejectionReason, "", loopResult.Attempts, "")
+		s.store.UpdateSessionResourceState(
+			sessionID, resourceID, string(StateRejected),
+			loopResult.RejectionReason, "", loopResult.Attempts, "",
+		)
 		return &DispatchResult{
-			ResourceID: resourceID, Status: "rejected", Error: loopResult.RejectionReason,
-			Attempts: loopResult.Attempts, DurationMS: time.Since(startTime).Milliseconds(),
+			ResourceID: resourceID, Status: "rejected",
+			Error: loopResult.RejectionReason, Attempts: loopResult.Attempts,
+			DurationMS: time.Since(startTime).Milliseconds(),
 		}
 	}
 
@@ -112,7 +159,10 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 
 	commitResult, err := s.Commit(ctx, sessionID, resourceID, files, "")
 	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", loopResult.Attempts, "")
+		s.store.UpdateSessionResourceState(
+			sessionID, resourceID, string(StateErrored), err.Error(),
+			"", loopResult.Attempts, "",
+		)
 		return &DispatchResult{
 			ResourceID: resourceID, Status: "errored", Error: err.Error(),
 			Attempts: loopResult.Attempts, DurationMS: time.Since(startTime).Milliseconds(),
@@ -135,7 +185,10 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 	}
 }
 
-func (s *Spec) buildLoopOpts(ctxResult *ContextResult, applyID, resourceID, model string, planResult *PlanResult) LoopOpts {
+func (s *Spec) buildLoopOpts(
+	ctxResult *ContextResult, applyID, resourceID, model string,
+	planResult *PlanResult,
+) LoopOpts {
 	opts := LoopOpts{
 		SystemPrompt:     ctxResult.SystemPrompt,
 		Prompt:           ctxResult.Prompt,
@@ -216,7 +269,10 @@ func (s *Spec) dispatchWaveResources(
 ) []DispatchResult {
 	var mu sync.Mutex
 	var results []DispatchResult
+	var completed int
 	var wg sync.WaitGroup
+
+	total := countNonTerminal(nextResult.Resources)
 
 	for _, rs := range nextResult.Resources {
 		if rs.State.IsTerminal() {
@@ -239,12 +295,32 @@ func (s *Spec) dispatchWaveResources(
 
 			mu.Lock()
 			results = append(results, *dr)
+			completed++
+			done := completed
 			mu.Unlock()
+
+			if opts.OnProgress != nil {
+				opts.OnProgress(ProgressUpdate{
+					ResourceID: dr.ResourceID, State: dr.Status,
+					Attempts: dr.Attempts, Total: total,
+					Completed: done, Error: dr.Error,
+				})
+			}
 		}(rs.ResourceID)
 	}
 
 	wg.Wait()
 	return results
+}
+
+func countNonTerminal(resources []ResourceStatus) int {
+	n := 0
+	for _, rs := range resources {
+		if !rs.State.IsTerminal() {
+			n++
+		}
+	}
+	return n
 }
 
 func classifyResults(waveIndex int, results []DispatchResult) *RunWaveResult {

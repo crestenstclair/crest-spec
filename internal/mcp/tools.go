@@ -63,7 +63,7 @@ func (s *Server) registerAsyncTools() {
 		if err := json.Unmarshal(args, &p); err != nil {
 			return errorResult("invalid arguments: " + err.Error())
 		}
-		return s.runAsync("code_review", func(ctx context.Context) (string, error) {
+		return s.runAsync("code_review", func(ctx context.Context, _ string) (string, error) {
 			res, err := s.eng.CodeReview(ctx, enginemod.CodeReviewOpts{Cwd: p.Cwd, Models: p.Models, Prompt: p.Prompt})
 			if err != nil {
 				return "", err
@@ -85,7 +85,7 @@ func (s *Server) registerAsyncTools() {
 		if err := json.Unmarshal(args, &p); err != nil {
 			return errorResult("invalid arguments: " + err.Error())
 		}
-		return s.runAsync("bugbot", func(ctx context.Context) (string, error) {
+		return s.runAsync("bugbot", func(ctx context.Context, _ string) (string, error) {
 			res, err := s.eng.Bugbot(ctx, enginemod.BugbotOpts{Cwd: p.Cwd, Models: p.Models, Prompt: p.Prompt})
 			if err != nil {
 				return "", err
@@ -122,7 +122,7 @@ func (s *Server) handleRunPrompt(ctx context.Context, args json.RawMessage, prog
 		})
 	}
 
-	return s.runAsync("run_prompt", func(ctx context.Context) (string, error) {
+	return s.runAsync("run_prompt", func(ctx context.Context, _ string) (string, error) {
 		startTime := time.Now()
 		res, err := s.eng.Generate(ctx, enginemod.GenerateOpts{
 			Prompt: p.Prompt, Model: p.Model, AppendSystemPrompt: p.SystemPrompt,
@@ -164,9 +164,10 @@ func (s *Server) registerJobTools() {
 		}
 
 		resp := map[string]string{
-			"status": job.Status,
-			"result": job.Result,
-			"error":  job.Error,
+			"status":   job.Status,
+			"result":   job.Result,
+			"error":    job.Error,
+			"progress": job.ProgressJSON,
 		}
 
 		if p.Consume && (job.Status == "completed" || job.Status == "failed" || job.Status == "cancelled") {
@@ -604,12 +605,12 @@ func (s *Server) registerSpecLifecycleTools() {
 // registerSpecDispatchTools adds the high-level orchestrator tools (dispatch, run_wave).
 func (s *Server) registerSpecDispatchTools() {
 	s.addTool(toolDef{
-		Name: "spec/dispatch", Description: "Atomic generate-and-commit for a single resource. Runs the full constraint loop (generate → parse → validate → commit) and returns the result. Use this instead of the manual context → run_prompt → poll → commit pipeline.",
+		Name: "spec/dispatch", Description: "Atomic generate-and-commit for a single resource. Blocks until complete and returns the result inline (no polling needed). Sends progress notifications via SSE.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"model":{"type":"string","description":"Model override for this resource"}},"required":["session_id","resource_id"]}`),
 	}, s.handleSpecDispatch)
 
 	s.addTool(toolDef{
-		Name: "spec/run_wave", Description: "Dispatch an entire wave of resources in parallel. Generates code, parses output, commits files, runs wave verification, and advances to the next wave. Returns a summary of committed/rejected/errored resources with full error context for orchestrator decision-making.",
+		Name: "spec/run_wave", Description: "Dispatch an entire wave of resources in parallel. Blocks until all resources complete and returns the full result inline (no polling needed). Sends per-resource progress notifications via SSE as each resource finishes.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"model":{"type":"string","description":"Default model for this wave"},"model_overrides":{"type":"object","description":"Per-resource model overrides (resource_id → model name)","additionalProperties":{"type":"string"}}},"required":["session_id"]}`),
 	}, s.handleSpecRunWave)
 
@@ -619,7 +620,7 @@ func (s *Server) registerSpecDispatchTools() {
 	}, s.handleSpecDeepReview)
 }
 
-func (s *Server) handleSpecDispatch(_ context.Context, args json.RawMessage, progressToken string) toolResult {
+func (s *Server) handleSpecDispatch(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 	var p struct {
 		SessionID  string `json:"session_id"`
 		ResourceID string `json:"resource_id"`
@@ -628,19 +629,22 @@ func (s *Server) handleSpecDispatch(_ context.Context, args json.RawMessage, pro
 	if err := json.Unmarshal(args, &p); err != nil {
 		return errorResult("invalid arguments: " + err.Error())
 	}
-	return s.runAsync("spec/dispatch", func(ctx context.Context) (string, error) {
-		result, err := s.spec.Dispatch(ctx, specmod.DispatchOpts{
-			SessionID: p.SessionID, ResourceID: p.ResourceID, Model: p.Model,
-		})
-		if err != nil {
-			return "", err
-		}
-		b, _ := json.Marshal(result)
-		return string(b), nil
-	}, progressToken)
+
+	start := time.Now()
+	result, err := s.spec.Dispatch(ctx, specmod.DispatchOpts{
+		SessionID:  p.SessionID,
+		ResourceID: p.ResourceID,
+		Model:      p.Model,
+		OnProgress: s.progressSender(progressToken),
+	})
+	s.metrics.Record("spec/dispatch", time.Since(start), err)
+	if err != nil {
+		return errorResult(fmt.Sprintf("spec/dispatch: %v", err))
+	}
+	return jsonResult(result)
 }
 
-func (s *Server) handleSpecRunWave(_ context.Context, args json.RawMessage, progressToken string) toolResult {
+func (s *Server) handleSpecRunWave(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 	var p struct {
 		SessionID      string            `json:"session_id"`
 		Model          string            `json:"model"`
@@ -649,16 +653,19 @@ func (s *Server) handleSpecRunWave(_ context.Context, args json.RawMessage, prog
 	if err := json.Unmarshal(args, &p); err != nil {
 		return errorResult("invalid arguments: " + err.Error())
 	}
-	return s.runAsync("spec/run_wave", func(ctx context.Context) (string, error) {
-		result, err := s.spec.RunWave(ctx, specmod.RunWaveOpts{
-			SessionID: p.SessionID, Model: p.Model, ModelOverrides: p.ModelOverrides,
-		})
-		if err != nil {
-			return "", err
-		}
-		b, _ := json.Marshal(result)
-		return string(b), nil
-	}, progressToken)
+
+	start := time.Now()
+	result, err := s.spec.RunWave(ctx, specmod.RunWaveOpts{
+		SessionID:      p.SessionID,
+		Model:          p.Model,
+		ModelOverrides: p.ModelOverrides,
+		OnProgress:     s.progressSender(progressToken),
+	})
+	s.metrics.Record("spec/run_wave", time.Since(start), err)
+	if err != nil {
+		return errorResult(fmt.Sprintf("spec/run_wave: %v", err))
+	}
+	return jsonResult(result)
 }
 
 func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, progressToken string) toolResult {
@@ -669,7 +676,7 @@ func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, p
 	if err := json.Unmarshal(args, &p); err != nil {
 		return errorResult("invalid arguments: " + err.Error())
 	}
-	return s.runAsync("spec/deep_review", func(ctx context.Context) (string, error) {
+	return s.runAsync("spec/deep_review", func(ctx context.Context, _ string) (string, error) {
 		result, err := s.spec.DeepReview(ctx, specmod.DeepReviewOpts{
 			SessionID: p.SessionID, Target: p.Target,
 		})
@@ -679,6 +686,23 @@ func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, p
 		b, _ := json.Marshal(result)
 		return string(b), nil
 	}, progressToken)
+}
+
+// progressSender returns a ProgressFunc that writes MCP progress notifications.
+// Returns nil when no progressToken is provided (no-op for the caller).
+func (s *Server) progressSender(progressToken string) specmod.ProgressFunc {
+	if progressToken == "" {
+		return nil
+	}
+	return func(update specmod.ProgressUpdate) {
+		data, _ := json.Marshal(update)
+		s.writeNotification("notifications/progress", map[string]any{
+			"progressToken": progressToken,
+			"progress":      update.Completed,
+			"total":         update.Total,
+			"message":       string(data),
+		})
+	}
 }
 
 // registerSpecQueryTools adds spec query and admin tools (status through prompt).
@@ -804,7 +828,7 @@ func (s *Server) handleSpecApply(_ context.Context, args json.RawMessage, progre
 	if err := json.Unmarshal(args, &p); err != nil {
 		return errorResult("invalid arguments: " + err.Error())
 	}
-	return s.runAsync("spec/apply", func(ctx context.Context) (string, error) {
+	return s.runAsync("spec/apply", func(ctx context.Context, _ string) (string, error) {
 		result, err := s.spec.Apply(ctx, specmod.BeginOpts{
 			Target: p.Target, Force: p.Force, Model: p.Model,
 		})

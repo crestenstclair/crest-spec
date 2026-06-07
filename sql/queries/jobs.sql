@@ -29,3 +29,7 @@ LIMIT ?;
 
 -- name: ListRunningJobs :many
 SELECT * FROM jobs WHERE status = 'running';
+
+-- name: UpdateJobProgress :exec
+UPDATE jobs SET progress_json = ?
+WHERE id = ? AND status = 'running';

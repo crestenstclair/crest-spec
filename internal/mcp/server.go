@@ -46,6 +46,7 @@ type store interface {
 	GetJob(id string) (*storemod.Job, error)
 	ListJobs(limit int) ([]storemod.Job, error)
 	DeleteJob(id string) error
+	UpdateJobProgress(id, progressJSON string) error
 	CleanupOrphans(aliveFn func(int) bool) (int, error)
 	CreateGeneration(g storemod.Generation) error
 	UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error
@@ -405,9 +406,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // runAsync creates a job, launches a background goroutine, and returns immediately
 // with a job_id. The goroutine updates the store when the job completes/fails/cancels.
+// The callback receives the job context and the job ID so callers can write
+// incremental progress to the job record.
 func (s *Server) runAsync(
 	toolName string,
-	fn func(ctx context.Context) (string, error),
+	fn func(ctx context.Context, jobID string) (string, error),
 	progressToken string,
 ) toolResult {
 	id := uuid.NewString()
@@ -447,7 +450,7 @@ func (s *Server) runAsync(
 		}()
 
 		start := time.Now()
-		result, err := fn(jobCtx)
+		result, err := fn(jobCtx, id)
 		elapsed := time.Since(start)
 
 		s.metrics.Record(toolName, elapsed, err)

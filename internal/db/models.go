@@ -86,14 +86,15 @@ type InvariantCheck struct {
 }
 
 type Job struct {
-	ID        string
-	Tool      string
-	Status    string
-	Result    *string
-	Error     *string
-	Pid       int64
-	StartedAt string
-	DoneAt    *string
+	ID           string
+	Tool         string
+	Status       string
+	Result       *string
+	Error        *string
+	Pid          int64
+	StartedAt    string
+	DoneAt       *string
+	ProgressJson *string
 }
 
 type Lock struct {

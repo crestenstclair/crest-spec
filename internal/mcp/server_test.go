@@ -244,6 +244,15 @@ func (f *fakeStore) CleanupOrphans(aliveFn func(int) bool) (int, error) {
 	return 0, nil
 }
 
+func (f *fakeStore) UpdateJobProgress(id, progressJSON string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if j, ok := f.jobs[id]; ok {
+		j.ProgressJSON = progressJSON
+	}
+	return nil
+}
+
 func (f *fakeStore) CreateGeneration(g storemod.Generation) error { return nil }
 func (f *fakeStore) UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error {
 	return nil

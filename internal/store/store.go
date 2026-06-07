@@ -17,14 +17,15 @@ import (
 
 // Job is the store's clean domain type for a job record.
 type Job struct {
-	ID        string
-	Tool      string
-	Status    string
-	Result    string
-	Error     string
-	PID       int
-	StartedAt time.Time
-	DoneAt    *time.Time
+	ID           string
+	Tool         string
+	Status       string
+	Result       string
+	Error        string
+	PID          int
+	StartedAt    time.Time
+	DoneAt       *time.Time
+	ProgressJSON string
 }
 
 // Lock is the store's clean domain type for the apply lock.
@@ -275,14 +276,15 @@ func parseOptionalTime(s *string) *time.Time {
 
 func dbJobToJob(j db.Job) Job {
 	return Job{
-		ID:        j.ID,
-		Tool:      j.Tool,
-		Status:    j.Status,
-		Result:    stringVal(j.Result),
-		Error:     stringVal(j.Error),
-		PID:       int(j.Pid),
-		StartedAt: parseTime(j.StartedAt),
-		DoneAt:    parseOptionalTime(j.DoneAt),
+		ID:           j.ID,
+		Tool:         j.Tool,
+		Status:       j.Status,
+		Result:       stringVal(j.Result),
+		Error:        stringVal(j.Error),
+		PID:          int(j.Pid),
+		StartedAt:    parseTime(j.StartedAt),
+		DoneAt:       parseOptionalTime(j.DoneAt),
+		ProgressJSON: stringVal(j.ProgressJson),
 	}
 }
 
@@ -349,6 +351,14 @@ func (s *Store) CancelJob(id string) error {
 		return err
 	}
 	return requireRowAffected(res)
+}
+
+// UpdateJobProgress sets the progress_json field on a running job.
+func (s *Store) UpdateJobProgress(id, progressJSON string) error {
+	return s.queries.UpdateJobProgress(context.Background(), db.UpdateJobProgressParams{
+		ProgressJson: &progressJSON,
+		ID:           id,
+	})
 }
 
 // DeleteJob soft-deletes a job by setting its status to 'deleted'.

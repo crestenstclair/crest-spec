@@ -92,7 +92,7 @@ func (q *Queries) FailJob(ctx context.Context, arg FailJobParams) (sql.Result, e
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, tool, status, result, error, pid, started_at, done_at FROM jobs WHERE id = ?
+SELECT id, tool, status, result, error, pid, started_at, done_at, progress_json FROM jobs WHERE id = ?
 `
 
 func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
@@ -107,12 +107,13 @@ func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
 		&i.Pid,
 		&i.StartedAt,
 		&i.DoneAt,
+		&i.ProgressJson,
 	)
 	return i, err
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT id, tool, status, result, error, pid, started_at, done_at FROM jobs
+SELECT id, tool, status, result, error, pid, started_at, done_at, progress_json FROM jobs
 WHERE status != 'deleted'
 ORDER BY started_at DESC
 LIMIT ?
@@ -136,6 +137,7 @@ func (q *Queries) ListJobs(ctx context.Context, limit int64) ([]Job, error) {
 			&i.Pid,
 			&i.StartedAt,
 			&i.DoneAt,
+			&i.ProgressJson,
 		); err != nil {
 			return nil, err
 		}
@@ -151,7 +153,7 @@ func (q *Queries) ListJobs(ctx context.Context, limit int64) ([]Job, error) {
 }
 
 const listRunningJobs = `-- name: ListRunningJobs :many
-SELECT id, tool, status, result, error, pid, started_at, done_at FROM jobs WHERE status = 'running'
+SELECT id, tool, status, result, error, pid, started_at, done_at, progress_json FROM jobs WHERE status = 'running'
 `
 
 func (q *Queries) ListRunningJobs(ctx context.Context) ([]Job, error) {
@@ -172,6 +174,7 @@ func (q *Queries) ListRunningJobs(ctx context.Context) ([]Job, error) {
 			&i.Pid,
 			&i.StartedAt,
 			&i.DoneAt,
+			&i.ProgressJson,
 		); err != nil {
 			return nil, err
 		}
@@ -184,4 +187,19 @@ func (q *Queries) ListRunningJobs(ctx context.Context) ([]Job, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateJobProgress = `-- name: UpdateJobProgress :exec
+UPDATE jobs SET progress_json = ?
+WHERE id = ? AND status = 'running'
+`
+
+type UpdateJobProgressParams struct {
+	ProgressJson *string
+	ID           string
+}
+
+func (q *Queries) UpdateJobProgress(ctx context.Context, arg UpdateJobProgressParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobProgress, arg.ProgressJson, arg.ID)
+	return err
 }
