@@ -768,6 +768,21 @@ All operations acquire a slot from the shared concurrency semaphore. The spec la
 
 **Key behavior:** Change cascading. If `aggregate.Synth.Voice` changes, every resource that `uses` it gets a cascading `modify` action. This is driven by the hash computation — a resource's effective hash includes its dependencies' hashes, so any upstream change ripples downstream.
 
+**Drift detection:** The planner also detects hand-edits — files whose content hash on disk differs from the stored content hash in SQLite. These resources are flagged in the plan with reason `"refresh needed"` and action `drift`:
+
+```
+? adapter.CpalAudioOutput
+  reason: refresh needed (file modified on disk)
+  files: src/Shell/CpalAudioOutput/CpalAudioOutput.rs
+```
+
+Drift is **never silently overwritten**. The user must explicitly choose:
+- **Accept** the hand-edits as the new baseline — updates the stored hash to match disk, no regeneration.
+- **Revert** to the last applied generation — overwrites disk with the stored output.
+- **Regenerate** — treats the resource as `modify` and runs it through the constraint loop (the hand-edits are lost).
+
+In the interactive flow (`spec/begin`), the orchestrator sees drifted resources in the plan and can handle them per-resource. In the automated flow (`spec/apply`), drifted resources pause the apply and surface as a progress notification for user resolution.
+
 **Structural kinds** (`project`, `context`, `assetKind`) are skipped during planning — they are metadata containers, not generated resources.
 
 ### 5.2 Apply — `spec/apply`
@@ -783,7 +798,7 @@ All operations acquire a slot from the shared concurrency semaphore. The spec la
    - Builds a full prompt (system prompt + resource prompt + context layers)
    - Dispatches to a sub-agent via `engine.Generate`
    - Runs the Constraint Loop (parse -> verify -> retry)
-   - Writes files to disk
+   - Writes files to disk (per-file content hash check: files whose SHA256 matches what's already on disk are skipped — no write, no timestamp change, no file watcher trigger)
    - Records everything in SQLite
 
 4. Releases the lock
@@ -1380,6 +1395,11 @@ The server exposes two groups of tools: **spec tools** (the plan/apply lifecycle
 | `spec/log` | sync | List past applies with status. |
 | `spec/history` | sync | Show generation history for a specific resource. |
 | `spec/graph` | sync | Return the resource dependency graph. |
+| `spec/diff` | sync | Reconstruct state delta between two applies. Shows what was created, modified, destroyed between `apply_a` and `apply_b`. |
+| `spec/state` | sync | Inspect or modify state tracking. `list` returns all resources in state with hashes. `rm <resourceId>` removes a resource from state without deleting its code on disk (next plan will treat it as `create`). |
+| `spec/drift` | sync | Handle drifted resources (hand-edited files). `accept <resourceId>` adopts disk content as the new baseline. `revert <resourceId>` overwrites disk with the last applied generation. |
+| `spec/vacuum` | sync | Compact history older than a given date. Deletes old generations, invariant checks, and apply records while preserving current state. Keeps the SQLite database bounded for long-lived projects. |
+| `spec/sql` | sync | Open a read-only SQLite shell against the state database. For direct inspection and ad-hoc queries. |
 | `spec/unlock` | sync | Force-clear a stale lock. |
 
 #### Engine Tools (adapted from claude-mcp)
@@ -1612,6 +1632,11 @@ The orchestrating agent runs these as background shell commands to interact with
 | Invocation | Behavior |
 |------------|----------|
 | `crest-spec check job <id>` | Block until job `<id>` completes; print result to stdout (exit 0) or error to stderr (exit 1); consume the job. SIGINT/SIGTERM-aware. |
+| `crest-spec state list` | Print all resources in state with hashes and settle times. |
+| `crest-spec state rm <resourceId>` | Remove a resource from state without deleting code on disk. Next plan treats it as `create`. |
+| `crest-spec diff <apply_a> <apply_b>` | Show what changed between two applies (created, modified, destroyed resources). |
+| `crest-spec vacuum --before <date>` | Compact history older than date. Deletes old generations, invariant checks, and apply records. |
+| `crest-spec sql` | Open a read-only SQLite shell against `.crest-spec/state.db`. |
 | `crest-spec -h` / `--help` | Print usage + env-var table; exit 0. |
 
 **`check job`** is the recommended async result collector (adapted from claude-mcp). The orchestrating agent fires an async tool call (`spec/apply`, `run_prompt`), gets a job ID, launches `crest-spec check job <id>` as a background Bash command, and is notified when it completes. This decouples long-running jobs from the synchronous MCP request/response loop.
@@ -1633,8 +1658,9 @@ Implementation:
 
 **Interactive (spec/begin -> spec/finish):**
 1. Client calls `spec/begin` -> gets plan + orchestrator instructions.
-2. Client calls `spec/next` -> gets wave 0 resources.
-3. For each resource:
+2. If plan contains `drift` actions: handle each with `spec/drift accept` or `spec/drift revert` before proceeding.
+3. Client calls `spec/next` -> gets wave 0 resources.
+4. For each resource:
    - `spec/context` -> get the scoped prompt
    - `run_prompt` with prompt + `--disallowedTools` -> get job ID
    - `crest-spec check job <id>` or `poll_result` -> collect generated code
@@ -1642,12 +1668,12 @@ Implementation:
    - Optionally `bugbot` or `code_review` on the generated files for verification
    - `spec/note` -> record design decisions
    - `spec/commit` -> record resource as complete
-4. If a resource fails:
+5. If a resource fails:
    - `spec/resolve` -> provide guidance and re-dispatch
    - `spec/amend` -> edit the CUE spec, re-load, re-dispatch with updated declaration
    - `spec/skip` -> skip and move on
-5. `spec/next` -> wave 1 resources. Repeat.
-6. `spec/next` returns `done: true` -> `spec/finish`.
+6. `spec/next` -> wave 1 resources. Repeat.
+7. `spec/next` returns `done: true` -> `spec/finish`.
 
 The interactive flow gives the orchestrating agent full control — it can inspect prompts, modify files, edit the CUE spec to fix root causes, resolve blocked resources, run targeted reviews, and make decisions the automated flow can't. The `spec/amend` path is particularly powerful: a generation failure becomes a signal to improve the spec, not just retry harder.
 
@@ -1663,6 +1689,9 @@ Effective hashes include the full dependency chain and the model identifier. Cha
 
 ### Cascading Changes
 A change to a value object cascades to every aggregate that uses it, every service that uses those aggregates, every asset that references any of them. The dependency graph ensures nothing is stale.
+
+### Respect Hand-Edits
+Generated code is not sacred. When a user hand-edits a generated file, the planner detects the drift and asks what to do — it never silently overwrites. This makes it safe to iterate manually between applies.
 
 ### Multi-File Composition via Unification
 CUE's unification model makes multi-file specs a first-class language feature. No import chains, no re-exports, no builder pattern. Files in the same package merge automatically. Split your spec however makes sense — by context, by layer, by team.
