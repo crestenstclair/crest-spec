@@ -336,6 +336,8 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/prompt", Description: "Build and return the prompt for a resource without dispatching", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/dispatch", Description: "Atomic generate-and-commit for a single resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"model":{"type":"string","description":"Model override"}},"required":["session_id","resource_id"]}`)},
 		{Name: "spec/run_wave", Description: "Dispatch an entire wave of resources in parallel", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"model":{"type":"string","description":"Default model"},"model_overrides":{"type":"object","description":"Per-resource model overrides"}},"required":["session_id"]}`)},
+		{Name: "spec/bootstrap", Description: "Check environment and set up crest-spec", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Override spec directory location"}}}`)},
+		{Name: "spec/deep_review", Description: "Comprehensive SOLID/DI/clean code/refactoring review of generated code", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to identify project context"},"target":{"type":"string","description":"Specific resource ID to review, or omit to review all committed resources"}},"required":["session_id"]}`)},
 	}
 
 	for _, def := range stubs {
@@ -492,6 +494,10 @@ type specImportArgs struct {
 	DryRun    bool   `json:"dry_run"`
 }
 
+type specBootstrapArgs struct {
+	SpecDir string `json:"spec_dir"`
+}
+
 // ---------------------------------------------------------------------------
 // registerSpecTools — compact registration table
 // ---------------------------------------------------------------------------
@@ -600,6 +606,11 @@ func (s *Server) registerSpecDispatchTools() {
 		Name: "spec/run_wave", Description: "Dispatch an entire wave of resources in parallel. Generates code, parses output, commits files, runs wave verification, and advances to the next wave. Returns a summary of committed/rejected/errored resources with full error context for orchestrator decision-making.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"model":{"type":"string","description":"Default model for this wave"},"model_overrides":{"type":"object","description":"Per-resource model overrides (resource_id → model name)","additionalProperties":{"type":"string"}}},"required":["session_id"]}`),
 	}, s.handleSpecRunWave)
+
+	s.addTool(toolDef{
+		Name: "spec/deep_review", Description: "Comprehensive SOLID/DI/clean code/refactoring review of generated code. Run after a full sync to identify SOLID violations, dependency injection issues, code smells, and design pattern opportunities.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to identify project context"},"target":{"type":"string","description":"Specific resource ID to review, or omit to review all committed resources"}},"required":["session_id"]}`),
+	}, s.handleSpecDeepReview)
 }
 
 func (s *Server) handleSpecDispatch(_ context.Context, args json.RawMessage, progressToken string) toolResult {
@@ -635,6 +646,26 @@ func (s *Server) handleSpecRunWave(_ context.Context, args json.RawMessage, prog
 	return s.runAsync("spec/run_wave", func(ctx context.Context) (string, error) {
 		result, err := s.spec.RunWave(ctx, specmod.RunWaveOpts{
 			SessionID: p.SessionID, Model: p.Model, ModelOverrides: p.ModelOverrides,
+		})
+		if err != nil {
+			return "", err
+		}
+		b, _ := json.Marshal(result)
+		return string(b), nil
+	}, progressToken)
+}
+
+func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, progressToken string) toolResult {
+	var p struct {
+		SessionID string `json:"session_id"`
+		Target    string `json:"target"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return errorResult("invalid arguments: " + err.Error())
+	}
+	return s.runAsync("spec/deep_review", func(ctx context.Context) (string, error) {
+		result, err := s.spec.DeepReview(ctx, specmod.DeepReviewOpts{
+			SessionID: p.SessionID, Target: p.Target,
 		})
 		if err != nil {
 			return "", err

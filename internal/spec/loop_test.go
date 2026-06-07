@@ -214,6 +214,30 @@ func TestRunReview_SolidWithJSON(t *testing.T) {
 	assert.Equal(t, "Meets requirements", result.Message)
 }
 
+func TestRunReview_DeepWithJSON(t *testing.T) {
+	eng := &mockEngine{}
+	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
+		assert.Contains(t, opts.Prompt, "SOLID Principles")
+		assert.Contains(t, opts.Prompt, "Dependency Injection")
+		assert.Contains(t, opts.Prompt, "Code Smells")
+		return &agent.RunResult{Output: `{"passed": true, "summary": "Clean code, no issues"}`}, nil
+	}
+	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "deep"})
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Equal(t, "Clean code, no issues", result.Message)
+}
+
+func TestRunReview_DeepFallbackFail(t *testing.T) {
+	eng := &mockEngine{}
+	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
+		return &agent.RunResult{Output: "FAIL: multiple SOLID violations found"}, nil
+	}
+	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "deep"})
+	require.NoError(t, err)
+	assert.False(t, result.Passed)
+}
+
 func TestConstraintLoop_ExhaustedRetries(t *testing.T) {
 	eng := &mockEngine{
 		generateFn: func(ctx context.Context, opts engine.GenerateOpts) (*agent.RunResult, error) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crestenstclair/crest-spec/internal/agent"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/engine"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
@@ -261,65 +262,62 @@ func buildReviewMessage(ro *ReviewOutput, rawOutput string) string {
 }
 
 func runReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*ValidationResult, error) {
+	res, fallbackPassed, err := dispatchReview(ctx, eng, code, opts)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return &ValidationResult{Passed: true, Kind: "review"}, nil
+	}
+
+	if ro := parseReviewOutput(res.Output); ro != nil {
+		return &ValidationResult{
+			Passed:  ro.Passed,
+			Kind:    "review",
+			Message: buildReviewMessage(ro, res.Output),
+		}, nil
+	}
+
+	return &ValidationResult{Passed: fallbackPassed(res.Output), Kind: "review", Message: res.Output}, nil
+}
+
+type fallbackCheck func(output string) bool
+
+// dispatchReview calls the appropriate engine review method based on the review
+// level. Returns nil result for unknown levels. The fallbackCheck is used when
+// structured JSON parsing fails.
+func dispatchReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*agent.RunResult, fallbackCheck, error) {
 	switch opts.ReviewLevel {
 	case "full":
 		res, err := eng.CodeReview(ctx, engine.CodeReviewOpts{
 			Prompt: fmt.Sprintf("Review this generated code:\n\n%s%s", code, reviewJSONInstruction),
 			Cwd:    opts.Cwd,
 		})
-		if err != nil {
-			return nil, err
-		}
-		if ro := parseReviewOutput(res.Output); ro != nil {
-			return &ValidationResult{
-				Passed:  ro.Passed,
-				Kind:    "review",
-				Message: buildReviewMessage(ro, res.Output),
-			}, nil
-		}
-		// Fallback: string matching.
-		passed := !strings.Contains(strings.ToUpper(res.Output), "FAIL")
-		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
+		return res, func(o string) bool { return !strings.Contains(strings.ToUpper(o), "FAIL") }, err
 
 	case "light":
 		res, err := eng.Bugbot(ctx, engine.BugbotOpts{
 			Prompt: code + reviewJSONInstruction,
 			Cwd:    opts.Cwd,
 		})
-		if err != nil {
-			return nil, err
-		}
-		if ro := parseReviewOutput(res.Output); ro != nil {
-			return &ValidationResult{
-				Passed:  ro.Passed,
-				Kind:    "review",
-				Message: buildReviewMessage(ro, res.Output),
-			}, nil
-		}
-		// Fallback: string matching.
-		passed := !strings.Contains(strings.ToLower(res.Output), "critical")
-		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
+		return res, func(o string) bool { return !strings.Contains(strings.ToLower(o), "critical") }, err
 
 	case "solid":
 		res, err := eng.Review(ctx, engine.ReviewOpts{
 			Code:         code,
 			Requirements: opts.Prompt + reviewJSONInstruction,
 		})
-		if err != nil {
-			return nil, err
-		}
-		if ro := parseReviewOutput(res.Output); ro != nil {
-			return &ValidationResult{
-				Passed:  ro.Passed,
-				Kind:    "review",
-				Message: buildReviewMessage(ro, res.Output),
-			}, nil
-		}
-		// Fallback: string matching.
-		passed := strings.Contains(strings.ToUpper(res.Output), "PASS")
-		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
+		return res, func(o string) bool { return strings.Contains(strings.ToUpper(o), "PASS") }, err
+
+	case "deep":
+		prompt := promptpkg.BuildDeepReviewPrompt(code)
+		res, err := eng.CodeReview(ctx, engine.CodeReviewOpts{
+			Prompt: prompt,
+			Cwd:    opts.Cwd,
+		})
+		return res, func(o string) bool { return !strings.Contains(strings.ToUpper(o), "FAIL") }, err
 
 	default:
-		return &ValidationResult{Passed: true, Kind: "review"}, nil
+		return nil, nil, nil
 	}
 }
