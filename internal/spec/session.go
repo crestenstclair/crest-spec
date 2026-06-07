@@ -27,13 +27,13 @@ type BeginOpts struct {
 }
 
 type BeginResult struct {
-	SessionID          string
-	ApplyID            string
-	Plan               []planpkg.PlannedAction
-	Waves              [][]string
-	Instructions       string
-	DriftActions       []planpkg.PlannedAction
-	DestroyedResources []DestroyedResource
+	SessionID       string
+	ApplyID         string
+	Plan            []planpkg.PlannedAction
+	Waves           [][]string
+	Instructions    string
+	DriftActions    []planpkg.PlannedAction
+	PendingDestroys []planpkg.PlannedAction
 }
 
 type DestroyedResource struct {
@@ -130,18 +130,16 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 
 	driftActions, destroyActions, otherActions := partitionActions(actions)
 
-	destroyed := s.executeDestroys(destroyActions, applyID)
-
 	s.seedSessionResources(sessionID, waves, otherActions, driftActions)
 
 	return &BeginResult{
-		SessionID:          sessionID,
-		ApplyID:            applyID,
-		Plan:               otherActions,
-		Waves:              waves,
-		Instructions:       orchestratorInstructions(),
-		DriftActions:       driftActions,
-		DestroyedResources: destroyed,
+		SessionID:       sessionID,
+		ApplyID:         applyID,
+		Plan:            otherActions,
+		Waves:           waves,
+		Instructions:    orchestratorInstructions(),
+		DriftActions:    driftActions,
+		PendingDestroys: destroyActions,
 	}, nil
 }
 
@@ -183,6 +181,32 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 		})
 	}
 	return destroyed
+}
+
+func (s *Spec) ConfirmDestroys(ctx context.Context, sessionID string, resourceIDs []string) ([]DestroyedResource, error) {
+	sess, err := s.store.GetSession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+
+	confirmed := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		confirmed[id] = true
+	}
+
+	var plan []planpkg.PlannedAction
+	if err := json.Unmarshal([]byte(sess.PlanJSON), &plan); err != nil {
+		return nil, fmt.Errorf("unmarshal plan: %w", err)
+	}
+
+	var destroyActions []planpkg.PlannedAction
+	for _, a := range plan {
+		if a.Kind == planpkg.ActionDestroy && confirmed[a.ResourceID] {
+			destroyActions = append(destroyActions, a)
+		}
+	}
+
+	return s.executeDestroys(destroyActions, sess.ApplyID), nil
 }
 
 func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSets ...[]planpkg.PlannedAction) {
@@ -764,40 +788,46 @@ func filterForTarget(actions []planpkg.PlannedAction, waves [][]string, target s
 
 func orchestratorInstructions() string {
 	return `========================================================================
-  CRITICAL: ORCHESTRATOR RULES — YOU ARE A DISPATCHER, NOT A CODE GENERATOR
+  ORCHESTRATOR RULES — YOU ARE A DISPATCHER, NOT A CODE GENERATOR
 ========================================================================
 
-You are an orchestration agent. Your job is to drive the MCP tools and
-dispatch sub-agents. You MUST NOT write implementation code yourself.
+You are the orchestrator. Your job is to coordinate sub-agents and make
+decisions. You MUST NOT write implementation code yourself.
 
-DO:
-  - Call spec/plan to see what needs generating
-  - Call spec/begin to start a session (returns session_id + plan + waves)
-  - Call spec/next (session_id) to get the current wave of resources
-  - For each resource in the wave:
-    a. Call spec/context (session_id, resource_id) to get system_prompt + prompt
-    b. Call run_prompt (prompt, system_prompt, session_id, resource_id) to dispatch
-    c. Call poll_result (job_id) to wait for output
-    d. Parse the output: extract fenced code blocks with // path: annotations
-    e. Call spec/commit (session_id, resource_id, files) to commit the parsed files
-       - If commit returns committed=false, the validation failed
-       - Read the validation errors and either fix the code or call spec/skip
-    f. Call spec/note (resource_id, content) with design decisions
-  - Call spec/next again; repeat until done=true
-  - Call spec/finish (session_id) to finalize
+## Recommended flow (fewest tool calls):
 
-  If a resource fails validation on commit:
-    - Re-dispatch with the error in the prompt (build a fix prompt)
-    - Or call spec/resolve with user guidance
-    - Or call spec/skip to move on
+  1. spec/plan          → see what needs generating
+  2. spec/begin         → start session (returns session_id + plan + waves)
+  3. spec/run_wave      → dispatch entire wave in parallel, returns summary
+     - committed: resources that succeeded
+     - rejected: resources that failed validation (with error context)
+     - errored: resources that failed generation
+  4. Handle destroys (if PendingDestroys is non-empty):
+     - Review the list of resources pending deletion
+     - spec/confirm_destroys → confirm which resources to delete
+  5. Handle failures:
+     - spec/resolve     → provide guidance, re-dispatch
+     - spec/amend       → fix CUE spec, re-dispatch
+     - spec/skip        → skip and move on
+  6. Repeat step 3 until done=true
+  7. spec/finish        → finalize session
+
+  Use model_overrides in spec/run_wave to assign cheap models (haiku)
+  to simple resources and capable models (sonnet/opus) to complex ones.
+
+## Single-resource dispatch:
+
+  spec/dispatch (session_id, resource_id, model) → atomic generate-and-commit.
+  Useful for re-dispatching individual failed resources after providing guidance.
+
+## Manual pipeline (full control):
+
+  spec/context → run_prompt → poll_result → parse code blocks → spec/commit
+  Use this when you need to inspect or modify sub-agent output before committing.
 
 DO NOT:
   - Write implementation code directly — every file must come from a sub-agent
   - Skip the sub-agent step for any resource, even simple ones
-  - Modify the sub-agent's output unless it fails validation
-
-Resources within the same wave are independent — dispatch them in parallel.
-Waves must be processed sequentially.
 ========================================================================`
 }
 

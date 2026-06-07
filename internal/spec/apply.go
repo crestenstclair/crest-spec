@@ -3,11 +3,6 @@ package spec
 import (
 	"context"
 	"fmt"
-	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
 type ApplyResult struct {
@@ -38,10 +33,20 @@ func (s *Spec) Apply(ctx context.Context, opts BeginOpts) (*ApplyResult, error) 
 		return &ApplyResult{}, nil
 	}
 
+	// Unattended apply auto-confirms all pending destroys.
+	var destroyed []DestroyedResource
+	if len(beginResult.PendingDestroys) > 0 {
+		var ids []string
+		for _, d := range beginResult.PendingDestroys {
+			ids = append(ids, d.ResourceID)
+		}
+		destroyed, _ = s.ConfirmDestroys(ctx, beginResult.SessionID, ids)
+	}
+
 	result := &ApplyResult{
 		SessionID:          beginResult.SessionID,
 		ApplyID:            beginResult.ApplyID,
-		DestroyedResources: beginResult.DestroyedResources,
+		DestroyedResources: destroyed,
 	}
 
 	for {
@@ -80,75 +85,18 @@ func (s *Spec) Apply(ctx context.Context, opts BeginOpts) (*ApplyResult, error) 
 }
 
 func (s *Spec) applyResource(ctx context.Context, sessionID, applyID, resourceID string) ResourceApplyResult {
-	ctxResult, err := s.Context(ctx, sessionID, resourceID)
-	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", 0, "")
-		return ResourceApplyResult{ResourceID: resourceID, Outcome: "errored", Error: err.Error()}
-	}
+	dr := s.dispatchResource(ctx, sessionID, applyID, resourceID, s.cfg.GenerateModel)
 
-	startTime := time.Now()
-	planResult, _ := s.Plan(ctx)
-	loopOpts := LoopOpts{
-		SystemPrompt:     ctxResult.SystemPrompt,
-		Prompt:           ctxResult.Prompt,
-		Model:            s.cfg.GenerateModel,
-		MaxRetries:       s.cfg.MaxRetries,
-		ReviewLevel:      "light",
-		Cwd:              s.cfg.SpecDir,
-		TypeCheckCommand: s.cfg.TypeCheckCommand,
-		TestCommand:      s.cfg.TestCommand,
-	}
-	if planResult != nil {
-		if r, ok := planResult.Registry.Resources[resourceID]; ok {
-			loopOpts.Validations = r.Validations
-		}
-		loopOpts.Invariants = planResult.Registry.Project.Invariants
-	}
-
-	loopResult, err := runConstraintLoop(ctx, s.engine, loopOpts)
-	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", 1, "")
-		return ResourceApplyResult{ResourceID: resourceID, Outcome: "errored", Attempts: 1, Error: err.Error()}
-	}
-
-	if loopResult.Outcome == "rejected" {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), loopResult.RejectionReason, "", loopResult.Attempts, "")
-		return ResourceApplyResult{ResourceID: resourceID, Outcome: "rejected", Attempts: loopResult.Attempts, Error: loopResult.RejectionReason}
-	}
-
-	files := make([]CommitFile, len(loopResult.Files))
 	var filePaths []string
-	for i, block := range loopResult.Files {
-		files[i] = CommitFile{Path: block.Path, Content: block.Content}
-		filePaths = append(filePaths, block.Path)
+	for _, f := range dr.Files {
+		filePaths = append(filePaths, f.Path)
 	}
 
-	// Record generation
-	genID := uuid.NewString()
-	s.store.CreateGeneration(store.Generation{
-		ID:         genID,
-		ApplyID:    applyID,
+	return ResourceApplyResult{
 		ResourceID: resourceID,
-		Model:      s.cfg.GenerateModel,
-		DurationMS: time.Since(startTime).Milliseconds(),
-	})
-
-	commitResult, err := s.Commit(ctx, sessionID, resourceID, files, "")
-	if err != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", loopResult.Attempts, "")
-		return ResourceApplyResult{ResourceID: resourceID, Outcome: "errored", Attempts: loopResult.Attempts, Error: err.Error()}
+		Outcome:    dr.Status,
+		Attempts:   dr.Attempts,
+		Error:      dr.Error,
+		Files:      filePaths,
 	}
-
-	if !commitResult.Committed {
-		var msgs []string
-		for _, v := range commitResult.Validations {
-			if !v.Passed {
-				msgs = append(msgs, v.Message)
-			}
-		}
-		errMsg := fmt.Sprintf("validation failed: %s", msgs)
-		return ResourceApplyResult{ResourceID: resourceID, Outcome: "rejected", Attempts: loopResult.Attempts, Error: errMsg}
-	}
-
-	return ResourceApplyResult{ResourceID: resourceID, Outcome: "committed", Attempts: loopResult.Attempts, Files: filePaths}
 }

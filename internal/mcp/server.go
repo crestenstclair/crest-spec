@@ -117,6 +117,7 @@ type specHandler interface {
 	Plan(ctx context.Context) (*specmod.PlanResult, error)
 	Apply(ctx context.Context, opts specmod.BeginOpts) (*specmod.ApplyResult, error)
 	Begin(ctx context.Context, opts specmod.BeginOpts) (*specmod.BeginResult, error)
+	ConfirmDestroys(ctx context.Context, sessionID string, resourceIDs []string) ([]specmod.DestroyedResource, error)
 	Next(ctx context.Context, sessionID string) (*specmod.NextResult, error)
 	Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error)
 	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string) (*specmod.CommitResult, error)
@@ -141,6 +142,10 @@ type specHandler interface {
 	RemoveResource(ctx context.Context, resourceID string) error
 	Import(ctx context.Context, opts specmod.ImportOpts) (*specmod.ImportResult, error)
 	Prompt(ctx context.Context, resourceID string) (*specmod.PromptResult, error)
+	Dispatch(ctx context.Context, opts specmod.DispatchOpts) (*specmod.DispatchResult, error)
+	RunWave(ctx context.Context, opts specmod.RunWaveOpts) (*specmod.RunWaveResult, error)
+	Bootstrap(ctx context.Context, opts specmod.BootstrapOpts) (*specmod.BootstrapResult, error)
+	DeepReview(ctx context.Context, opts specmod.DeepReviewOpts) (*specmod.DeepReviewResult, error)
 }
 
 // ---------------------------------------------------------------------------
