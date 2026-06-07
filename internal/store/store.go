@@ -1179,6 +1179,8 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		"DELETE FROM generations WHERE created_at < ?",
 		"DELETE FROM invariant_checks WHERE checked_at < ?",
 		"DELETE FROM apply_actions WHERE started_at < ?",
+		"DELETE FROM agent_notes WHERE created_at < ?",
+		"DELETE FROM session_resources WHERE updated_at < ?",
 		"DELETE FROM applies WHERE started_at < ?",
 	}
 

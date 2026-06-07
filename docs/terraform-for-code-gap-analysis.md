@@ -274,16 +274,16 @@ The Terraform analogy is the right one. The question is: how do you make
 
 ## Concrete Next Steps
 
-| # | Action | Files | Effort |
+| # | Action | Files | Status |
 |---|--------|-------|--------|
-| 1 | Add `completed` state to Commit flow | session.go | 1 day |
-| 2 | Structured review output (JSON schema) | loop.go, engine.go | 2 days |
-| 3 | Better error attribution (parse compiler output) | session.go | 1 day |
-| 4 | Fallback to TypeCheck/TestCommand in constraint loop | loop.go | 0.5 day |
-| 5 | `spec/inspect` tool | query.go, tools.go | 1 day |
-| 6 | `spec/import` MVP | new import.go, tools.go | 1 week |
-| 7 | Mode/environment support | config.go, cue types | 2 days |
-| 8 | Provider system design doc | docs/ | 2 days |
+| 1 | Add `completed` state to Commit flow | session.go | DONE |
+| 2 | Structured review output (JSON schema) | loop.go | DONE |
+| 3 | Better error attribution (parse compiler output) | errorparse.go, session.go | DONE |
+| 4 | Fallback to TypeCheck/TestCommand in constraint loop | loop.go | DONE |
+| 5 | `spec/inspect` tool | query.go, tools.go | DONE |
+| 6 | `spec/import` MVP | importer.go, tools.go | DONE |
+| 7 | Mode/environment support | config.go, cue types, hash.go | DONE |
+| 8 | Provider system design doc | docs/provider-system-design.md | DONE |
 
 ---
 
