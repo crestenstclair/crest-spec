@@ -269,7 +269,7 @@ func testServer(eng engine, st store) (*Server, *bytes.Buffer) {
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
 	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(eng, st, noRecursionTree{}, strings.NewReader(""), &stdout, log, cfg)
+	srv := New(nil, eng, st, noRecursionTree{}, strings.NewReader(""), &stdout, log, cfg)
 	return srv, &stdout
 }
 
@@ -609,7 +609,7 @@ func TestMalformedJSON_StdioTransport(t *testing.T) {
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
 	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(&fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
+	srv := New(nil, &fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -628,7 +628,7 @@ func TestStdioTransport_InitializeFlow(t *testing.T) {
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
 	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(&fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
+	srv := New(nil, &fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -759,7 +759,7 @@ func TestRecursionDetected_DisablesTools(t *testing.T) {
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
 	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(&fakeEngine{}, newFakeStore(), pt, strings.NewReader(""), &stdout, log, cfg)
+	srv := New(nil, &fakeEngine{}, newFakeStore(), pt, strings.NewReader(""), &stdout, log, cfg)
 
 	// tools/list should return only the recursion_detected tool
 	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)

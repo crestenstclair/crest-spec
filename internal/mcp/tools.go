@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	enginemod "github.com/crestenstclair/crest-spec/internal/engine"
+	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 )
 
 // registerTools populates s.tools, s.dispatch, and s.toolFns.
@@ -234,39 +235,377 @@ func (s *Server) registerTools() {
 		return jsonResult(snap)
 	})
 
-	// ----- Spec tool stubs (registered now, implemented in SP3-SP5) -----
+	// ----- Spec tools -----
 
-	specStubs := []toolDef{
-		{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
-		{Name: "spec/apply", Description: "Execute the plan (async)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"},"dry_run":{"type":"boolean","description":"Preview without executing"}}}`)},
-		{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-		{Name: "spec/begin", Description: "Start interactive agent session", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-		{Name: "spec/next", Description: "Get next wave of uncommitted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}}}`)},
-		{Name: "spec/context", Description: "Get scoped prompt for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"session_id":{"type":"string","description":"Session ID"}}}`)},
-		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"session_id":{"type":"string","description":"Session ID"}}}`)},
-		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
-		{Name: "spec/commit", Description: "Record a resource as complete", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id"]}`)},
-		{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","guidance"]}`)},
-		{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id"]}`)},
-		{Name: "spec/skip", Description: "Skip a failed resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id"]}`)},
-		{Name: "spec/finish", Description: "Finalize session, release lock", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}}}`)},
-		{Name: "spec/status", Description: "Show current state", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-		{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
-		{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
-		{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
-		{Name: "spec/diff", Description: "Reconstruct state delta between applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`)},
-		{Name: "spec/state", Description: "Inspect/modify state tracking", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: get, set, clear"}}}`)},
-		{Name: "spec/drift", Description: "Handle drifted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-		{Name: "spec/vacuum", Description: "Compact old history", InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`)},
-		{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
-		{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-	}
+	if s.spec != nil {
+		s.registerSpecTools()
+	} else {
+		// Fallback stubs when no spec handler is provided (e.g. tests)
+		specStubs := []toolDef{
+			{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
+			{Name: "spec/apply", Description: "Execute the plan (async)", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`)},
+			{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
+			{Name: "spec/begin", Description: "Start interactive agent session", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
+			{Name: "spec/next", Description: "Get next wave of uncommitted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`)},
+			{Name: "spec/context", Description: "Get scoped prompt for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`)},
+			{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
+			{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
+			{Name: "spec/commit", Description: "Record a resource as complete", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["session_id","resource_id"]}`)},
+			{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`)},
+			{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
+			{Name: "spec/skip", Description: "Skip a failed resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
+			{Name: "spec/finish", Description: "Finalize session, release lock", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`)},
+			{Name: "spec/status", Description: "Show current state", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+			{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
+			{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
+			{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
+			{Name: "spec/diff", Description: "Reconstruct state delta between applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`)},
+			{Name: "spec/state", Description: "Inspect/modify state tracking", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: get, set, clear"}}}`)},
+			{Name: "spec/drift", Description: "Handle drifted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","description":"accept or revert"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["action","resource_id"]}`)},
+			{Name: "spec/vacuum", Description: "Compact old history", InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`)},
+			{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
+			{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		}
 
-	for _, def := range specStubs {
-		s.addTool(def, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
-			return textResult("not implemented yet -- available in a future release")
-		})
+		for _, def := range specStubs {
+			s.addTool(def, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+				return textResult("not implemented yet -- available in a future release")
+			})
+		}
 	}
+}
+
+// registerSpecTools adds all spec/* tool handlers backed by the spec engine.
+func (s *Server) registerSpecTools() {
+	// spec/plan
+	s.addTool(toolDef{
+		Name: "spec/plan", Description: "Show what would change (dry run)",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		result, err := s.spec.Plan(ctx)
+		if err != nil {
+			return errorResult(fmt.Sprintf("plan: %v", err))
+		}
+		return jsonResult(result.Actions)
+	})
+
+	// spec/apply
+	s.addTool(toolDef{
+		Name: "spec/apply", Description: "Execute the plan (async)",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		return s.runAsync("spec/apply", func(ctx context.Context) (string, error) {
+			result, err := s.spec.Begin(ctx, specmod.BeginOpts{})
+			if err != nil {
+				return "", err
+			}
+			b, _ := json.Marshal(result)
+			return string(b), nil
+		}, progressToken)
+	})
+
+	// spec/validate
+	s.addTool(toolDef{
+		Name: "spec/validate", Description: "Check structural invariants",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		result, err := s.spec.Validate(ctx)
+		if err != nil {
+			return errorResult(fmt.Sprintf("validate: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/begin
+	s.addTool(toolDef{
+		Name: "spec/begin", Description: "Start interactive agent session",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			Target string `json:"target"`
+			Force  bool   `json:"force"`
+			Model  string `json:"model"`
+		}
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Begin(ctx, specmod.BeginOpts{Target: p.Target, Force: p.Force, Model: p.Model})
+		if err != nil {
+			return errorResult(fmt.Sprintf("begin: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/next
+	s.addTool(toolDef{
+		Name: "spec/next", Description: "Get next wave of uncommitted resources",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct{ SessionID string `json:"session_id"` }
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Next(ctx, p.SessionID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("next: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/context
+	s.addTool(toolDef{
+		Name: "spec/context", Description: "Get scoped prompt for a resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID  string `json:"session_id"`
+			ResourceID string `json:"resource_id"`
+		}
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Context(ctx, p.SessionID, p.ResourceID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("context: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/validate-resource
+	s.addTool(toolDef{
+		Name: "spec/validate-resource", Description: "Run invariant checks for a resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct{ ResourceID string `json:"resource_id"` }
+		json.Unmarshal(args, &p)
+		result, err := s.spec.ValidateResource(ctx, p.ResourceID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("validate-resource: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/note
+	s.addTool(toolDef{
+		Name: "spec/note", Description: "Save a design decision note",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			ResourceID string `json:"resource_id"`
+			Content    string `json:"content"`
+			SessionID  string `json:"session_id"`
+		}
+		json.Unmarshal(args, &p)
+		if err := s.spec.Resolve(ctx, p.SessionID, p.ResourceID, p.Content, ""); err != nil {
+			return errorResult(fmt.Sprintf("note: %v", err))
+		}
+		return jsonResult(map[string]bool{"saved": true})
+	})
+
+	// spec/commit
+	s.addTool(toolDef{
+		Name: "spec/commit", Description: "Record a resource as complete",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["session_id","resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID  string `json:"session_id"`
+			ResourceID string `json:"resource_id"`
+			Files      []struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			} `json:"files"`
+			Notes string `json:"notes"`
+		}
+		json.Unmarshal(args, &p)
+		var files []specmod.CommitFile
+		for _, f := range p.Files {
+			files = append(files, specmod.CommitFile{Path: f.Path, Content: f.Content})
+		}
+		if err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes); err != nil {
+			return errorResult(fmt.Sprintf("commit: %v", err))
+		}
+		return jsonResult(map[string]bool{"committed": true})
+	})
+
+	// spec/resolve
+	s.addTool(toolDef{
+		Name: "spec/resolve", Description: "Provide guidance for blocked resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID  string `json:"session_id"`
+			ResourceID string `json:"resource_id"`
+			Guidance   string `json:"guidance"`
+			Model      string `json:"model"`
+		}
+		json.Unmarshal(args, &p)
+		if err := s.spec.Resolve(ctx, p.SessionID, p.ResourceID, p.Guidance, p.Model); err != nil {
+			return errorResult(fmt.Sprintf("resolve: %v", err))
+		}
+		return jsonResult(map[string]bool{"resolved": true})
+	})
+
+	// spec/amend
+	s.addTool(toolDef{
+		Name: "spec/amend", Description: "Signal spec update for resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID  string `json:"session_id"`
+			ResourceID string `json:"resource_id"`
+		}
+		json.Unmarshal(args, &p)
+		if err := s.spec.Amend(ctx, p.SessionID, p.ResourceID); err != nil {
+			return errorResult(fmt.Sprintf("amend: %v", err))
+		}
+		return jsonResult(map[string]bool{"amended": true})
+	})
+
+	// spec/skip
+	s.addTool(toolDef{
+		Name: "spec/skip", Description: "Skip a failed resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID  string `json:"session_id"`
+			ResourceID string `json:"resource_id"`
+			Reason     string `json:"reason"`
+		}
+		json.Unmarshal(args, &p)
+		if err := s.spec.Skip(ctx, p.SessionID, p.ResourceID, p.Reason); err != nil {
+			return errorResult(fmt.Sprintf("skip: %v", err))
+		}
+		return jsonResult(map[string]bool{"skipped": true})
+	})
+
+	// spec/finish
+	s.addTool(toolDef{
+		Name: "spec/finish", Description: "Finalize session, release lock",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			SessionID string `json:"session_id"`
+			Force     bool   `json:"force"`
+		}
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Finish(ctx, p.SessionID, p.Force)
+		if err != nil {
+			return errorResult(fmt.Sprintf("finish: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/status
+	s.addTool(toolDef{
+		Name: "spec/status", Description: "Show current state",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		result, err := s.spec.Status(ctx)
+		if err != nil {
+			return errorResult(fmt.Sprintf("status: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/log
+	s.addTool(toolDef{
+		Name: "spec/log", Description: "List past applies",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct{ Limit int `json:"limit"` }
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Log(ctx, p.Limit)
+		if err != nil {
+			return errorResult(fmt.Sprintf("log: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/history
+	s.addTool(toolDef{
+		Name: "spec/history", Description: "Show generation history for resource",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			ResourceID string `json:"resource_id"`
+			Limit      int    `json:"limit"`
+		}
+		json.Unmarshal(args, &p)
+		result, err := s.spec.History(ctx, p.ResourceID, p.Limit)
+		if err != nil {
+			return errorResult(fmt.Sprintf("history: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/graph
+	s.addTool(toolDef{
+		Name: "spec/graph", Description: "Return dependency graph",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		result, err := s.spec.GraphInfo(ctx)
+		if err != nil {
+			return errorResult(fmt.Sprintf("graph: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/diff
+	s.addTool(toolDef{
+		Name: "spec/diff", Description: "Reconstruct state delta between applies",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		return textResult("diff not yet implemented")
+	})
+
+	// spec/state
+	s.addTool(toolDef{
+		Name: "spec/state", Description: "Inspect/modify state tracking",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: get, set, clear"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		result, err := s.spec.Status(ctx)
+		if err != nil {
+			return errorResult(fmt.Sprintf("state: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/drift
+	s.addTool(toolDef{
+		Name: "spec/drift", Description: "Handle drifted resources",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","description":"accept or revert"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["action","resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			Action     string `json:"action"`
+			ResourceID string `json:"resource_id"`
+		}
+		json.Unmarshal(args, &p)
+		if err := s.spec.DriftAction(ctx, p.Action, p.ResourceID); err != nil {
+			return errorResult(fmt.Sprintf("drift: %v", err))
+		}
+		return jsonResult(map[string]bool{"ok": true})
+	})
+
+	// spec/vacuum
+	s.addTool(toolDef{
+		Name: "spec/vacuum", Description: "Compact old history",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		return textResult("vacuum not yet implemented")
+	})
+
+	// spec/sql
+	s.addTool(toolDef{
+		Name: "spec/sql", Description: "Read-only SQLite shell",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		return textResult("sql not yet implemented")
+	})
+
+	// spec/unlock
+	s.addTool(toolDef{
+		Name: "spec/unlock", Description: "Force-clear stale lock",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		if err := s.spec.Unlock(ctx); err != nil {
+			return errorResult(fmt.Sprintf("unlock: %v", err))
+		}
+		return jsonResult(map[string]bool{"unlocked": true})
+	})
 }
 
 // addTool registers a tool definition and its handler.

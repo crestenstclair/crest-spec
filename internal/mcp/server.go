@@ -18,6 +18,7 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	enginemod "github.com/crestenstclair/crest-spec/internal/engine"
+	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -106,12 +107,35 @@ type contentBlock struct {
 // toolHandler is a function that handles a specific tool call.
 type toolHandler func(ctx context.Context, args json.RawMessage, progressToken string) toolResult
 
+// specHandler is the consumer-side surface of the Spec engine.
+type specHandler interface {
+	Plan(ctx context.Context) (*specmod.PlanResult, error)
+	Begin(ctx context.Context, opts specmod.BeginOpts) (*specmod.BeginResult, error)
+	Next(ctx context.Context, sessionID string) (*specmod.NextResult, error)
+	Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error)
+	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string) error
+	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
+	AdvanceWave(ctx context.Context, sessionID string) error
+	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
+	Amend(ctx context.Context, sessionID, resourceID string) error
+	Skip(ctx context.Context, sessionID, resourceID, reason string) error
+	Status(ctx context.Context) (*specmod.StatusResult, error)
+	Log(ctx context.Context, limit int) ([]storemod.Apply, error)
+	History(ctx context.Context, resourceID string, limit int) ([]storemod.Generation, error)
+	GraphInfo(ctx context.Context) (*specmod.GraphResult, error)
+	Validate(ctx context.Context) (*specmod.ValidateResult, error)
+	ValidateResource(ctx context.Context, resourceID string) (*specmod.ValidateResourceResult, error)
+	DriftAction(ctx context.Context, action, resourceID string) error
+	Unlock(ctx context.Context) error
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 
 // Server is the MCP JSON-RPC server.
 type Server struct {
+	spec      specHandler
 	eng       engine
 	store     store
 	pt        processTree
@@ -135,6 +159,7 @@ type Server struct {
 
 // New creates a new MCP Server.
 func New(
+	spec specHandler,
 	eng engine,
 	st store,
 	pt processTree,
@@ -146,6 +171,7 @@ func New(
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
 	s := &Server{
+		spec:      spec,
 		eng:       eng,
 		store:     st,
 		pt:        pt,

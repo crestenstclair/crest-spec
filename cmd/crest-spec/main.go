@@ -17,6 +17,7 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/config"
 	"github.com/crestenstclair/crest-spec/internal/engine"
 	"github.com/crestenstclair/crest-spec/internal/mcp"
+	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -69,7 +70,9 @@ func main() {
 
 	eng := engine.New(ag, nil, cfg)
 
-	srv := mcp.New(eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)
+	sp := specmod.New(eng, s, specmod.OSFileSystem{}, cfg)
+
+	srv := mcp.New(sp, eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)
 
 	if cfg.HTTPAddr != "" {
 		httpMux := http.NewServeMux()
