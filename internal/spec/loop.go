@@ -2,14 +2,19 @@ package spec
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/engine"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
+	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
 // ReviewOutput represents structured JSON output from an LLM review.
@@ -27,11 +32,22 @@ type ReviewFinding struct {
 	Line        int    `json:"line,omitempty"`
 }
 
+// AttemptRecord captures data from a single generation attempt within the constraint loop.
+type AttemptRecord struct {
+	Prompt     string
+	Output     string
+	Outcome    string // "accepted", "rejected_parse", "rejected_validation", "rejected_invariant", "rejected_review"
+	Error      string
+	DurationMS int64
+	Attempt    int
+}
+
 type LoopResult struct {
 	Files           []CodeBlock
 	Outcome         string
 	RejectionReason string
 	Attempts        int
+	AttemptRecords  []AttemptRecord
 }
 
 type LoopOpts struct {
@@ -45,54 +61,93 @@ type LoopOpts struct {
 	Invariants       []cuepkg.Invariant
 	TypeCheckCommand string
 	TestCommand      string
+	ApplyID          string
+	ResourceID       string
+	Store            specStore
 }
 
 func runConstraintLoop(ctx context.Context, eng specEngine, opts LoopOpts) (*LoopResult, error) {
 	maxAttempts := opts.MaxRetries + 1
 	var lastOutput string
 	var lastError string
+	var records []AttemptRecord
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		genPrompt := opts.Prompt
-		if attempt > 1 && lastError != "" {
-			genPrompt = promptpkg.BuildFixPrompt(opts.Prompt, lastOutput, lastError)
-		}
+		rec := runAttempt(ctx, eng, opts, attempt, &lastOutput, &lastError)
+		records = append(records, rec)
 
-		blocks, output, err := generate(ctx, eng, genPrompt, opts)
-		if err != nil {
-			return nil, fmt.Errorf("generate attempt %d: %w", attempt, err)
+		if rec.Outcome == "accepted" {
+			blocks, _ := ParseCodeBlocks(rec.Output)
+			return &LoopResult{
+				Files:          blocks,
+				Outcome:        "accepted",
+				Attempts:       attempt,
+				AttemptRecords: records,
+			}, nil
 		}
-		lastOutput = output
-
-		if blocks == nil {
-			lastError = "parse error: no code blocks found in output"
-			continue
-		}
-
-		if err := runValidationStep(ctx, opts, &lastError); err != nil {
-			continue
-		}
-
-		if err := runInvariantStep(ctx, eng, blocks, opts.Invariants, &lastError); err != nil {
-			continue
-		}
-
-		if err := runReviewStep(ctx, eng, output, opts, &lastError); err != nil {
-			continue
-		}
-
-		return &LoopResult{
-			Files:    blocks,
-			Outcome:  "accepted",
-			Attempts: attempt,
-		}, nil
 	}
 
 	return &LoopResult{
 		Outcome:         "rejected",
 		RejectionReason: lastError,
 		Attempts:        maxAttempts,
+		AttemptRecords:  records,
 	}, nil
+}
+
+func runAttempt(
+	ctx context.Context, eng specEngine, opts LoopOpts,
+	attempt int, lastOutput, lastError *string,
+) AttemptRecord {
+	start := time.Now()
+
+	genPrompt := opts.Prompt
+	if attempt > 1 && *lastError != "" {
+		genPrompt = promptpkg.BuildFixPrompt(opts.Prompt, *lastOutput, *lastError)
+	}
+
+	blocks, output, err := generate(ctx, eng, genPrompt, opts)
+	if err != nil {
+		return AttemptRecord{
+			Prompt: genPrompt, Output: "", Outcome: "error",
+			Error: err.Error(), DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+		}
+	}
+	*lastOutput = output
+
+	if blocks == nil {
+		*lastError = "parse error: no code blocks found in output"
+		return AttemptRecord{
+			Prompt: genPrompt, Output: output, Outcome: "rejected_parse",
+			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+		}
+	}
+
+	if err := runValidationStep(ctx, opts, lastError); err != nil {
+		return AttemptRecord{
+			Prompt: genPrompt, Output: output, Outcome: "rejected_validation",
+			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+		}
+	}
+
+	if err := runInvariantStep(ctx, eng, blocks, opts, lastError); err != nil {
+		return AttemptRecord{
+			Prompt: genPrompt, Output: output, Outcome: "rejected_invariant",
+			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+		}
+	}
+
+	if err := runReviewStep(ctx, eng, output, opts, lastError); err != nil {
+		return AttemptRecord{
+			Prompt: genPrompt, Output: output, Outcome: "rejected_review",
+			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+		}
+	}
+
+	return AttemptRecord{
+		Prompt: genPrompt, Output: output, Outcome: "accepted",
+		DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+	}
 }
 
 func generate(ctx context.Context, eng specEngine, prompt string, opts LoopOpts) ([]CodeBlock, string, error) {
@@ -157,8 +212,8 @@ func fallbackValidations(typeCheckCmd, testCmd string) []cuepkg.Validation {
 	return validations
 }
 
-func runInvariantStep(ctx context.Context, eng specEngine, blocks []CodeBlock, invariants []cuepkg.Invariant, lastError *string) error {
-	if len(invariants) == 0 {
+func runInvariantStep(ctx context.Context, eng specEngine, blocks []CodeBlock, opts LoopOpts, lastError *string) error {
+	if len(opts.Invariants) == 0 {
 		return nil
 	}
 
@@ -167,31 +222,62 @@ func runInvariantStep(ctx context.Context, eng specEngine, blocks []CodeBlock, i
 		codeBuilder += fmt.Sprintf("// path: %s\n%s\n\n", b.Path, b.Content)
 	}
 
-	for _, inv := range invariants {
-		prompt := fmt.Sprintf(
-			"Check if this code violates the following invariant:\n\nINVARIANT: %s\n",
-			inv.Text,
-		)
-		if inv.Meta.Rationale != "" {
-			prompt += fmt.Sprintf("RATIONALE: %s\n", inv.Meta.Rationale)
-		}
-		prompt += fmt.Sprintf("\nCODE:\n%s\n\nRespond with PASS if the code respects the invariant, or FAIL with explanation.", codeBuilder)
-
-		res, err := eng.Review(ctx, engine.ReviewOpts{
-			Code:         codeBuilder,
-			Requirements: prompt,
-		})
+	for _, inv := range opts.Invariants {
+		passed, output, err := checkInvariant(ctx, eng, inv, codeBuilder)
 		if err != nil {
 			continue
 		}
 
-		if strings.Contains(strings.ToUpper(res.Output), "FAIL") {
-			*lastError = fmt.Sprintf("invariant violated: %s\n%s", inv.Text, res.Output)
+		recordInvariantCheck(opts, inv.Text, passed, output)
+
+		if !passed {
+			*lastError = fmt.Sprintf("invariant violated: %s\n%s", inv.Text, output)
 			return fmt.Errorf("failed")
 		}
 	}
 
 	return nil
+}
+
+func checkInvariant(ctx context.Context, eng specEngine, inv cuepkg.Invariant, code string) (bool, string, error) {
+	prompt := fmt.Sprintf(
+		"Check if this code violates the following invariant:\n\nINVARIANT: %s\n",
+		inv.Text,
+	)
+	if inv.Meta.Rationale != "" {
+		prompt += fmt.Sprintf("RATIONALE: %s\n", inv.Meta.Rationale)
+	}
+	prompt += fmt.Sprintf("\nCODE:\n%s\n\nRespond with PASS if the code respects the invariant, or FAIL with explanation.", code)
+
+	res, err := eng.Review(ctx, engine.ReviewOpts{
+		Code:         code,
+		Requirements: prompt,
+	})
+	if err != nil {
+		return false, "", err
+	}
+
+	passed := !strings.Contains(strings.ToUpper(res.Output), "FAIL")
+	return passed, res.Output, nil
+}
+
+func recordInvariantCheck(opts LoopOpts, checkType string, passed bool, output string) {
+	if opts.Store == nil || opts.ApplyID == "" || opts.ResourceID == "" {
+		return
+	}
+	opts.Store.RecordInvariantCheck(store.InvariantCheck{
+		ID:         uuid.NewString(),
+		ApplyID:    opts.ApplyID,
+		ResourceID: opts.ResourceID,
+		CheckType:  checkType,
+		Passed:     passed,
+		Output:     output,
+		CreatedAt:  time.Now(),
+	})
+}
+
+func promptHash(prompt string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
 }
 
 func runReviewStep(ctx context.Context, eng specEngine, output string, opts LoopOpts, lastError *string) error {

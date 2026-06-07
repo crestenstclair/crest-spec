@@ -11,6 +11,24 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
+func (s *Spec) recordAttempts(applyID, resourceID, model string, records []AttemptRecord) {
+	for _, rec := range records {
+		s.store.CreateGeneration(store.Generation{
+			ID:              uuid.NewString(),
+			ApplyID:         applyID,
+			ResourceID:      resourceID,
+			PromptText:      rec.Prompt,
+			PromptHash:      promptHash(rec.Prompt),
+			OutputText:      rec.Output,
+			Model:           model,
+			Outcome:         rec.Outcome,
+			RejectionReason: rec.Error,
+			RetryCount:      rec.Attempt,
+			DurationMS:      rec.DurationMS,
+		})
+	}
+}
+
 type DispatchOpts struct {
 	SessionID  string
 	ResourceID string
@@ -69,7 +87,7 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 	}
 
 	planResult, _ := s.Plan(ctx)
-	loopOpts := s.buildLoopOpts(ctxResult, resourceID, model, planResult)
+	loopOpts := s.buildLoopOpts(ctxResult, applyID, resourceID, model, planResult)
 
 	loopResult, err := runConstraintLoop(ctx, s.engine, loopOpts)
 	if err != nil {
@@ -80,6 +98,8 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 		}
 	}
 
+	s.recordAttempts(applyID, resourceID, model, loopResult.AttemptRecords)
+
 	if loopResult.Outcome == "rejected" {
 		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), loopResult.RejectionReason, "", loopResult.Attempts, "")
 		return &DispatchResult{
@@ -89,12 +109,6 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 	}
 
 	files := blocksToCommitFiles(loopResult.Files)
-
-	genID := uuid.NewString()
-	s.store.CreateGeneration(store.Generation{
-		ID: genID, ApplyID: applyID, ResourceID: resourceID,
-		Model: model, DurationMS: time.Since(startTime).Milliseconds(),
-	})
 
 	commitResult, err := s.Commit(ctx, sessionID, resourceID, files, "")
 	if err != nil {
@@ -121,7 +135,7 @@ func (s *Spec) dispatchResource(ctx context.Context, sessionID, applyID, resourc
 	}
 }
 
-func (s *Spec) buildLoopOpts(ctxResult *ContextResult, resourceID, model string, planResult *PlanResult) LoopOpts {
+func (s *Spec) buildLoopOpts(ctxResult *ContextResult, applyID, resourceID, model string, planResult *PlanResult) LoopOpts {
 	opts := LoopOpts{
 		SystemPrompt:     ctxResult.SystemPrompt,
 		Prompt:           ctxResult.Prompt,
@@ -131,6 +145,9 @@ func (s *Spec) buildLoopOpts(ctxResult *ContextResult, resourceID, model string,
 		Cwd:              s.cfg.SpecDir,
 		TypeCheckCommand: s.cfg.TypeCheckCommand,
 		TestCommand:      s.cfg.TestCommand,
+		ApplyID:          applyID,
+		ResourceID:       resourceID,
+		Store:            s.store,
 	}
 	if planResult != nil {
 		if r, ok := planResult.Registry.Resources[resourceID]; ok {
