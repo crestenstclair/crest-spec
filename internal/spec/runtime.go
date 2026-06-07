@@ -18,6 +18,12 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 		ctx.ModuleTree = tree
 	}
 
+	// Collect existing module declaration files so the model can update them
+	modFiles := collectModuleFiles(s.fs, srcDir, registry.Project.Meta.Language)
+	if len(modFiles) > 0 {
+		ctx.ModuleFiles = modFiles
+	}
+
 	depFiles := make(map[string]string)
 	for _, dep := range resource.Dependencies {
 		files, err := s.store.GetGeneratedFiles(dep.TargetID)
@@ -55,6 +61,101 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 	}
 
 	return ctx, nil
+}
+
+// collectModuleFiles reads existing files the model must keep in sync when it
+// adds new code: module declarations from the src/ tree (lib.rs, mod.rs, ...)
+// and the project manifest from the project root (Cargo.toml, package.json).
+// These are passed to the LLM so it can include them in its output with new
+// modules and crate dependencies ADDED rather than clobbering them.
+func collectModuleFiles(fs fileSystem, srcDir, lang string) map[string]string {
+	if lang == "" {
+		return nil
+	}
+
+	var (
+		modulePatterns   []string // searched recursively under src/
+		manifestPatterns []string // searched in the project root only
+	)
+	switch lang {
+	case "rust":
+		modulePatterns = []string{"lib.rs", "mod.rs"}
+		manifestPatterns = []string{"Cargo.toml"}
+	case "python":
+		modulePatterns = []string{"__init__.py"}
+	case "typescript", "javascript":
+		modulePatterns = []string{"index.ts", "index.js"}
+		manifestPatterns = []string{"package.json"}
+	default:
+		return nil
+	}
+
+	files := make(map[string]string)
+	collectModuleFilesRecursive(fs, srcDir, srcDir, modulePatterns, files)
+	if len(manifestPatterns) > 0 {
+		collectFilesInDir(fs, filepath.Dir(srcDir), srcDir, manifestPatterns, files)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	return files
+}
+
+// collectFilesInDir reads matching files directly in dir (non-recursively),
+// keying them by their path relative to filepath.Dir(baseDir) — matching the
+// keys produced by collectModuleFilesRecursive.
+func collectFilesInDir(fs fileSystem, dir, baseDir string, patterns []string, files map[string]string) {
+	entries, err := fs.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		for _, p := range patterns {
+			if e.Name() != p {
+				continue
+			}
+			fullPath := filepath.Join(dir, e.Name())
+			data, err := fs.ReadFile(fullPath)
+			if err != nil {
+				continue
+			}
+			if content := strings.TrimSpace(string(data)); content != "" {
+				relPath, _ := filepath.Rel(filepath.Dir(baseDir), fullPath)
+				files[relPath] = content
+			}
+		}
+	}
+}
+
+func collectModuleFilesRecursive(fs fileSystem, baseDir, dir string, patterns []string, files map[string]string) {
+	entries, err := fs.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			collectModuleFilesRecursive(fs, baseDir, filepath.Join(dir, e.Name()), patterns, files)
+			continue
+		}
+		for _, p := range patterns {
+			if e.Name() == p {
+				fullPath := filepath.Join(dir, e.Name())
+				data, err := fs.ReadFile(fullPath)
+				if err != nil {
+					continue
+				}
+				content := strings.TrimSpace(string(data))
+				if content != "" {
+					relPath, _ := filepath.Rel(filepath.Dir(baseDir), fullPath)
+					files[relPath] = content
+				}
+			}
+		}
+	}
 }
 
 func buildModuleTree(fs fileSystem, dir string) (string, error) {

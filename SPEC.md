@@ -539,7 +539,7 @@ meta: {
 
 | Value | Behavior |
 |-------|----------|
-| `"full"` | Multi-model code review via `engine.CodeReview`. Heavyweight — fans out across opus/sonnet/haiku. Default for aggregates, domain services, adapters. |
+| `"full"` | Multi-model code review via `engine.CodeReview`. Heavyweight — fans out across opus/sonnet. Default for aggregates, domain services, adapters. |
 | `"light"` | Single-model severity-ranked scan via `engine.Bugbot`. Default for value objects, entities, assets. |
 | `"solid"` | Single-model SOLID/DI/interface review via `engine.Review`. Explicit opt-in for any resource. |
 | `"skip"` | No LLM review. For generated boilerplate (mod.rs, Cargo.toml, manifests). |
@@ -671,7 +671,7 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 |-------|---------|------|---------|---------|
 | `APIKey` | `CREST_SPEC_API_KEY` | string | (none) | Passed to subprocess as `ANTHROPIC_API_KEY`. If unset, the child uses the developer's OAuth/keychain session. |
 | `AgentPath` | `CREST_SPEC_AGENT_PATH` | string | `claude` | Path/name of the claude binary. |
-| `DefaultModel` | `CREST_SPEC_DEFAULT_MODEL` | string | `claude-sonnet-4-6` | Model used when a call omits one. Accepts aliases (`opus`/`sonnet`/`haiku`) or full IDs. |
+| `DefaultModel` | `CREST_SPEC_DEFAULT_MODEL` | string | `claude-sonnet-4-6` | Model used when a call omits one. Accepts aliases (`opus`/`sonnet`) or full IDs. |
 | `PermissionMode` | `CREST_SPEC_PERMISSION_MODE` | string | `default` | Default permission mode (maps to `claude --permission-mode`). |
 | `Timeout` | `CREST_SPEC_TIMEOUT` | `time.Duration` | `0s` | Default per-`RunPrompt` timeout; `0s` = no timeout. |
 | `MaxConcurrency` | `CREST_SPEC_MAX_CONCURRENCY` | int | `5` | Maximum concurrent `claude` subprocess spawns server-wide. Shared across code generation, verification, and any direct tool calls. |
@@ -738,9 +738,9 @@ The engine wraps the agent with higher-level operations that the spec layer call
 
 - **`Review(ctx, code, requirements, model) (*RunResult, error)`** — LLM verification pass. Calls `runner.RunPrompt` with a generic review prompt. SOLID/DI/clean code checks are not hardcoded in the review template — they come from the user's meta rules (e.g., `meta.rules` in the CUE spec). Parses for `PASS`/`FAIL` verdict. Uses `VerifyModel` config.
 
-- **`CodeReview(ctx, cwd, models, prompt, CodeReviewOpts) (string, error)`** — multi-model code review of generated files. Adapted from claude-mcp's `execCodeReview`: fans out across models (default `[opus, sonnet, haiku]`), each checking for architecture issues, nil derefs, bounds errors, performance, leaks. Results aggregated per model. Useful as a heavyweight verification step for critical resources.
+- **`CodeReview(ctx, cwd, models, prompt, CodeReviewOpts) (string, error)`** — multi-model code review of generated files. Adapted from claude-mcp's `execCodeReview`: fans out across models (default `[opus, sonnet]`), each checking for architecture issues, nil derefs, bounds errors, performance, leaks. Results aggregated per model. Useful as a heavyweight verification step for critical resources.
 
-- **`Bugbot(ctx, cwd, models, prompt, BugbotOpts) (string, error)`** — lightweight severity-ranked scan. Adapted from claude-mcp's `execBugbot`: defaults to `[haiku]` for speed, demands per-finding severity + remedy. Useful as a fast sanity check in the constraint loop.
+- **`Bugbot(ctx, cwd, models, prompt, BugbotOpts) (string, error)`** — lightweight severity-ranked scan. Adapted from claude-mcp's `execBugbot`: defaults to `[sonnet]`, demands per-finding severity + remedy. Useful as a fast sanity check in the constraint loop.
 
 All operations acquire a slot from the shared concurrency semaphore. The spec layer never needs to think about subprocess limits — the engine enforces them.
 
@@ -1084,8 +1084,8 @@ For each resource, the loop executes these steps in order:
 
    | Review level | Engine call | Default for | What it checks |
    |-------------|-------------|-------------|----------------|
-   | `"full"` | `engine.CodeReview` | aggregates, domain services, adapters | Fans out across models (opus, sonnet, haiku). Architecture, nil derefs, bounds, performance, leaks, concurrency. |
-   | `"light"` | `engine.Bugbot` | value objects, entities, assets | Single model (haiku). Severity-ranked findings: High/Medium/Low with remedies. |
+   | `"full"` | `engine.CodeReview` | aggregates, domain services, adapters | Fans out across models (opus, sonnet). Architecture, nil derefs, bounds, performance, leaks, concurrency. |
+   | `"light"` | `engine.Bugbot` | value objects, entities, assets | Single model (sonnet). Severity-ranked findings: High/Medium/Low with remedies. |
    | `"solid"` | `engine.Review` | any (explicit opt-in) | Single model. Checks SOLID principles, DI, interfaces, folder structure against the resource's declared commands/events/invariants/contracts. |
    | `"skip"` | (none) | module declarations, manifests | No LLM review. Useful for generated boilerplate (mod.rs, Cargo.toml). |
 

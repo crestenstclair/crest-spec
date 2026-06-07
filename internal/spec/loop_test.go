@@ -46,6 +46,9 @@ func (m *mockEngine) Bugbot(ctx context.Context, opts engine.BugbotOpts) (*agent
 	return &agent.RunResult{Output: "No bugs found"}, nil
 }
 
+func (m *mockEngine) ActiveCount() int    { return 0 }
+func (m *mockEngine) MaxConcurrency() int { return 5 }
+
 func TestConstraintLoop_PassOnFirstTry(t *testing.T) {
 	eng := &mockEngine{
 		generateFn: func(ctx context.Context, opts engine.GenerateOpts) (*agent.RunResult, error) {
@@ -134,6 +137,53 @@ func TestParseReviewOutput_PassedTrue(t *testing.T) {
 	ro := parseReviewOutput(input)
 	require.NotNil(t, ro)
 	assert.True(t, ro.Passed)
+}
+
+func TestParseReviewOutput_MultiModelAllPass(t *testing.T) {
+	input := "## Model: opus\n\n{\"passed\": true, \"summary\": \"ok\"}\n\n" +
+		"## Model: sonnet\n\n{\"passed\": true, \"summary\": \"fine\"}\n\n"
+	ro := parseReviewOutput(input)
+	require.NotNil(t, ro)
+	assert.True(t, ro.Passed)
+}
+
+func TestParseReviewOutput_MultiModelOneFails(t *testing.T) {
+	// One model passes, the other reports a blocking finding. The combined
+	// verdict must fail, with findings unioned across sections.
+	input := "## Model: opus\n\n{\"passed\": true, \"findings\": [], \"summary\": \"ok\"}\n\n" +
+		"## Model: sonnet\n\n{\"passed\": false, \"findings\": [{\"severity\": \"critical\", \"description\": \"data race\"}], \"summary\": \"bug\"}\n\n"
+	ro := parseReviewOutput(input)
+	require.NotNil(t, ro)
+	assert.False(t, ro.Passed)
+	require.Len(t, ro.Findings, 1)
+	assert.Equal(t, "data race", ro.Findings[0].Description)
+}
+
+func TestIndicatesFailure_NegatedKeywordsDoNotFail(t *testing.T) {
+	// These are the false-positive cases that previously failed reviews even
+	// though the model reported no blocking issues.
+	for _, s := range []string{
+		"No critical or high-severity bugs. The sharpest finding is minor.",
+		"0 critical issues found.",
+		"The code is free of critical defects.",
+		"No failures detected; all assertions pass.",
+		"none of the findings are critical",
+		"Critical issues: none found",
+		"no findings are critical",
+	} {
+		assert.False(t, indicatesFailure(s, []string{"critical", "fail"}), "should not fail on %q", s)
+	}
+}
+
+func TestIndicatesFailure_GenuineFindingsFail(t *testing.T) {
+	for _, s := range []string{
+		"Found a critical bug: nil deref on line 12.",
+		"severity: critical — unbounded allocation",
+		"This test will fail because the buffer overflows.",
+		"No major issues, but 1 critical finding remains.",
+	} {
+		assert.True(t, indicatesFailure(s, []string{"critical", "fail"}), "should fail on %q", s)
+	}
 }
 
 func TestBuildReviewMessage_WithFindings(t *testing.T) {
@@ -255,4 +305,111 @@ func TestConstraintLoop_ExhaustedRetries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "rejected", result.Outcome)
 	assert.Equal(t, 3, result.Attempts) // initial + 2 retries
+}
+
+func TestConstraintLoop_EmitsEvents(t *testing.T) {
+	eng := &mockEngine{
+		generateFn: func(ctx context.Context, opts engine.GenerateOpts) (*agent.RunResult, error) {
+			return &agent.RunResult{
+				Output: "```go\n// path: src/main.go\npackage main\n```\n",
+			}, nil
+		},
+	}
+
+	var events []struct {
+		Type    string
+		Attempt int
+		Content string
+	}
+
+	result, err := runConstraintLoop(context.Background(), eng, LoopOpts{
+		Prompt:      "generate code",
+		Model:       "test-model",
+		MaxRetries:  2,
+		ReviewLevel: "skip",
+		OnEvent: func(eventType string, attempt int, content string) {
+			events = append(events, struct {
+				Type    string
+				Attempt int
+				Content string
+			}{eventType, attempt, content})
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "accepted", result.Outcome)
+
+	// Verify key events fired in order
+	eventTypes := make([]string, len(events))
+	for i, e := range events {
+		eventTypes[i] = e.Type
+	}
+	assert.Contains(t, eventTypes, "attempt_start")
+	assert.Contains(t, eventTypes, "generate_start")
+	assert.Contains(t, eventTypes, "generate_done")
+	assert.Contains(t, eventTypes, "validate_start")
+	assert.Contains(t, eventTypes, "validate_done")
+	assert.Contains(t, eventTypes, "attempt_done")
+
+	// All events should be for attempt 1
+	for _, e := range events {
+		if e.Type != "stderr" {
+			assert.Equal(t, 1, e.Attempt)
+		}
+	}
+}
+
+func TestConstraintLoop_PhaseUpdates(t *testing.T) {
+	eng := &mockEngine{
+		generateFn: func(ctx context.Context, opts engine.GenerateOpts) (*agent.RunResult, error) {
+			return &agent.RunResult{
+				Output: "```go\n// path: src/main.go\npackage main\n```\n",
+			}, nil
+		},
+	}
+
+	var phases []struct {
+		Phase   string
+		Attempt int
+	}
+
+	mockStore := &phaseTrackingStore{}
+	mockStore.phaseUpdates = &phases
+
+	result, err := runConstraintLoop(context.Background(), eng, LoopOpts{
+		Prompt:      "generate code",
+		Model:       "test-model",
+		MaxRetries:  2,
+		ReviewLevel: "skip",
+		SessionID:   "sess-1",
+		ResourceID:  "res-1",
+		Store:       mockStore,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "accepted", result.Outcome)
+
+	// Verify phase transitions happened
+	phaseNames := make([]string, len(phases))
+	for i, p := range phases {
+		phaseNames[i] = p.Phase
+	}
+	assert.Equal(t, []string{"generating", "validating", "checking_invariants", "reviewing"}, phaseNames)
+}
+
+// phaseTrackingStore implements specStore, tracking UpdateSessionResourcePhase calls.
+type phaseTrackingStore struct {
+	stubStore
+	phaseUpdates *[]struct {
+		Phase   string
+		Attempt int
+	}
+}
+
+func (s *phaseTrackingStore) UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error {
+	*s.phaseUpdates = append(*s.phaseUpdates, struct {
+		Phase   string
+		Attempt int
+	}{phase, attempts})
+	return nil
 }

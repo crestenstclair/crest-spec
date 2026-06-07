@@ -19,7 +19,7 @@ func (q *Queries) DeleteSessionResources(ctx context.Context, sessionID string) 
 }
 
 const getSessionResource = `-- name: GetSessionResource :one
-SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at FROM session_resources WHERE session_id = ? AND resource_id = ?
+SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at, phase, dispatched_at FROM session_resources WHERE session_id = ? AND resource_id = ?
 `
 
 type GetSessionResourceParams struct {
@@ -41,12 +41,14 @@ func (q *Queries) GetSessionResource(ctx context.Context, arg GetSessionResource
 		&i.LastOutput,
 		&i.JobID,
 		&i.UpdatedAt,
+		&i.Phase,
+		&i.DispatchedAt,
 	)
 	return i, err
 }
 
 const listSessionResources = `-- name: ListSessionResources :many
-SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at FROM session_resources WHERE session_id = ? ORDER BY wave_index, resource_id
+SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at, phase, dispatched_at FROM session_resources WHERE session_id = ? ORDER BY wave_index, resource_id
 `
 
 func (q *Queries) ListSessionResources(ctx context.Context, sessionID string) ([]SessionResource, error) {
@@ -69,6 +71,8 @@ func (q *Queries) ListSessionResources(ctx context.Context, sessionID string) ([
 			&i.LastOutput,
 			&i.JobID,
 			&i.UpdatedAt,
+			&i.Phase,
+			&i.DispatchedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -84,7 +88,7 @@ func (q *Queries) ListSessionResources(ctx context.Context, sessionID string) ([
 }
 
 const listSessionResourcesByState = `-- name: ListSessionResourcesByState :many
-SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at FROM session_resources WHERE session_id = ? AND state = ? ORDER BY wave_index, resource_id
+SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at, phase, dispatched_at FROM session_resources WHERE session_id = ? AND state = ? ORDER BY wave_index, resource_id
 `
 
 type ListSessionResourcesByStateParams struct {
@@ -112,6 +116,8 @@ func (q *Queries) ListSessionResourcesByState(ctx context.Context, arg ListSessi
 			&i.LastOutput,
 			&i.JobID,
 			&i.UpdatedAt,
+			&i.Phase,
+			&i.DispatchedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -127,7 +133,7 @@ func (q *Queries) ListSessionResourcesByState(ctx context.Context, arg ListSessi
 }
 
 const listSessionResourcesByWave = `-- name: ListSessionResourcesByWave :many
-SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at FROM session_resources WHERE session_id = ? AND wave_index = ? ORDER BY resource_id
+SELECT session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at, phase, dispatched_at FROM session_resources WHERE session_id = ? AND wave_index = ? ORDER BY resource_id
 `
 
 type ListSessionResourcesByWaveParams struct {
@@ -155,6 +161,8 @@ func (q *Queries) ListSessionResourcesByWave(ctx context.Context, arg ListSessio
 			&i.LastOutput,
 			&i.JobID,
 			&i.UpdatedAt,
+			&i.Phase,
+			&i.DispatchedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -167,6 +175,52 @@ func (q *Queries) ListSessionResourcesByWave(ctx context.Context, arg ListSessio
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSessionResourceDispatched = `-- name: SetSessionResourceDispatched :exec
+UPDATE session_resources SET state = 'dispatched', phase = 'queued', dispatched_at = ?, updated_at = ?
+WHERE session_id = ? AND resource_id = ?
+`
+
+type SetSessionResourceDispatchedParams struct {
+	DispatchedAt string
+	UpdatedAt    string
+	SessionID    string
+	ResourceID   string
+}
+
+func (q *Queries) SetSessionResourceDispatched(ctx context.Context, arg SetSessionResourceDispatchedParams) error {
+	_, err := q.db.ExecContext(ctx, setSessionResourceDispatched,
+		arg.DispatchedAt,
+		arg.UpdatedAt,
+		arg.SessionID,
+		arg.ResourceID,
+	)
+	return err
+}
+
+const updateSessionResourcePhase = `-- name: UpdateSessionResourcePhase :exec
+UPDATE session_resources SET phase = ?, attempts = ?, updated_at = ?
+WHERE session_id = ? AND resource_id = ?
+`
+
+type UpdateSessionResourcePhaseParams struct {
+	Phase      string
+	Attempts   int64
+	UpdatedAt  string
+	SessionID  string
+	ResourceID string
+}
+
+func (q *Queries) UpdateSessionResourcePhase(ctx context.Context, arg UpdateSessionResourcePhaseParams) error {
+	_, err := q.db.ExecContext(ctx, updateSessionResourcePhase,
+		arg.Phase,
+		arg.Attempts,
+		arg.UpdatedAt,
+		arg.SessionID,
+		arg.ResourceID,
+	)
+	return err
 }
 
 const updateSessionResourceState = `-- name: UpdateSessionResourceState :exec
@@ -200,28 +254,32 @@ func (q *Queries) UpdateSessionResourceState(ctx context.Context, arg UpdateSess
 }
 
 const upsertSessionResource = `-- name: UpsertSessionResource :exec
-INSERT INTO session_resources (session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO session_resources (session_id, resource_id, state, wave_index, attempts, max_retries, last_error, last_output, job_id, updated_at, phase, dispatched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id, resource_id) DO UPDATE SET
     state = excluded.state,
     attempts = excluded.attempts,
     last_error = excluded.last_error,
     last_output = excluded.last_output,
     job_id = excluded.job_id,
-    updated_at = excluded.updated_at
+    updated_at = excluded.updated_at,
+    phase = excluded.phase,
+    dispatched_at = excluded.dispatched_at
 `
 
 type UpsertSessionResourceParams struct {
-	SessionID  string
-	ResourceID string
-	State      string
-	WaveIndex  int64
-	Attempts   int64
-	MaxRetries int64
-	LastError  *string
-	LastOutput *string
-	JobID      *string
-	UpdatedAt  string
+	SessionID    string
+	ResourceID   string
+	State        string
+	WaveIndex    int64
+	Attempts     int64
+	MaxRetries   int64
+	LastError    *string
+	LastOutput   *string
+	JobID        *string
+	UpdatedAt    string
+	Phase        string
+	DispatchedAt string
 }
 
 func (q *Queries) UpsertSessionResource(ctx context.Context, arg UpsertSessionResourceParams) error {
@@ -236,6 +294,8 @@ func (q *Queries) UpsertSessionResource(ctx context.Context, arg UpsertSessionRe
 		arg.LastOutput,
 		arg.JobID,
 		arg.UpdatedAt,
+		arg.Phase,
+		arg.DispatchedAt,
 	)
 	return err
 }

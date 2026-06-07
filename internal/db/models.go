@@ -4,6 +4,17 @@
 
 package db
 
+type AgentEvent struct {
+	ID           string
+	GenerationID *string
+	ResourceID   string
+	ApplyID      *string
+	EventType    string
+	Attempt      *int64
+	Content      *string
+	CreatedAt    string
+}
+
 type AgentNote struct {
 	ResourceID string
 	ApplyID    string
@@ -115,14 +126,16 @@ type Resource struct {
 }
 
 type SessionResource struct {
-	SessionID  string
-	ResourceID string
-	State      string
-	WaveIndex  int64
-	Attempts   int64
-	MaxRetries int64
-	LastError  *string
-	LastOutput *string
-	JobID      *string
-	UpdatedAt  string
+	SessionID    string
+	ResourceID   string
+	State        string
+	WaveIndex    int64
+	Attempts     int64
+	MaxRetries   int64
+	LastError    *string
+	LastOutput   *string
+	JobID        *string
+	UpdatedAt    string
+	Phase        string
+	DispatchedAt string
 }

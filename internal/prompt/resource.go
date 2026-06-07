@@ -33,6 +33,21 @@ func buildDomainPrompt(resource cuepkg.Resource, registry *cuepkg.Registry) stri
 	b.WriteString(string(declJSON))
 	b.WriteString("\n```\n\n")
 
+	// Surface implementation guidance (crate to use, gotchas) as a clean section
+	// rather than leaving it buried in the JSON declaration above. Applies to
+	// adapters and any resource whose meta carries notes/prompts.
+	if resource.Meta.Notes != "" {
+		b.WriteString("## Implementation Notes\n\n")
+		b.WriteString(resource.Meta.Notes + "\n\n")
+	}
+	if len(resource.Meta.Prompts) > 0 {
+		b.WriteString("## Implementation Guidance\n\n")
+		for _, p := range resource.Meta.Prompts {
+			b.WriteString("- " + p + "\n")
+		}
+		b.WriteString("\n")
+	}
+
 	if agg, ok := resource.Declaration.(cuepkg.Aggregate); ok {
 		if len(agg.Commands) > 0 {
 			b.WriteString("## Commands\n\n")

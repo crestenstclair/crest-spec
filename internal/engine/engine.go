@@ -51,22 +51,24 @@ func (e *Engine) release() {
 	<-e.sem
 }
 
-var disallowedTools = []string{
-	"Bash",
-	"Read",
-	"Edit",
-	"Write",
-	"Glob",
-	"Grep",
-	"WebFetch",
-	"WebSearch",
+// ActiveCount returns the number of currently running operations.
+func (e *Engine) ActiveCount() int {
+	return len(e.sem)
 }
+
+// MaxConcurrency returns the semaphore capacity.
+func (e *Engine) MaxConcurrency() int {
+	return cap(e.sem)
+}
+
+var disallowedTools []string
 
 // GenerateOpts holds the parameters for a constrained code generation call.
 type GenerateOpts struct {
 	Prompt             string
 	Model              string
 	AppendSystemPrompt string
+	OnStderr           func(line string)
 }
 
 // Generate runs a constrained code generation prompt. All filesystem and web
@@ -89,6 +91,7 @@ func (e *Engine) Generate(ctx context.Context, opts GenerateOpts) (*agent.RunRes
 		DisallowedTools:      disallowedTools,
 		NoSessionPersistence: true,
 		AppendSystemPrompt:   opts.AppendSystemPrompt,
+		OnStderr:             opts.OnStderr,
 	}
 
 	return e.r.RunPrompt(ctx, runOpts)
@@ -145,12 +148,11 @@ type CodeReviewOpts struct {
 var defaultCodeReviewModels = []string{
 	"claude-opus-4-6",
 	"claude-sonnet-4-6",
-	"claude-haiku-3-5",
 }
 
 // CodeReview fans out a code review prompt across multiple models concurrently
 // and aggregates the results into a single output with "## Model: X" section
-// headers. Defaults to opus, sonnet, and haiku when opts.Models is empty.
+// headers. Defaults to opus and sonnet when opts.Models is empty.
 func (e *Engine) CodeReview(ctx context.Context, opts CodeReviewOpts) (*agent.RunResult, error) {
 	models := opts.Models
 	if len(models) == 0 {
@@ -172,7 +174,7 @@ var defaultBugbotModels = []string{
 
 // Bugbot fans out a bug-analysis prompt across models using the same pattern
 // as CodeReview. The prompt is wrapped in a severity-ranking template.
-// Defaults to haiku when opts.Models is empty.
+// Defaults to sonnet when opts.Models is empty.
 func (e *Engine) Bugbot(ctx context.Context, opts BugbotOpts) (*agent.RunResult, error) {
 	models := opts.Models
 	if len(models) == 0 {

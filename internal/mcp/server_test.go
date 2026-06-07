@@ -264,6 +264,13 @@ func (f *fakeStore) UpdateSessionResourceState(sessionID, resourceID, state, las
 func (f *fakeStore) GetSessionResource(sessionID, resourceID string) (*storemod.SessionResource, error) {
 	return nil, nil
 }
+func (f *fakeStore) CreateAgentEvent(e storemod.AgentEvent) error { return nil }
+func (f *fakeStore) ListAgentEventsByResource(resourceID string) ([]storemod.AgentEvent, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListRecentAgentEvents(limit int) ([]storemod.AgentEvent, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Fake process tree (no recursion by default)

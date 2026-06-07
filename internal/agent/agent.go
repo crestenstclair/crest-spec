@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,6 +30,7 @@ type RunOpts struct {
 	DisallowedTools      []string
 	AppendSystemPrompt   string
 	NoSessionPersistence bool
+	OnStderr             func(line string)
 }
 
 type RunResult struct {
@@ -168,9 +170,8 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	}
 	cmd.WaitDelay = 5 * time.Second
 
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 
 	env, cleanup, err := a.buildEnv()
 	if err != nil {
@@ -188,8 +189,8 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 		cmd.Stdin = strings.NewReader(opts.Prompt)
 	}
 
-	runErr := cmd.Run()
-	result := parseResult(stdout.Bytes(), stderr.Bytes())
+	stderrBytes, runErr := runWithStderrStreaming(cmd, opts.OnStderr)
+	result := parseResult(stdout.Bytes(), stderrBytes)
 
 	if runErr != nil {
 		return result, fmt.Errorf("claude exited with error: %w (stderr: %s) (stdout: %s)", runErr, result.Stderr, result.Output)
@@ -199,6 +200,39 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	}
 
 	return result, nil
+}
+
+// runWithStderrStreaming runs the command, streaming stderr line-by-line
+// through onLine (if non-nil) while also collecting the full output.
+func runWithStderrStreaming(cmd *exec.Cmd, onLine func(string)) ([]byte, error) {
+	if onLine == nil {
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return stderr.Bytes(), err
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+
+	var collected bytes.Buffer
+	scanner := bufio.NewScanner(stderrPipe)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		collected.WriteString(line)
+		collected.WriteByte('\n')
+		onLine(line)
+	}
+
+	waitErr := cmd.Wait()
+	return collected.Bytes(), waitErr
 }
 
 // buildArgs constructs the CLI argument list from RunOpts. Returns the args

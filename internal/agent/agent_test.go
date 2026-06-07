@@ -22,7 +22,7 @@ func writeFakeClaude(t *testing.T, script string) string {
 func TestRunPrompt_BasicExecution(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\necho '{\"result\":\"hello world\",\"model\":\"claude-sonnet-4-6\",\"is_error\":false}'\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	result, err := a.RunPrompt(context.Background(), RunOpts{
 		Prompt: "say hello",
 	})
@@ -35,7 +35,7 @@ func TestRunPrompt_BasicExecution(t *testing.T) {
 func TestRunPrompt_IsErrorTrue(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\necho '{\"result\":\"something went wrong\",\"is_error\":true}'\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	result, err := a.RunPrompt(context.Background(), RunOpts{
 		Prompt: "fail",
 	})
@@ -48,7 +48,7 @@ func TestRunPrompt_IsErrorTrue(t *testing.T) {
 func TestRunPrompt_NonZeroExit(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\necho '{\"result\":\"partial output\",\"is_error\":false}' >&1\necho \"crash details\" >&2\nexit 1\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	result, err := a.RunPrompt(context.Background(), RunOpts{
 		Prompt: "crash",
 	})
@@ -61,7 +61,7 @@ func TestRunPrompt_NonZeroExit(t *testing.T) {
 func TestRunPrompt_ModelOverride(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\necho '{\"result\":\"ok\"}' >&1\necho \"$@\" >&2\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	result, err := a.RunPrompt(context.Background(), RunOpts{
 		Prompt: "test",
 		Model:  "claude-opus-4-8",
@@ -75,7 +75,7 @@ func TestRunPrompt_ModelOverride(t *testing.T) {
 func TestRunPrompt_LargePromptViaStdin(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\nINPUT=$(cat)\necho \"{\\\"result\\\":\\\"got ${#INPUT} bytes\\\"}\"\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	largePrompt := make([]byte, 9000)
 	for i := range largePrompt {
 		largePrompt[i] = 'A'
@@ -91,7 +91,7 @@ func TestRunPrompt_LargePromptViaStdin(t *testing.T) {
 func TestRunPrompt_ContextCancellation(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\nsleep 30\necho '{\"result\":\"should not reach\"}'\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -104,7 +104,7 @@ func TestRunPrompt_ContextCancellation(t *testing.T) {
 func TestRunPrompt_DisallowedTools(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\necho '{\"result\":\"ok\"}' >&1\necho \"$@\" >&2\n")
 
-	a := New(fakePath, "", "claude-sonnet-4-6", "default", 0)
+	a := New(fakePath, "", "claude-sonnet-4-6", 0)
 	result, err := a.RunPrompt(context.Background(), RunOpts{
 		Prompt:          "test",
 		DisallowedTools: []string{"Bash", "Read", "Edit"},
@@ -117,7 +117,7 @@ func TestRunPrompt_DisallowedTools(t *testing.T) {
 func TestModels(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\nif [ \"$1\" = \"models\" ]; then\n    echo \"claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5\"\n    exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n")
 
-	a := New(fakePath, "", "", "", 0)
+	a := New(fakePath, "", "", 0)
 	out, err := a.Models(context.Background())
 	require.NoError(t, err)
 	assert.Contains(t, out, "claude-sonnet-4-6")
@@ -126,7 +126,7 @@ func TestModels(t *testing.T) {
 func TestAbout(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n    echo \"claude-code v1.0.0\"\n    exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n")
 
-	a := New(fakePath, "", "", "", 0)
+	a := New(fakePath, "", "", 0)
 	out, err := a.About(context.Background())
 	require.NoError(t, err)
 	assert.Contains(t, out, "claude-code")
@@ -135,7 +135,7 @@ func TestAbout(t *testing.T) {
 func TestStatus(t *testing.T) {
 	fakePath := writeFakeClaude(t, "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n    echo \"Authenticated as user@example.com\"\n    exit 0\nfi\necho \"unexpected args: $@\" >&2\nexit 1\n")
 
-	a := New(fakePath, "", "", "", 0)
+	a := New(fakePath, "", "", 0)
 	out, err := a.Status(context.Background())
 	require.NoError(t, err)
 	assert.Contains(t, out, "Authenticated")

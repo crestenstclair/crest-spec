@@ -111,6 +111,22 @@ func CheckAssertions(assertions []cuepkg.Assertion, stdout, stderr string, exitC
 	return results
 }
 
+// maxOutputChars bounds how much command output is folded into a validation
+// failure message. Compiler errors and panics are usually near the end, so we
+// keep the tail. Large enough to carry a full rustc error, small enough to keep
+// the retry prompt focused.
+const maxOutputChars = 6000
+
+// truncateOutput keeps the last maxOutputChars of s, prefixing a marker when
+// truncation occurred so the model knows earlier output was elided.
+func truncateOutput(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxOutputChars {
+		return s
+	}
+	return "...[earlier output truncated]...\n" + s[len(s)-maxOutputChars:]
+}
+
 func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd string) ([]ValidationResult, error) {
 	var results []ValidationResult
 
@@ -125,7 +141,7 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 			passed := exitCode == 0
 			msg := ""
 			if !passed {
-				msg = fmt.Sprintf("%s failed (exit %d):\nstdout: %s\nstderr: %s", v.Kind, exitCode, stdout, stderr)
+				msg = fmt.Sprintf("%s failed (exit %d):\nstdout: %s\nstderr: %s", v.Kind, exitCode, truncateOutput(stdout), truncateOutput(stderr))
 			}
 			results = append(results, ValidationResult{
 				Passed:  passed,
@@ -146,7 +162,12 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 				}
 				msg := ""
 				if !allPassed {
-					msg = strings.Join(msgs, "; ")
+					// Include the command's stdout/stderr so the retry prompt
+					// carries the real failure (compiler error, panic, ...),
+					// not just "expected exit code 0, got 1".
+					msg = fmt.Sprintf("%s failed: %s\ncommand: %s\nstdout: %s\nstderr: %s",
+						v.Kind, strings.Join(msgs, "; "), strings.Join(v.Command, " "),
+						truncateOutput(stdout), truncateOutput(stderr))
 				}
 				results = append(results, ValidationResult{
 					Passed:  allPassed,
@@ -157,7 +178,7 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 				passed := exitCode == 0
 				msg := ""
 				if !passed {
-					msg = fmt.Sprintf("integration failed (exit %d):\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+					msg = fmt.Sprintf("integration failed (exit %d):\nstdout: %s\nstderr: %s", exitCode, truncateOutput(stdout), truncateOutput(stderr))
 				}
 				results = append(results, ValidationResult{
 					Passed:  passed,

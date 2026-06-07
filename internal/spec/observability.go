@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -14,11 +15,19 @@ import (
 
 // SessionStatusResult is the session-level overview returned by SessionStatus.
 type SessionStatusResult struct {
-	SessionID     string        `json:"session_id"`
-	ApplyID       string        `json:"apply_id"`
-	CurrentWave   int           `json:"current_wave"`
-	TotalWaves    int           `json:"total_waves"`
-	WaveSummaries []WaveSummary `json:"wave_summaries"`
+	SessionID     string            `json:"session_id"`
+	ApplyID       string            `json:"apply_id"`
+	CurrentWave   int               `json:"current_wave"`
+	TotalWaves    int               `json:"total_waves"`
+	WaveSummaries []WaveSummary     `json:"wave_summaries"`
+	Concurrency   ConcurrencyStatus `json:"concurrency"`
+}
+
+// ConcurrencyStatus reports the engine's semaphore utilization.
+type ConcurrencyStatus struct {
+	Active int `json:"active"`
+	Max    int `json:"max"`
+	Queued int `json:"queued"`
 }
 
 // WaveSummary counts resource states within a single wave.
@@ -51,12 +60,25 @@ func (s *Spec) SessionStatus(ctx context.Context, sessionID string) (*SessionSta
 
 	summaries := buildWaveSummaries(waves, allResources)
 
+	active := s.engine.ActiveCount()
+	max := s.engine.MaxConcurrency()
+	dispatched := countDispatched(allResources)
+	queued := dispatched - active
+	if queued < 0 {
+		queued = 0
+	}
+
 	return &SessionStatusResult{
 		SessionID:     sessionID,
 		ApplyID:       sess.ApplyID,
 		CurrentWave:   sess.CurrentWave,
 		TotalWaves:    len(waves),
 		WaveSummaries: summaries,
+		Concurrency: ConcurrencyStatus{
+			Active: active,
+			Max:    max,
+			Queued: queued,
+		},
 	}, nil
 }
 
@@ -88,6 +110,16 @@ func buildWaveSummaries(waves [][]string, allResources []store.SessionResource) 
 	return summaries
 }
 
+func countDispatched(resources []store.SessionResource) int {
+	n := 0
+	for _, r := range resources {
+		if r.State == string(StateDispatched) {
+			n++
+		}
+	}
+	return n
+}
+
 // ---------------------------------------------------------------------------
 // Wave-level status — detailed view of resources in a single wave
 // ---------------------------------------------------------------------------
@@ -100,12 +132,15 @@ type WaveStatusResult struct {
 
 // ResourceDetail holds per-resource observability data within a wave.
 type ResourceDetail struct {
-	ResourceID string `json:"resource_id"`
-	State      string `json:"state"`
-	Attempts   int    `json:"attempts"`
-	MaxRetries int    `json:"max_retries"`
-	LastError  string `json:"last_error,omitempty"`
-	DurationMS int64  `json:"duration_ms,omitempty"`
+	ResourceID   string `json:"resource_id"`
+	State        string `json:"state"`
+	Phase        string `json:"phase,omitempty"`
+	Attempts     int    `json:"attempts"`
+	MaxRetries   int    `json:"max_retries"`
+	LastError    string `json:"last_error,omitempty"`
+	DurationMS   int64  `json:"duration_ms,omitempty"`
+	ElapsedMS    int64  `json:"elapsed_ms,omitempty"`
+	DispatchedAt string `json:"dispatched_at,omitempty"`
 }
 
 // WaveStatus returns detailed resource-level state for a single wave.
@@ -117,13 +152,21 @@ func (s *Spec) WaveStatus(ctx context.Context, sessionID string, waveIndex int) 
 
 	details := make([]ResourceDetail, len(resources))
 	for i, r := range resources {
-		details[i] = ResourceDetail{
+		d := ResourceDetail{
 			ResourceID: r.ResourceID,
 			State:      r.State,
+			Phase:      r.Phase,
 			Attempts:   r.Attempts,
 			MaxRetries: r.MaxRetries,
 			LastError:  r.LastError,
 		}
+		if !r.DispatchedAt.IsZero() {
+			d.DispatchedAt = r.DispatchedAt.Format(time.RFC3339)
+			if r.State == "dispatched" {
+				d.ElapsedMS = time.Since(r.DispatchedAt).Milliseconds()
+			}
+		}
+		details[i] = d
 	}
 
 	return &WaveStatusResult{

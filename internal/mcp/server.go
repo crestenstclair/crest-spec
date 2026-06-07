@@ -53,6 +53,9 @@ type store interface {
 	GetActiveSession() (*storemod.Session, error)
 	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
 	GetSessionResource(sessionID, resourceID string) (*storemod.SessionResource, error)
+	CreateAgentEvent(e storemod.AgentEvent) error
+	ListAgentEventsByResource(resourceID string) ([]storemod.AgentEvent, error)
+	ListRecentAgentEvents(limit int) ([]storemod.AgentEvent, error)
 }
 
 // ---------------------------------------------------------------------------

@@ -48,13 +48,8 @@ project: assets: CpalAudioOutputAdapter: {
 }
 
 // ── ToneTestMain validation ────────────────────────────
-
-project: assets: ToneTestMain: validations: [
-	{kind: "integration", command: ["cargo", "run", "--", "--wav"], description: "arpeggio renders to WAV", assertions: [
-		{kind: "exit_code", expected: 0},
-		{kind: "file_exists", path: "tone-test.wav"},
-	]},
-]
+// Lives in phase-3.override-ToneTestMain.cue so it can replace phase 1's
+// validation without a CUE list-unification conflict (see that file).
 
 // ── Invariants ─────────────────────────────────────────
 

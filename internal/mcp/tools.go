@@ -53,7 +53,7 @@ func (s *Server) registerAsyncTools() {
 	s.addTool(toolDef{
 		Name:        "code_review",
 		Description: "Multi-model code review. Fans out across models and aggregates findings per model.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the review"},"models":{"type":"array","items":{"type":"string"},"description":"Models to use (default: opus, sonnet, haiku)"},"prompt":{"type":"string","description":"Review instructions or focus areas"}},"required":["prompt"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the review"},"models":{"type":"array","items":{"type":"string"},"description":"Models to use (default: opus, sonnet)"},"prompt":{"type":"string","description":"Review instructions or focus areas"}},"required":["prompt"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
 			Cwd    string   `json:"cwd"`
@@ -75,7 +75,7 @@ func (s *Server) registerAsyncTools() {
 	s.addTool(toolDef{
 		Name:        "bugbot",
 		Description: "Lightweight severity-ranked bug scan.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the scan"},"models":{"type":"array","items":{"type":"string"},"description":"Models to use (default: haiku)"},"prompt":{"type":"string","description":"Scan focus or file list"}},"required":["prompt"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"cwd":{"type":"string","description":"Working directory for the scan"},"models":{"type":"array","items":{"type":"string"},"description":"Models to use (default: sonnet)"},"prompt":{"type":"string","description":"Scan focus or file list"}},"required":["prompt"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
 			Cwd    string   `json:"cwd"`
@@ -632,10 +632,11 @@ func (s *Server) handleSpecDispatch(ctx context.Context, args json.RawMessage, p
 
 	start := time.Now()
 	result, err := s.spec.Dispatch(ctx, specmod.DispatchOpts{
-		SessionID:  p.SessionID,
-		ResourceID: p.ResourceID,
-		Model:      p.Model,
-		OnProgress: s.progressSender(progressToken),
+		SessionID:    p.SessionID,
+		ResourceID:   p.ResourceID,
+		Model:        p.Model,
+		OnProgress:   s.progressSender(progressToken),
+		OnAgentEvent: s.agentEventRecorder(),
 	})
 	s.metrics.Record("spec/dispatch", time.Since(start), err)
 	if err != nil {
@@ -660,6 +661,7 @@ func (s *Server) handleSpecRunWave(ctx context.Context, args json.RawMessage, pr
 		Model:          p.Model,
 		ModelOverrides: p.ModelOverrides,
 		OnProgress:     s.progressSender(progressToken),
+		OnAgentEvent:   s.agentEventRecorder(),
 	})
 	s.metrics.Record("spec/run_wave", time.Since(start), err)
 	if err != nil {
@@ -686,6 +688,21 @@ func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, p
 		b, _ := json.Marshal(result)
 		return string(b), nil
 	}, progressToken)
+}
+
+// agentEventRecorder returns an AgentEventFunc that writes real-time agent
+// events to the store for dashboard tracing.
+func (s *Server) agentEventRecorder() specmod.AgentEventFunc {
+	return func(resourceID, eventType string, attempt int, content string) {
+		s.store.CreateAgentEvent(storemod.AgentEvent{
+			ID:         uuid.NewString(),
+			ResourceID: resourceID,
+			EventType:  eventType,
+			Attempt:    attempt,
+			Content:    content,
+			CreatedAt:  time.Now(),
+		})
+	}
 }
 
 // progressSender returns a ProgressFunc that writes MCP progress notifications.

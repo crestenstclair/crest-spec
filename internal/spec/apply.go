@@ -85,7 +85,7 @@ func (s *Spec) Apply(ctx context.Context, opts BeginOpts) (*ApplyResult, error) 
 }
 
 func (s *Spec) applyResource(ctx context.Context, sessionID, applyID, resourceID string) ResourceApplyResult {
-	dr := s.dispatchResource(ctx, sessionID, applyID, resourceID, s.cfg.GenerateModel)
+	dr := s.dispatchResource(ctx, sessionID, applyID, resourceID, s.cfg.GenerateModel, nil)
 
 	var filePaths []string
 	for _, f := range dr.Files {

@@ -13,7 +13,7 @@ func TestNew_Defaults(t *testing.T) {
 
 	assert.Equal(t, "claude", cfg.AgentPath)
 	assert.Equal(t, "claude-sonnet-4-6", cfg.DefaultModel)
-	assert.Equal(t, "default", cfg.PermissionMode)
+	assert.Equal(t, "default", cfg.Mode)
 	assert.Equal(t, 5, cfg.MaxConcurrency)
 	assert.Equal(t, "claude-sonnet-4-6", cfg.GenerateModel)
 	assert.Equal(t, "claude-sonnet-4-6", cfg.VerifyModel)

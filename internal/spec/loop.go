@@ -61,9 +61,11 @@ type LoopOpts struct {
 	Invariants       []cuepkg.Invariant
 	TypeCheckCommand string
 	TestCommand      string
+	SessionID        string
 	ApplyID          string
 	ResourceID       string
 	Store            specStore
+	OnEvent          func(eventType string, attempt int, content string)
 }
 
 func runConstraintLoop(ctx context.Context, eng specEngine, opts LoopOpts) (*LoopResult, error) {
@@ -73,6 +75,7 @@ func runConstraintLoop(ctx context.Context, eng specEngine, opts LoopOpts) (*Loo
 	var records []AttemptRecord
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		updatePhase(opts, "generating", attempt)
 		rec := runAttempt(ctx, eng, opts, attempt, &lastOutput, &lastError)
 		records = append(records, rec)
 
@@ -95,20 +98,35 @@ func runConstraintLoop(ctx context.Context, eng specEngine, opts LoopOpts) (*Loo
 	}, nil
 }
 
+func emitEvent(opts LoopOpts, eventType string, attempt int, content string) {
+	if opts.OnEvent != nil {
+		opts.OnEvent(eventType, attempt, content)
+	}
+}
+
+func updatePhase(opts LoopOpts, phase string, attempt int) {
+	if opts.Store != nil && opts.SessionID != "" && opts.ResourceID != "" {
+		opts.Store.UpdateSessionResourcePhase(opts.SessionID, opts.ResourceID, phase, attempt)
+	}
+}
+
 func runAttempt(
 	ctx context.Context, eng specEngine, opts LoopOpts,
 	attempt int, lastOutput, lastError *string,
 ) AttemptRecord {
 	start := time.Now()
+	emitEvent(opts, "attempt_start", attempt, fmt.Sprintf("attempt %d of %d", attempt, opts.MaxRetries+1))
 
 	genPrompt := opts.Prompt
 	if attempt > 1 && *lastError != "" {
 		genPrompt = promptpkg.BuildFixPrompt(opts.Prompt, *lastOutput, *lastError)
 	}
 
-	blocks, output, err := generate(ctx, eng, genPrompt, opts)
+	emitEvent(opts, "generate_start", attempt, fmt.Sprintf("model=%s", opts.Model))
+	blocks, output, err := generate(ctx, eng, genPrompt, opts, attempt)
 	if err != nil {
 		*lastError = fmt.Sprintf("generation error: %s", err.Error())
+		emitEvent(opts, "generate_fail", attempt, *lastError)
 		return AttemptRecord{
 			Prompt: genPrompt, Output: "", Outcome: "error",
 			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
@@ -118,44 +136,67 @@ func runAttempt(
 
 	if blocks == nil {
 		*lastError = "parse error: no code blocks found in output"
+		emitEvent(opts, "parse_fail", attempt, *lastError)
 		return AttemptRecord{
 			Prompt: genPrompt, Output: output, Outcome: "rejected_parse",
 			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 		}
 	}
+	emitEvent(opts, "generate_done", attempt, fmt.Sprintf("%d code blocks extracted", len(blocks)))
 
+	updatePhase(opts, "validating", attempt)
+	emitEvent(opts, "validate_start", attempt, "")
 	if err := runValidationStep(ctx, opts, lastError); err != nil {
+		emitEvent(opts, "validate_fail", attempt, *lastError)
 		return AttemptRecord{
 			Prompt: genPrompt, Output: output, Outcome: "rejected_validation",
 			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 		}
 	}
+	emitEvent(opts, "validate_done", attempt, "passed")
 
+	updatePhase(opts, "checking_invariants", attempt)
+	emitEvent(opts, "invariant_start", attempt, fmt.Sprintf("%d invariants", len(opts.Invariants)))
 	if err := runInvariantStep(ctx, eng, blocks, opts, lastError); err != nil {
+		emitEvent(opts, "invariant_fail", attempt, *lastError)
 		return AttemptRecord{
 			Prompt: genPrompt, Output: output, Outcome: "rejected_invariant",
 			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 		}
 	}
+	emitEvent(opts, "invariant_done", attempt, "passed")
 
+	updatePhase(opts, "reviewing", attempt)
+	emitEvent(opts, "review_start", attempt, fmt.Sprintf("level=%s", opts.ReviewLevel))
 	if err := runReviewStep(ctx, eng, output, opts, lastError); err != nil {
+		emitEvent(opts, "review_fail", attempt, *lastError)
 		return AttemptRecord{
 			Prompt: genPrompt, Output: output, Outcome: "rejected_review",
 			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 		}
 	}
+	emitEvent(opts, "review_done", attempt, "passed")
 
+	emitEvent(opts, "attempt_done", attempt, fmt.Sprintf("accepted in %dms", time.Since(start).Milliseconds()))
 	return AttemptRecord{
 		Prompt: genPrompt, Output: output, Outcome: "accepted",
 		DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 	}
 }
 
-func generate(ctx context.Context, eng specEngine, prompt string, opts LoopOpts) ([]CodeBlock, string, error) {
+func generate(ctx context.Context, eng specEngine, prompt string, opts LoopOpts, attempt int) ([]CodeBlock, string, error) {
+	var onStderr func(string)
+	if opts.OnEvent != nil {
+		onStderr = func(line string) {
+			opts.OnEvent("stderr", attempt, line)
+		}
+	}
+
 	res, err := eng.Generate(ctx, engine.GenerateOpts{
 		Prompt:             prompt,
 		Model:              opts.Model,
 		AppendSystemPrompt: opts.SystemPrompt,
+		OnStderr:           onStderr,
 	})
 	if err != nil {
 		return nil, "", err
@@ -302,29 +343,131 @@ func runReviewStep(ctx context.Context, eng specEngine, output string, opts Loop
 
 const reviewJSONInstruction = `
 
-Respond in JSON format: {"passed": true/false, "findings": [{"severity": "critical|major|minor", "description": "...", "file": "...", "line": 0}], "summary": "..."}`
+IMPORTANT: Respond with ONLY a single JSON object and nothing else — no prose, no markdown fences, no text before or after. Use exactly this shape:
+{"passed": true, "findings": [{"severity": "critical|major|minor", "description": "...", "file": "...", "line": 0}], "summary": "..."}
+Set "passed" to false only when there is at least one finding serious enough to block acceptance.`
 
 // parseReviewOutput attempts to parse the LLM output as structured JSON.
-// It returns nil if parsing fails, signaling the caller to fall back to
-// string matching.
+// Multi-model reviews (engine.CodeReview / Bugbot) aggregate each model's reply
+// under a "## Model: X" header, so the output may contain several JSON objects.
+// Each section is parsed independently and combined: the review passes only if
+// every section passed, and findings are unioned. Returns nil only when no
+// section yields parseable JSON, signaling the caller to fall back to string
+// matching.
 func parseReviewOutput(output string) *ReviewOutput {
-	// Try direct unmarshal first.
+	var combined *ReviewOutput
+	for _, section := range splitModelSections(output) {
+		ro := parseSingleReviewJSON(section)
+		if ro == nil {
+			continue
+		}
+		if combined == nil {
+			combined = &ReviewOutput{Passed: true}
+		}
+		if !ro.Passed {
+			combined.Passed = false
+		}
+		combined.Findings = append(combined.Findings, ro.Findings...)
+		if ro.Summary != "" {
+			if combined.Summary != "" {
+				combined.Summary += " | "
+			}
+			combined.Summary += ro.Summary
+		}
+	}
+	return combined
+}
+
+// splitModelSections splits aggregated multi-model output on "## Model:" headers.
+// When no header is present the whole output is returned as a single section.
+func splitModelSections(output string) []string {
+	const marker = "## Model:"
+	if !strings.Contains(output, marker) {
+		return []string{output}
+	}
+	parts := strings.Split(output, marker)
+	sections := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			sections = append(sections, p)
+		}
+	}
+	return sections
+}
+
+// parseSingleReviewJSON parses one section's JSON, tolerating surrounding prose
+// or markdown fences by extracting the outermost JSON object.
+func parseSingleReviewJSON(section string) *ReviewOutput {
 	var ro ReviewOutput
-	if err := json.Unmarshal([]byte(output), &ro); err == nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(section)), &ro); err == nil {
 		return &ro
 	}
-
-	// The LLM may wrap JSON in markdown fences or surrounding prose.
-	// Extract the first JSON object from the output.
-	start := strings.Index(output, "{")
-	end := strings.LastIndex(output, "}")
+	start := strings.Index(section, "{")
+	end := strings.LastIndex(section, "}")
 	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(output[start:end+1]), &ro); err == nil {
+		if err := json.Unmarshal([]byte(section[start:end+1]), &ro); err == nil {
 			return &ro
 		}
 	}
-
 	return nil
+}
+
+// negationTokens precede a keyword to signal it is being denied
+// (e.g. "no critical issues", "0 critical", "free of critical bugs").
+var negationTokens = []string{
+	"no ", "no-", "not ", "n't ", "without ", "zero ", "0 ",
+	"none", "free of ", "free from ", "absent", "lack of ",
+}
+
+// indicatesFailure reports whether any keyword appears in output as a genuine
+// positive finding rather than a negated one. The output is split into clauses
+// (on sentence/clause punctuation); a clause counts as a failure only if it
+// contains a keyword and NO negation. So "No critical bugs", "none of the
+// findings are critical", and "Critical issues: none" do NOT indicate failure,
+// while "found a critical bug" and "No minor issues, but a critical bug exists"
+// do. Case-insensitive. This is only a fallback for when structured JSON review
+// output cannot be parsed.
+func indicatesFailure(output string, keywords []string) bool {
+	for _, clause := range splitClauses(strings.ToLower(output)) {
+		if !clauseContainsAny(clause, keywords) {
+			continue
+		}
+		if !containsNegation(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitClauses breaks text on sentence and clause boundaries so negation
+// detection stays scoped to the clause containing the keyword. ':' is
+// deliberately not a delimiter, so "Critical issues: none" stays one clause.
+func splitClauses(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		switch r {
+		case '.', ';', ',', '\n', '!', '?':
+			return true
+		}
+		return false
+	})
+}
+
+func clauseContainsAny(clause string, keywords []string) bool {
+	for _, kw := range keywords {
+		if strings.Contains(clause, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNegation(prefix string) bool {
+	for _, n := range negationTokens {
+		if strings.Contains(prefix, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildReviewMessage produces the Message string for a ValidationResult.
@@ -381,21 +524,21 @@ func dispatchReview(ctx context.Context, eng specEngine, code string, opts LoopO
 			Prompt: fmt.Sprintf("Review this generated code:\n\n%s%s", code, reviewJSONInstruction),
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !strings.Contains(strings.ToUpper(o), "FAIL") }, err
+		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail", "critical"}) }, err
 
 	case "light":
 		res, err := eng.Bugbot(ctx, engine.BugbotOpts{
 			Prompt: code + reviewJSONInstruction,
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !strings.Contains(strings.ToLower(o), "critical") }, err
+		return res, func(o string) bool { return !indicatesFailure(o, []string{"critical"}) }, err
 
 	case "solid":
 		res, err := eng.Review(ctx, engine.ReviewOpts{
 			Code:         code,
 			Requirements: opts.Prompt + reviewJSONInstruction,
 		})
-		return res, func(o string) bool { return strings.Contains(strings.ToUpper(o), "PASS") }, err
+		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail"}) }, err
 
 	case "deep":
 		prompt := promptpkg.BuildDeepReviewPrompt(code)
@@ -403,7 +546,7 @@ func dispatchReview(ctx context.Context, eng specEngine, code string, opts LoopO
 			Prompt: prompt,
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !strings.Contains(strings.ToUpper(o), "FAIL") }, err
+		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail", "critical"}) }, err
 
 	default:
 		return nil, nil, nil

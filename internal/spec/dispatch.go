@@ -55,12 +55,18 @@ type ProgressUpdate struct {
 // The MCP handler uses this to send progress notifications over the wire.
 type ProgressFunc func(update ProgressUpdate)
 
+// AgentEventFunc is called for each real-time event from the agent subprocess
+// and constraint loop stages. The attempt number is 0 for resource-level events
+// (started/completed/failed) and 1+ for per-attempt events.
+type AgentEventFunc func(resourceID, eventType string, attempt int, content string)
+
 // DispatchOpts configures a single-resource dispatch.
 type DispatchOpts struct {
-	SessionID  string
-	ResourceID string
-	Model      string
-	OnProgress ProgressFunc
+	SessionID    string
+	ResourceID   string
+	Model        string
+	OnProgress   ProgressFunc
+	OnAgentEvent AgentEventFunc
 }
 
 // RunWaveOpts configures a full wave dispatch.
@@ -69,6 +75,7 @@ type RunWaveOpts struct {
 	Model          string
 	ModelOverrides map[string]string
 	OnProgress     ProgressFunc
+	OnAgentEvent   AgentEventFunc
 }
 
 // RunWaveResult is the outcome of dispatching all resources in a wave.
@@ -99,7 +106,7 @@ func (s *Spec) Dispatch(ctx context.Context, opts DispatchOpts) (*DispatchResult
 		})
 	}
 
-	result := s.dispatchResource(ctx, opts.SessionID, sess.ApplyID, opts.ResourceID, model)
+	result := s.dispatchResource(ctx, opts.SessionID, sess.ApplyID, opts.ResourceID, model, opts.OnAgentEvent)
 
 	if opts.OnProgress != nil {
 		opts.OnProgress(ProgressUpdate{
@@ -114,11 +121,19 @@ func (s *Spec) Dispatch(ctx context.Context, opts DispatchOpts) (*DispatchResult
 
 func (s *Spec) dispatchResource(
 	ctx context.Context, sessionID, applyID, resourceID, model string,
+	onAgentEvent AgentEventFunc,
 ) *DispatchResult {
 	startTime := time.Now()
 
+	if onAgentEvent != nil {
+		onAgentEvent(resourceID, "started", 0, fmt.Sprintf("model=%s", model))
+	}
+
 	ctxResult, err := s.Context(ctx, sessionID, resourceID)
 	if err != nil {
+		if onAgentEvent != nil {
+			onAgentEvent(resourceID, "failed", 0, err.Error())
+		}
 		s.store.UpdateSessionResourceState(
 			sessionID, resourceID, string(StateErrored), err.Error(), "", 0, "",
 		)
@@ -128,11 +143,21 @@ func (s *Spec) dispatchResource(
 		}
 	}
 
+	s.store.SetSessionResourceDispatched(sessionID, resourceID)
+
 	planResult, _ := s.Plan(ctx)
-	loopOpts := s.buildLoopOpts(ctxResult, applyID, resourceID, model, planResult)
+	loopOpts := s.buildLoopOpts(ctxResult, sessionID, applyID, resourceID, model, planResult)
+	if onAgentEvent != nil {
+		loopOpts.OnEvent = func(eventType string, attempt int, content string) {
+			onAgentEvent(resourceID, eventType, attempt, content)
+		}
+	}
 
 	loopResult, err := runConstraintLoop(ctx, s.engine, loopOpts)
 	if err != nil {
+		if onAgentEvent != nil {
+			onAgentEvent(resourceID, "failed", 0, err.Error())
+		}
 		s.store.UpdateSessionResourceState(
 			sessionID, resourceID, string(StateErrored), err.Error(), "", 1, "",
 		)
@@ -145,6 +170,9 @@ func (s *Spec) dispatchResource(
 	s.recordAttempts(applyID, resourceID, model, loopResult.AttemptRecords)
 
 	if loopResult.Outcome == "rejected" {
+		if onAgentEvent != nil {
+			onAgentEvent(resourceID, "failed", 0, fmt.Sprintf("rejected after %d attempts: %s", loopResult.Attempts, loopResult.RejectionReason))
+		}
 		s.store.UpdateSessionResourceState(
 			sessionID, resourceID, string(StateRejected),
 			loopResult.RejectionReason, "", loopResult.Attempts, "",
@@ -179,6 +207,10 @@ func (s *Spec) dispatchResource(
 		}
 	}
 
+	if onAgentEvent != nil {
+		onAgentEvent(resourceID, "completed", 0, fmt.Sprintf("%d files, %d attempts, %dms", len(files), loopResult.Attempts, time.Since(startTime).Milliseconds()))
+	}
+
 	return &DispatchResult{
 		ResourceID: resourceID, Status: "committed", Files: files,
 		Validations: commitResult.Validations, Attempts: loopResult.Attempts,
@@ -187,7 +219,7 @@ func (s *Spec) dispatchResource(
 }
 
 func (s *Spec) buildLoopOpts(
-	ctxResult *ContextResult, applyID, resourceID, model string,
+	ctxResult *ContextResult, sessionID, applyID, resourceID, model string,
 	planResult *PlanResult,
 ) LoopOpts {
 	opts := LoopOpts{
@@ -199,6 +231,7 @@ func (s *Spec) buildLoopOpts(
 		Cwd:              s.cfg.SpecDir,
 		TypeCheckCommand: s.cfg.TypeCheckCommand,
 		TestCommand:      s.cfg.TestCommand,
+		SessionID:        sessionID,
 		ApplyID:          applyID,
 		ResourceID:       resourceID,
 		Store:            s.store,
@@ -292,7 +325,7 @@ func (s *Spec) dispatchWaveResources(
 				model = s.cfg.GenerateModel
 			}
 
-			dr := s.dispatchResource(ctx, opts.SessionID, applyID, resourceID, model)
+			dr := s.dispatchResource(ctx, opts.SessionID, applyID, resourceID, model, opts.OnAgentEvent)
 
 			mu.Lock()
 			results = append(results, *dr)

@@ -150,6 +150,49 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
 .sse-indicator { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
 .sse-connected { background: rgba(63, 185, 80, 0.15); color: var(--green); }
 .sse-disconnected { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+
+.agent-event { padding: 2px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: flex-start; }
+.agent-event:last-child { border-bottom: none; }
+.agent-event-time { color: var(--text-muted); white-space: nowrap; flex-shrink: 0; width: 75px; }
+.agent-event-type { white-space: nowrap; flex-shrink: 0; width: 70px; }
+.agent-event-resource { color: var(--accent); white-space: nowrap; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.agent-event-content { color: var(--text); white-space: pre-wrap; word-break: break-word; flex: 1; min-width: 0; }
+.agent-event.type-started .agent-event-type { color: var(--green); }
+.agent-event.type-completed .agent-event-type { color: var(--green); }
+.agent-event.type-failed .agent-event-type { color: var(--red); }
+.agent-event.type-stderr .agent-event-type { color: var(--text-muted); }
+.agent-event.type-attempt_start .agent-event-type { color: var(--accent); }
+.agent-event.type-attempt_done .agent-event-type { color: var(--green); }
+.agent-event.type-generate_start .agent-event-type { color: var(--purple); }
+.agent-event.type-generate_done .agent-event-type { color: var(--purple); }
+.agent-event.type-generate_fail .agent-event-type { color: var(--red); }
+.agent-event.type-parse_fail .agent-event-type { color: var(--red); }
+.agent-event.type-validate_start .agent-event-type { color: var(--yellow); }
+.agent-event.type-validate_done .agent-event-type { color: var(--green); }
+.agent-event.type-validate_fail .agent-event-type { color: var(--red); }
+.agent-event.type-invariant_start .agent-event-type { color: var(--yellow); }
+.agent-event.type-invariant_done .agent-event-type { color: var(--green); }
+.agent-event.type-invariant_fail .agent-event-type { color: var(--red); }
+.agent-event.type-review_start .agent-event-type { color: var(--purple); }
+.agent-event.type-review_done .agent-event-type { color: var(--green); }
+.agent-event.type-review_fail .agent-event-type { color: var(--red); }
+
+.loop-timeline { margin-top: 12px; }
+.loop-attempt { margin-bottom: 16px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+.loop-attempt-header { font-size: 13px; font-weight: 600; color: var(--accent); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+.loop-stages { display: flex; gap: 2px; height: 28px; align-items: stretch; }
+.loop-stage {
+  flex: 1; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px;
+  position: relative; cursor: default; transition: opacity 0.15s;
+}
+.loop-stage:hover { opacity: 0.85; }
+.loop-stage.pending { background: var(--border); color: var(--text-muted); }
+.loop-stage.running { background: rgba(88, 166, 255, 0.25); color: var(--accent); animation: dispatched-pulse 1.5s infinite; }
+.loop-stage.passed { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+.loop-stage.failed { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+.loop-stage.skipped { background: var(--border); color: var(--text-muted); opacity: 0.5; }
+.loop-stage-detail { margin-top: 6px; font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
 </style>
 </head>
 <body>
@@ -211,6 +254,7 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
   <div class="main">
     <div class="tab-bar">
       <div class="tab active" data-tab="session">Session</div>
+      <div class="tab" data-tab="agents">Agent Trace</div>
       <div class="tab" data-tab="generations">Generations</div>
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
@@ -220,6 +264,23 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
     <!-- Tab: Session (Wave Progress) -->
     <div class="tab-content active" id="tab-session">
       <div id="session-waves" class="empty">Loading...</div>
+    </div>
+
+    <!-- Tab: Agent Trace -->
+    <div class="tab-content" id="tab-agents">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h2 style="margin-bottom:0">Agent Events</h2>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="agent-filter" placeholder="Filter by resource..." style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px;width:200px">
+            <button onclick="toggleAgentStream()" id="agent-stream-btn" style="background:var(--surface-hover);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:12px;cursor:pointer">Stream</button>
+            <span class="sse-indicator sse-disconnected" id="agent-sse-status" style="display:none">off</span>
+          </div>
+        </div>
+        <div id="agent-events-log" style="max-height:600px;overflow-y:auto;font-family:var(--mono);font-size:12px">
+          <div class="empty">Loading...</div>
+        </div>
+      </div>
     </div>
 
     <!-- Tab: Generations -->
@@ -412,6 +473,9 @@ function handleSSEData(data) {
   if (data.jobs && currentTab === 'jobs') {
     renderJobsTable(data.jobs);
   }
+  if (data.agent_events && currentTab === 'agents' && !agentStreamSource) {
+    renderAgentEvents(data.agent_events);
+  }
 }
 
 // ─── Polling fallback ──────────────────────────────────────────────
@@ -573,12 +637,155 @@ function renderDonut(counts, total) {
 async function loadTabData(tab) {
   switch (tab) {
     case 'session': await loadSessionTab(); break;
+    case 'agents': await loadAgentsTab(); break;
     case 'generations': await loadGenerationsTab(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'jobs': await loadJobsTab(); break;
   }
 }
+
+// ─── Tab: Agent Trace ─────────────────────────────────────────────
+let agentStreamSource = null;
+let agentStreamResourceID = null;
+
+async function loadAgentsTab() {
+  const el = document.getElementById('agent-events-log');
+  const events = await fetchJSON('/api/agent-events-recent?limit=200');
+  if (!events) {
+    el.innerHTML = '<div class="error-msg">Error loading agent events</div>';
+    return;
+  }
+  if (events.length === 0) {
+    el.innerHTML = '<div class="empty">No agent events recorded yet. Events appear when spec/dispatch or spec/run_wave is called.</div>';
+    return;
+  }
+  renderAgentEvents(events);
+}
+
+function renderAgentEvents(events) {
+  const el = document.getElementById('agent-events-log');
+  const filter = (document.getElementById('agent-filter').value || '').toLowerCase();
+
+  const filtered = filter
+    ? events.filter(e => {
+        const rid = (e.ResourceID || e.resource_id || '').toLowerCase();
+        const type = (e.EventType || e.event_type || '').toLowerCase();
+        return rid.includes(filter) || type.includes(filter);
+      })
+    : events;
+
+  if (filtered.length === 0) {
+    el.innerHTML = '<div class="empty">No events match filter</div>';
+    return;
+  }
+
+  let html = '';
+  for (const e of filtered) {
+    const ts = e.CreatedAt || e.created_at || '';
+    const type = e.EventType || e.event_type || '';
+    const rid = e.ResourceID || e.resource_id || '';
+    const content = e.Content || e.content || '';
+    const attempt = e.Attempt || e.attempt || 0;
+
+    const time = ts ? new Date(ts).toLocaleTimeString() : '';
+    const attemptLabel = attempt > 0 ? '<span style="color:var(--text-muted);width:30px;flex-shrink:0;text-align:center">#' + attempt + '</span>' : '<span style="width:30px;flex-shrink:0"></span>';
+
+    html += '<div class="agent-event type-' + esc(type) + '">' +
+      '<span class="agent-event-time">' + esc(time) + '</span>' +
+      attemptLabel +
+      '<span class="agent-event-type">' + esc(type) + '</span>' +
+      '<span class="agent-event-resource" title="' + esc(rid) + '">' + esc(rid.split('/').pop() || rid) + '</span>' +
+      '<span class="agent-event-content">' + esc(content) + '</span>' +
+    '</div>';
+  }
+  el.innerHTML = html;
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleAgentStream() {
+  const btn = document.getElementById('agent-stream-btn');
+  const indicator = document.getElementById('agent-sse-status');
+
+  if (agentStreamSource) {
+    agentStreamSource.close();
+    agentStreamSource = null;
+    agentStreamResourceID = null;
+    btn.textContent = 'Stream';
+    btn.style.background = 'var(--surface-hover)';
+    indicator.style.display = 'none';
+    return;
+  }
+
+  const filter = document.getElementById('agent-filter').value.trim();
+  if (!filter) {
+    loadAgentsTab();
+    const refreshInterval = setInterval(() => {
+      if (currentTab !== 'agents' || agentStreamSource) {
+        clearInterval(refreshInterval);
+        return;
+      }
+      loadAgentsTab();
+    }, 2000);
+    btn.textContent = 'Stop';
+    btn.style.background = 'rgba(248, 81, 73, 0.2)';
+    agentStreamSource = { close: () => clearInterval(refreshInterval) };
+    indicator.style.display = '';
+    indicator.className = 'sse-indicator sse-connected';
+    indicator.textContent = 'auto-refresh';
+    return;
+  }
+
+  agentStreamResourceID = filter;
+  agentStreamSource = new EventSource(API + '/api/agent-events-stream/' + encodeURIComponent(filter));
+  btn.textContent = 'Stop';
+  btn.style.background = 'rgba(248, 81, 73, 0.2)';
+  indicator.style.display = '';
+
+  agentStreamSource.onopen = () => {
+    indicator.className = 'sse-indicator sse-connected';
+    indicator.textContent = 'streaming';
+  };
+
+  agentStreamSource.onmessage = (event) => {
+    try {
+      const events = JSON.parse(event.data);
+      if (events.length > 0) {
+        const el = document.getElementById('agent-events-log');
+        let html = el.innerHTML;
+        if (html.includes('class="empty"')) html = '';
+        for (const e of events) {
+          const ts = e.CreatedAt || e.created_at || '';
+          const type = e.EventType || e.event_type || '';
+          const rid = e.ResourceID || e.resource_id || '';
+          const content = e.Content || e.content || '';
+          const time = ts ? new Date(ts).toLocaleTimeString() : '';
+
+          html += '<div class="agent-event type-' + esc(type) + '">' +
+            '<span class="agent-event-time">' + esc(time) + '</span>' +
+            '<span class="agent-event-type">' + esc(type) + '</span>' +
+            '<span class="agent-event-resource" title="' + esc(rid) + '">' + esc(rid.split('/').pop() || rid) + '</span>' +
+            '<span class="agent-event-content">' + esc(content) + '</span>' +
+          '</div>';
+        }
+        el.innerHTML = html;
+        el.scrollTop = el.scrollHeight;
+      }
+    } catch {}
+  };
+
+  agentStreamSource.onerror = () => {
+    indicator.className = 'sse-indicator sse-disconnected';
+    indicator.textContent = 'disconnected';
+  };
+}
+
+// Filter input triggers re-render
+document.getElementById('agent-filter').addEventListener('input', function() {
+  if (currentTab === 'agents' && !agentStreamSource) {
+    loadAgentsTab();
+  }
+});
 
 // ─── Tab: Session (Wave Progress) ──────────────────────────────────
 async function loadSessionTab() {
@@ -665,10 +872,19 @@ function renderSessionWaves(resources, sess) {
     for (const r of waveResources) {
       const rid = r.ResourceID || r.resource_id || '';
       const st = r.State || r.state || 'pending';
+      const phase = r.Phase || r.phase || '';
       const attempts = r.Attempts || r.attempts || 0;
       const maxRetries = r.MaxRetries || r.max_retries || 0;
       const lastErr = r.LastError || r.last_error || '';
       const updatedAt = r.UpdatedAt || r.updated_at || '';
+      const elapsedMs = r.ElapsedMS || r.elapsed_ms || 0;
+
+      const phaseDisplay = phase && st === 'dispatched'
+        ? '<span style="color:var(--purple);font-size:11px;margin-left:4px">' + esc(phase) + '</span>'
+        : '';
+      const elapsedDisplay = elapsedMs > 0
+        ? '<span style="color:var(--text-muted);font-size:11px;margin-left:4px">' + formatDuration(elapsedMs) + '</span>'
+        : '';
 
       const errDisplay = lastErr
         ? '<span class="collapsible" style="max-height:40px;display:block;font-size:11px;color:var(--text-muted)">' +
@@ -676,13 +892,15 @@ function renderSessionWaves(resources, sess) {
           (lastErr.length > 80 ? '<span class="collapsible-toggle" onclick="event.stopPropagation();toggleCollapsible(this)">Show more</span>' : '')
         : '<span style="color:var(--text-muted)">--</span>';
 
-      html += '<tr>' +
+      const rowIdx = 'wave-res-' + w + '-' + waveResources.indexOf(r);
+      html += '<tr class="clickable" onclick="toggleWaveResourceTrace(\'' + rowIdx + '\', \'' + encodeURIComponent(rid) + '\')">' +
         '<td class="resource-id">' + esc(rid) + '</td>' +
-        '<td>' + statusBadge(st) + '</td>' +
+        '<td>' + statusBadge(st) + phaseDisplay + elapsedDisplay + '</td>' +
         '<td class="mono">' + attempts + '/' + maxRetries + '</td>' +
         '<td>' + errDisplay + '</td>' +
         '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(updatedAt) + '</td>' +
-      '</tr>';
+      '</tr>' +
+      '<tr id="' + rowIdx + '" style="display:none"><td colspan="5"></td></tr>';
     }
 
     html += '</tbody></table></div></div>';
@@ -703,6 +921,177 @@ function toggleCollapsible(btn) {
     btn.textContent = sib.classList.contains('expanded') ? 'Show less' : 'Show more';
   }
 }
+
+async function toggleWaveResourceTrace(rowID, encodedResourceID) {
+  const row = document.getElementById(rowID);
+  if (!row) return;
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Loading agent trace...</div></div>';
+  row.style.display = '';
+
+  const resourceID = decodeURIComponent(encodedResourceID);
+  const events = await fetchJSON('/api/agent-events/' + encodeURIComponent(resourceID));
+
+  let html = '<div class="drilldown">';
+  if (!events || events.length === 0) {
+    html += '<div class="empty">No agent events for this resource</div>';
+  } else {
+    html += renderConstraintLoopTimeline(events);
+  }
+  html += '</div>';
+  td.innerHTML = html;
+}
+
+function renderConstraintLoopTimeline(events) {
+  const STAGES = ['generate', 'parse', 'validate', 'invariant', 'review'];
+  const attempts = groupEventsByAttempt(events);
+
+  if (attempts.length === 0) {
+    return renderFlatEventLog(events);
+  }
+
+  let html = '<h3>Constraint Loop (' + attempts.length + ' attempt' + (attempts.length !== 1 ? 's' : '') + ')</h3>';
+  html += '<div class="loop-timeline">';
+
+  for (const att of attempts) {
+    const outcome = att.outcome;
+    const outcomeBadge = outcome ? statusBadge(outcome) : badge('in progress', 'yellow');
+
+    html += '<div class="loop-attempt">';
+    html += '<div class="loop-attempt-header"><span>Attempt #' + att.attempt + '</span>' + outcomeBadge + '</div>';
+    html += '<div class="loop-stages">';
+
+    for (const stage of STAGES) {
+      const st = att.stages[stage];
+      let stateClass = 'pending';
+      let label = stage;
+
+      if (!st) {
+        if (att.outcome && att.failedAt && STAGES.indexOf(stage) > STAGES.indexOf(att.failedAt)) {
+          stateClass = 'skipped';
+        }
+      } else if (st.failed) {
+        stateClass = 'failed';
+      } else if (st.done) {
+        stateClass = 'passed';
+      } else {
+        stateClass = 'running';
+      }
+
+      const tooltip = st ? (st.content || '') : '';
+      html += '<div class="loop-stage ' + stateClass + '" title="' + esc(tooltip) + '">' + label + '</div>';
+    }
+    html += '</div>';
+
+    // Show failure detail if any stage failed
+    for (const stage of STAGES) {
+      const st = att.stages[stage];
+      if (st && st.failed && st.content) {
+        html += '<div class="loop-stage-detail" style="color:var(--red)">' + esc(stage) + ': ' + truncate(st.content, 200) + '</div>';
+      }
+    }
+
+    // Show stderr count if any
+    if (att.stderrCount > 0) {
+      html += '<div class="loop-stage-detail">' + att.stderrCount + ' stderr lines</div>';
+    }
+
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Also show flat event log (collapsed)
+  const logID = 'evt-log-' + Math.random().toString(36).slice(2, 8);
+  html += '<div style="margin-top:12px">';
+  html += '<span class="collapsible-toggle" onclick="document.getElementById(\'' + logID + '\').classList.toggle(\'expanded\');this.textContent=this.textContent===\'Show raw events\'?\'Hide raw events\':\'Show raw events\'">Show raw events</span>';
+  html += '<div class="collapsible" id="' + logID + '" style="max-height:0;margin-top:4px">';
+  html += renderFlatEventLog(events);
+  html += '</div></div>';
+
+  return html;
+}
+
+function groupEventsByAttempt(events) {
+  const attempts = [];
+  let current = null;
+
+  for (const e of events) {
+    const type = e.EventType || e.event_type || '';
+    const attempt = e.Attempt || e.attempt || 0;
+    const content = e.Content || e.content || '';
+
+    if (type === 'attempt_start') {
+      current = { attempt: attempt, stages: {}, outcome: null, failedAt: null, stderrCount: 0 };
+      attempts.push(current);
+      continue;
+    }
+
+    if (!current && attempt > 0) {
+      current = { attempt: attempt, stages: {}, outcome: null, failedAt: null, stderrCount: 0 };
+      attempts.push(current);
+    }
+    if (!current) continue;
+
+    if (type === 'stderr') {
+      current.stderrCount++;
+      continue;
+    }
+
+    if (type === 'attempt_done') {
+      current.outcome = 'accepted';
+      continue;
+    }
+
+    const parts = type.split('_');
+    if (parts.length === 2) {
+      const stage = parts[0];
+      const action = parts[1];
+      if (['generate', 'parse', 'validate', 'invariant', 'review'].includes(stage)) {
+        if (!current.stages[stage]) {
+          current.stages[stage] = { started: false, done: false, failed: false, content: '' };
+        }
+        if (action === 'start') {
+          current.stages[stage].started = true;
+          current.stages[stage].content = content;
+        } else if (action === 'done') {
+          current.stages[stage].done = true;
+          current.stages[stage].content = content;
+        } else if (action === 'fail') {
+          current.stages[stage].failed = true;
+          current.stages[stage].content = content;
+          current.failedAt = stage;
+          current.outcome = 'rejected_' + stage;
+        }
+      }
+    }
+  }
+
+  return attempts;
+}
+
+function renderFlatEventLog(events) {
+  let html = '<div style="max-height:300px;overflow-y:auto;font-family:var(--mono);font-size:11px">';
+  for (const e of events) {
+    const ts = e.CreatedAt || e.created_at || '';
+    const type = e.EventType || e.event_type || '';
+    const content = e.Content || e.content || '';
+    const attempt = e.Attempt || e.attempt || 0;
+    const time = ts ? new Date(ts).toLocaleTimeString() : '';
+    html += '<div class="agent-event type-' + esc(type) + '">' +
+      '<span class="agent-event-time">' + esc(time) + '</span>' +
+      '<span class="agent-event-type">' + esc(type) + '</span>' +
+      (attempt > 0 ? '<span style="color:var(--text-muted);width:30px;flex-shrink:0">#' + attempt + '</span>' : '') +
+      '<span class="agent-event-content">' + esc(content) + '</span>' +
+    '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 
 // ─── Tab: Generations ──────────────────────────────────────────────
 async function loadGenerationsTab() {

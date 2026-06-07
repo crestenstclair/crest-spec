@@ -1026,30 +1026,34 @@ func dbInvariantCheckToInvariantCheck(ic db.InvariantCheck) InvariantCheck {
 
 // SessionResource tracks a resource's state within an active session.
 type SessionResource struct {
-	SessionID  string
-	ResourceID string
-	State      string
-	WaveIndex  int
-	Attempts   int
-	MaxRetries int
-	LastError  string
-	LastOutput string
-	JobID      string
-	UpdatedAt  time.Time
+	SessionID    string
+	ResourceID   string
+	State        string
+	WaveIndex    int
+	Attempts     int
+	MaxRetries   int
+	LastError    string
+	LastOutput   string
+	JobID        string
+	UpdatedAt    time.Time
+	Phase        string
+	DispatchedAt time.Time
 }
 
 func dbSessionResourceToSessionResource(r db.SessionResource) SessionResource {
 	return SessionResource{
-		SessionID:  r.SessionID,
-		ResourceID: r.ResourceID,
-		State:      r.State,
-		WaveIndex:  int(r.WaveIndex),
-		Attempts:   int(r.Attempts),
-		MaxRetries: int(r.MaxRetries),
-		LastError:  stringVal(r.LastError),
-		LastOutput: stringVal(r.LastOutput),
-		JobID:      stringVal(r.JobID),
-		UpdatedAt:  parseTime(r.UpdatedAt),
+		SessionID:    r.SessionID,
+		ResourceID:   r.ResourceID,
+		State:        r.State,
+		WaveIndex:    int(r.WaveIndex),
+		Attempts:     int(r.Attempts),
+		MaxRetries:   int(r.MaxRetries),
+		LastError:    stringVal(r.LastError),
+		LastOutput:   stringVal(r.LastOutput),
+		JobID:        stringVal(r.JobID),
+		UpdatedAt:    parseTime(r.UpdatedAt),
+		Phase:        r.Phase,
+		DispatchedAt: parseTime(r.DispatchedAt),
 	}
 }
 
@@ -1083,17 +1087,44 @@ func stringPtr(s string) *string {
 
 // UpsertSessionResource creates or updates a resource state within a session.
 func (s *Store) UpsertSessionResource(r SessionResource) error {
+	dispatchedAt := ""
+	if !r.DispatchedAt.IsZero() {
+		dispatchedAt = r.DispatchedAt.Format(time.RFC3339Nano)
+	}
 	return s.queries.UpsertSessionResource(context.Background(), db.UpsertSessionResourceParams{
-		SessionID:  r.SessionID,
-		ResourceID: r.ResourceID,
-		State:      r.State,
-		WaveIndex:  int64(r.WaveIndex),
-		Attempts:   int64(r.Attempts),
-		MaxRetries: int64(r.MaxRetries),
-		LastError:  stringPtr(r.LastError),
-		LastOutput: stringPtr(r.LastOutput),
-		JobID:      stringPtr(r.JobID),
+		SessionID:    r.SessionID,
+		ResourceID:   r.ResourceID,
+		State:        r.State,
+		WaveIndex:    int64(r.WaveIndex),
+		Attempts:     int64(r.Attempts),
+		MaxRetries:   int64(r.MaxRetries),
+		LastError:    stringPtr(r.LastError),
+		LastOutput:   stringPtr(r.LastOutput),
+		JobID:        stringPtr(r.JobID),
+		UpdatedAt:    now(),
+		Phase:        r.Phase,
+		DispatchedAt: dispatchedAt,
+	})
+}
+
+// UpdateSessionResourcePhase updates the constraint loop phase and attempts.
+func (s *Store) UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error {
+	return s.queries.UpdateSessionResourcePhase(context.Background(), db.UpdateSessionResourcePhaseParams{
+		Phase:      phase,
+		Attempts:   int64(attempts),
 		UpdatedAt:  now(),
+		SessionID:  sessionID,
+		ResourceID: resourceID,
+	})
+}
+
+// SetSessionResourceDispatched marks a resource as dispatched and records the dispatch timestamp.
+func (s *Store) SetSessionResourceDispatched(sessionID, resourceID string) error {
+	return s.queries.SetSessionResourceDispatched(context.Background(), db.SetSessionResourceDispatchedParams{
+		DispatchedAt: now(),
+		UpdatedAt:    now(),
+		SessionID:    sessionID,
+		ResourceID:   resourceID,
 	})
 }
 
@@ -1175,6 +1206,93 @@ func (s *Store) DeleteSessionResources(sessionID string) error {
 }
 
 // ---------------------------------------------------------------------------
+// AgentEvent — real-time agent tracing
+// ---------------------------------------------------------------------------
+
+// AgentEvent captures a real-time event from a sub-agent run.
+type AgentEvent struct {
+	ID           string
+	GenerationID string
+	ResourceID   string
+	ApplyID      string
+	EventType    string
+	Attempt      int
+	Content      string
+	CreatedAt    time.Time
+}
+
+func dbAgentEventToAgentEvent(e db.AgentEvent) AgentEvent {
+	return AgentEvent{
+		ID:           e.ID,
+		GenerationID: stringVal(e.GenerationID),
+		ResourceID:   e.ResourceID,
+		ApplyID:      stringVal(e.ApplyID),
+		EventType:    e.EventType,
+		Attempt:      int(int64Val(e.Attempt)),
+		Content:      stringVal(e.Content),
+		CreatedAt:    parseTime(e.CreatedAt),
+	}
+}
+
+// CreateAgentEvent inserts a new agent event.
+func (s *Store) CreateAgentEvent(e AgentEvent) error {
+	var attempt *int64
+	if e.Attempt > 0 {
+		a := int64(e.Attempt)
+		attempt = &a
+	}
+	return s.queries.CreateAgentEvent(context.Background(), db.CreateAgentEventParams{
+		ID:           e.ID,
+		GenerationID: stringPtr(e.GenerationID),
+		ResourceID:   e.ResourceID,
+		ApplyID:      stringPtr(e.ApplyID),
+		EventType:    e.EventType,
+		Attempt:      attempt,
+		Content:      stringPtr(e.Content),
+		CreatedAt:    e.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// ListAgentEventsByGeneration returns events for a specific generation.
+func (s *Store) ListAgentEventsByGeneration(generationID string) ([]AgentEvent, error) {
+	rows, err := s.queries.ListAgentEventsByGeneration(context.Background(), &generationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentEvent, len(rows))
+	for i, r := range rows {
+		out[i] = dbAgentEventToAgentEvent(r)
+	}
+	return out, nil
+}
+
+// ListAgentEventsByResource returns events for a specific resource.
+func (s *Store) ListAgentEventsByResource(resourceID string) ([]AgentEvent, error) {
+	rows, err := s.queries.ListAgentEventsByResource(context.Background(), resourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentEvent, len(rows))
+	for i, r := range rows {
+		out[i] = dbAgentEventToAgentEvent(r)
+	}
+	return out, nil
+}
+
+// ListRecentAgentEvents returns the most recent agent events.
+func (s *Store) ListRecentAgentEvents(limit int) ([]AgentEvent, error) {
+	rows, err := s.queries.ListRecentAgentEvents(context.Background(), int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentEvent, len(rows))
+	for i, r := range rows {
+		out[i] = dbAgentEventToAgentEvent(r)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
 // Vacuum — compact old history
 // ---------------------------------------------------------------------------
 
@@ -1186,6 +1304,7 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 	total := 0
 
 	tables := []string{
+		"DELETE FROM agent_events WHERE created_at < ?",
 		"DELETE FROM generations WHERE created_at < ?",
 		"DELETE FROM invariant_checks WHERE checked_at < ?",
 		"DELETE FROM apply_actions WHERE started_at < ?",

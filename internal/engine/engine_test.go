@@ -90,8 +90,9 @@ func TestGenerate_DisallowedTools(t *testing.T) {
 	calls := r.calls()
 	require.Len(t, calls, 1)
 
-	expected := []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"}
-	assert.Equal(t, expected, calls[0].DisallowedTools)
+	// Sub-agents now run with full tool access so they can read existing files,
+	// run the build, and self-verify their output. Nothing is disallowed.
+	assert.Empty(t, calls[0].DisallowedTools)
 }
 
 func TestGenerate_NoSessionPersistence(t *testing.T) {
@@ -238,8 +239,8 @@ func TestReview_DisallowedTools(t *testing.T) {
 	calls := r.calls()
 	require.Len(t, calls, 1)
 
-	expected := []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "WebFetch", "WebSearch"}
-	assert.Equal(t, expected, calls[0].DisallowedTools)
+	// Review sub-agents also run with full tool access (see Generate above).
+	assert.Empty(t, calls[0].DisallowedTools)
 }
 
 // ---------- CodeReview tests ----------
@@ -256,7 +257,7 @@ func TestCodeReview_DefaultModels(t *testing.T) {
 	require.NoError(t, err)
 
 	calls := r.calls()
-	require.Len(t, calls, 3)
+	require.Len(t, calls, 2)
 
 	models := make(map[string]bool)
 	for _, c := range calls {
@@ -264,7 +265,6 @@ func TestCodeReview_DefaultModels(t *testing.T) {
 	}
 	assert.True(t, models["claude-opus-4-6"])
 	assert.True(t, models["claude-sonnet-4-6"])
-	assert.True(t, models["claude-haiku-3-5"])
 }
 
 func TestCodeReview_ExplicitModels(t *testing.T) {
@@ -360,7 +360,7 @@ func TestBugbot_DefaultModels(t *testing.T) {
 
 	calls := r.calls()
 	require.Len(t, calls, 1)
-	assert.Equal(t, "claude-haiku-3-5", calls[0].Model)
+	assert.Equal(t, "claude-sonnet-4-6", calls[0].Model)
 }
 
 func TestBugbot_AggregatesResults(t *testing.T) {

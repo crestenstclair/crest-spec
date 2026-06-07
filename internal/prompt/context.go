@@ -8,6 +8,7 @@ import (
 
 type RuntimeContext struct {
 	ModuleTree      string
+	ModuleFiles     map[string]string // path → content of existing module declaration files (lib.rs, mod.rs, __init__.py, etc.)
 	DependencyFiles map[string]string
 	AgentNotes      map[string]string
 	WaveErrors      string
@@ -19,6 +20,18 @@ func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
 
 	if ctx.ModuleTree != "" {
 		sections = append(sections, fmt.Sprintf("## Module Tree\n\n%s", ctx.ModuleTree))
+	}
+
+	if len(ctx.ModuleFiles) > 0 {
+		var b strings.Builder
+		b.WriteString("## Existing Module Declarations & Manifest\n\n")
+		b.WriteString("These files already exist. If you change them, include them in your output with your new modules or dependencies ADDED (do not remove existing lines).\n\n")
+		keys := sortedKeys(ctx.ModuleFiles)
+		for _, path := range keys {
+			content := ctx.ModuleFiles[path]
+			b.WriteString(fmt.Sprintf("### %s\n\n```\n%s\n```\n\n", path, content))
+		}
+		sections = append(sections, b.String())
 	}
 
 	if len(ctx.DependencyFiles) > 0 {
