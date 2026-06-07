@@ -49,10 +49,12 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "Usage: crest-spec [command]")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "With no arguments, starts the MCP server on stdio.")
-			fmt.Fprintln(os.Stderr, "Agents connect via MCP and drive generation with:")
-			fmt.Fprintln(os.Stderr, "  spec/begin → spec/next → spec/context → run_prompt → spec/commit → spec/finish")
+			fmt.Fprintln(os.Stderr, "Use 'crest-spec run' to start a generation session.")
+			fmt.Fprintln(os.Stderr, "Or connect directly via MCP: spec/begin → spec/run_wave → spec/finish")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "Commands:")
+			fmt.Fprintln(os.Stderr, "  run [--spec-dir ./spec] [--model claude-opus-4-8]")
+			fmt.Fprintln(os.Stderr, "                                 start a generation session (launches Claude)")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
 			fmt.Fprintln(os.Stderr, "  check job <id>                 block until job completes; print result")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
@@ -73,6 +75,9 @@ func runSubcommand() bool {
 		return false
 	}
 	switch os.Args[1] {
+	case "run":
+		cmdRun(os.Args[2:])
+		return true
 	case "dashboard":
 		flags := parseFlags(os.Args[2:])
 		cmdDashboard(flags)
@@ -137,7 +142,7 @@ func runServer() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ag := agent.New(cfg.AgentPath, cfg.APIKey, cfg.DefaultModel, cfg.PermissionMode, cfg.Timeout)
+	ag := agent.New(cfg.AgentPath, cfg.APIKey, cfg.DefaultModel, cfg.Timeout)
 	eng := engine.New(ag, cfg)
 	sp := specmod.New(eng, s, specmod.OSFileSystem{}, cfg)
 	srv := mcp.New(sp, eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)

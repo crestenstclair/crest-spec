@@ -108,9 +108,10 @@ func runAttempt(
 
 	blocks, output, err := generate(ctx, eng, genPrompt, opts)
 	if err != nil {
+		*lastError = fmt.Sprintf("generation error: %s", err.Error())
 		return AttemptRecord{
 			Prompt: genPrompt, Output: "", Outcome: "error",
-			Error: err.Error(), DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
+			Error: *lastError, DurationMS: time.Since(start).Milliseconds(), Attempt: attempt,
 		}
 	}
 	*lastOutput = output
@@ -287,6 +288,7 @@ func runReviewStep(ctx context.Context, eng specEngine, output string, opts Loop
 
 	result, err := runReview(ctx, eng, output, opts)
 	if err != nil {
+		*lastError = fmt.Sprintf("review error: %s", err.Error())
 		return fmt.Errorf("review: %w", err)
 	}
 

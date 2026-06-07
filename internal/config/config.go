@@ -13,7 +13,6 @@ type Config struct {
 	APIKey         string        `envconfig:"API_KEY"`
 	AgentPath      string        `envconfig:"AGENT_PATH" default:"claude"`
 	DefaultModel   string        `envconfig:"DEFAULT_MODEL" default:"claude-sonnet-4-6"`
-	PermissionMode string        `envconfig:"PERMISSION_MODE" default:"default"`
 	Timeout        time.Duration `envconfig:"TIMEOUT" default:"0s"`
 	MaxConcurrency int           `envconfig:"MAX_CONCURRENCY" default:"5"`
 	HTTPAddr       string        `envconfig:"HTTP_ADDR"`

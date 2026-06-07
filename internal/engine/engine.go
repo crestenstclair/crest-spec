@@ -167,7 +167,7 @@ type BugbotOpts struct {
 }
 
 var defaultBugbotModels = []string{
-	"claude-haiku-3-5",
+	"claude-sonnet-4-6",
 }
 
 // Bugbot fans out a bug-analysis prompt across models using the same pattern

@@ -25,7 +25,6 @@ type RunOpts struct {
 	Continue             bool
 	Resume               bool
 	SessionID            string
-	Force                bool
 	AllowedTools         []string
 	DisallowedTools      []string
 	AppendSystemPrompt   string
@@ -52,27 +51,25 @@ type Usage struct {
 }
 
 type Agent struct {
-	path           string
-	apiKey         string
-	defaultModel   string
-	permissionMode string
-	timeout        time.Duration
-	configDir      string
+	path         string
+	apiKey       string
+	defaultModel string
+	timeout      time.Duration
+	configDir    string
 }
 
-func New(path, apiKey, defaultModel, permissionMode string, timeout time.Duration) *Agent {
+func New(path, apiKey, defaultModel string, timeout time.Duration) *Agent {
 	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if configDir == "" {
 		home, _ := os.UserHomeDir()
 		configDir = filepath.Join(home, ".claude")
 	}
 	return &Agent{
-		path:           path,
-		apiKey:         apiKey,
-		defaultModel:   defaultModel,
-		permissionMode: permissionMode,
-		timeout:        timeout,
-		configDir:      configDir,
+		path:         path,
+		apiKey:       apiKey,
+		defaultModel: defaultModel,
+		timeout:      timeout,
+		configDir:    configDir,
 	}
 }
 
@@ -216,9 +213,7 @@ func (a *Agent) buildArgs(opts RunOpts) ([]string, bool) {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	if a.permissionMode != "" {
-		args = append(args, "--permission-mode", a.permissionMode)
-	}
+	args = append(args, "--dangerously-skip-permissions")
 	if opts.Effort != "" {
 		args = append(args, "--effort", opts.Effort)
 	}
@@ -233,9 +228,6 @@ func (a *Agent) buildArgs(opts RunOpts) ([]string, bool) {
 	}
 	if opts.SessionID != "" {
 		args = append(args, "--session-id", opts.SessionID)
-	}
-	if opts.Force {
-		args = append(args, "--dangerously-skip-permissions")
 	}
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))

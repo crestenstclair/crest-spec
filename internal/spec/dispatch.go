@@ -13,19 +13,20 @@ import (
 
 func (s *Spec) recordAttempts(applyID, resourceID, model string, records []AttemptRecord) {
 	for _, rec := range records {
+		id := uuid.NewString()
 		s.store.CreateGeneration(store.Generation{
-			ID:              uuid.NewString(),
-			ApplyID:         applyID,
-			ResourceID:      resourceID,
-			PromptText:      rec.Prompt,
-			PromptHash:      promptHash(rec.Prompt),
-			OutputText:      rec.Output,
-			Model:           model,
-			Outcome:         rec.Outcome,
-			RejectionReason: rec.Error,
-			RetryCount:      rec.Attempt,
-			DurationMS:      rec.DurationMS,
+			ID:         id,
+			ApplyID:    applyID,
+			ResourceID: resourceID,
+			PromptText: rec.Prompt,
+			PromptHash: promptHash(rec.Prompt),
+			Model:      model,
+			RetryCount: rec.Attempt,
 		})
+		s.store.UpdateGeneration(
+			id, rec.Output, rec.Outcome, rec.Error,
+			rec.DurationMS, 0, 0, 0,
+		)
 	}
 }
 
