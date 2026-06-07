@@ -352,3 +352,157 @@ func TestAcquireLock_AfterRelease(t *testing.T) {
 	assert.Equal(t, "agent-2", l.Holder)
 	assert.Equal(t, 2, l.PID)
 }
+
+// ---------------------------------------------------------------------------
+// Resource CRUD Tests
+// ---------------------------------------------------------------------------
+
+func TestSetResource_And_GetResource(t *testing.T) {
+	s := testStore(t)
+	r := Resource{
+		ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth",
+		DeclarationHash: "abc123", EffectiveHash: "def456", Model: "opus",
+		SettledAt: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, s.SetResource(r))
+	got, err := s.GetResource("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Equal(t, r.ID, got.ID)
+	assert.Equal(t, r.Kind, got.Kind)
+	assert.Equal(t, r.ContextName, got.ContextName)
+	assert.Equal(t, r.DeclarationHash, got.DeclarationHash)
+	assert.Equal(t, r.EffectiveHash, got.EffectiveHash)
+	assert.Equal(t, r.Model, got.Model)
+}
+
+func TestGetResource_NotFound(t *testing.T) {
+	s := testStore(t)
+	_, err := s.GetResource("nonexistent")
+	assert.ErrorIs(t, err, cserrors.ErrNotFound)
+}
+
+func TestSetResource_Upsert(t *testing.T) {
+	s := testStore(t)
+	r := Resource{ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth",
+		DeclarationHash: "abc123", EffectiveHash: "def456", Model: "opus",
+		SettledAt: time.Now().UTC().Truncate(time.Millisecond)}
+	require.NoError(t, s.SetResource(r))
+	r.DeclarationHash = "updated"
+	r.EffectiveHash = "updated2"
+	require.NoError(t, s.SetResource(r))
+	got, err := s.GetResource("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Equal(t, "updated", got.DeclarationHash)
+	assert.Equal(t, "updated2", got.EffectiveHash)
+}
+
+func TestListResources(t *testing.T) {
+	s := testStore(t)
+	r1 := Resource{ID: "aggregate.A.X", Kind: "aggregate", ContextName: "A", DeclarationHash: "h1", EffectiveHash: "e1", Model: "opus", SettledAt: time.Now().UTC()}
+	r2 := Resource{ID: "aggregate.B.Y", Kind: "aggregate", ContextName: "B", DeclarationHash: "h2", EffectiveHash: "e2", Model: "opus", SettledAt: time.Now().UTC()}
+	require.NoError(t, s.SetResource(r1))
+	require.NoError(t, s.SetResource(r2))
+	resources, err := s.ListResources()
+	require.NoError(t, err)
+	assert.Len(t, resources, 2)
+	assert.Equal(t, "aggregate.A.X", resources[0].ID)
+	assert.Equal(t, "aggregate.B.Y", resources[1].ID)
+}
+
+func TestDeleteResource(t *testing.T) {
+	s := testStore(t)
+	r := Resource{ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth", DeclarationHash: "h", EffectiveHash: "e", Model: "opus", SettledAt: time.Now().UTC()}
+	require.NoError(t, s.SetResource(r))
+	require.NoError(t, s.DeleteResource("aggregate.Synth.Voice"))
+	_, err := s.GetResource("aggregate.Synth.Voice")
+	assert.ErrorIs(t, err, cserrors.ErrNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// GeneratedFile CRUD Tests
+// ---------------------------------------------------------------------------
+
+func TestSetGeneratedFile_And_GetGeneratedFiles(t *testing.T) {
+	s := testStore(t)
+	r := Resource{ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth", DeclarationHash: "h", EffectiveHash: "e", Model: "opus", SettledAt: time.Now().UTC()}
+	require.NoError(t, s.SetResource(r))
+	f := GeneratedFile{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "content123", PromptHash: "prompt123", Model: "opus", CreatedAt: time.Now().UTC().Truncate(time.Millisecond)}
+	require.NoError(t, s.SetGeneratedFile(f))
+	files, err := s.GetGeneratedFiles("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Len(t, files, 1)
+	assert.Equal(t, "src/voice.go", files[0].Path)
+	assert.Equal(t, "content123", files[0].ContentHash)
+}
+
+func TestGetGeneratedFiles_Empty(t *testing.T) {
+	s := testStore(t)
+	files, err := s.GetGeneratedFiles("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, files)
+}
+
+func TestDeleteGeneratedFiles(t *testing.T) {
+	s := testStore(t)
+	r := Resource{ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth", DeclarationHash: "h", EffectiveHash: "e", Model: "opus", SettledAt: time.Now().UTC()}
+	require.NoError(t, s.SetResource(r))
+	f := GeneratedFile{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "c", PromptHash: "p", Model: "opus", CreatedAt: time.Now().UTC()}
+	require.NoError(t, s.SetGeneratedFile(f))
+	require.NoError(t, s.DeleteGeneratedFiles("aggregate.Synth.Voice"))
+	files, err := s.GetGeneratedFiles("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Empty(t, files)
+}
+
+func TestDeleteResource_CascadesToGeneratedFiles(t *testing.T) {
+	s := testStore(t)
+	r := Resource{ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth", DeclarationHash: "h", EffectiveHash: "e", Model: "opus", SettledAt: time.Now().UTC()}
+	require.NoError(t, s.SetResource(r))
+	f := GeneratedFile{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "c", PromptHash: "p", Model: "opus", CreatedAt: time.Now().UTC()}
+	require.NoError(t, s.SetGeneratedFile(f))
+	require.NoError(t, s.DeleteResource("aggregate.Synth.Voice"))
+	files, err := s.GetGeneratedFiles("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Empty(t, files)
+}
+
+// ---------------------------------------------------------------------------
+// Dependency CRUD Tests
+// ---------------------------------------------------------------------------
+
+func TestSetDependency_And_GetDependencies(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.SetDependency("aggregate.Synth.Voice", "aggregate.Synth.Oscillator", "uses"))
+	deps, err := s.GetDependencies("aggregate.Synth.Voice")
+	require.NoError(t, err)
+	assert.Len(t, deps, 1)
+	assert.Equal(t, "aggregate.Synth.Voice", deps[0].SourceID)
+	assert.Equal(t, "aggregate.Synth.Oscillator", deps[0].TargetID)
+	assert.Equal(t, "uses", deps[0].Kind)
+}
+
+func TestSetDependency_Idempotent(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.SetDependency("a", "b", "uses"))
+	require.NoError(t, s.SetDependency("a", "b", "uses"))
+	deps, err := s.GetDependencies("a")
+	require.NoError(t, err)
+	assert.Len(t, deps, 1)
+}
+
+func TestDeleteDependencies(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.SetDependency("a", "b", "uses"))
+	require.NoError(t, s.SetDependency("a", "c", "uses"))
+	require.NoError(t, s.DeleteDependencies("a"))
+	deps, err := s.GetDependencies("a")
+	require.NoError(t, err)
+	assert.Empty(t, deps)
+}
+
+func TestGetDependencies_Empty(t *testing.T) {
+	s := testStore(t)
+	deps, err := s.GetDependencies("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, deps)
+}

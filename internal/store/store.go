@@ -34,6 +34,34 @@ type Lock struct {
 	AcquiredAt time.Time
 }
 
+// Resource is the store's domain type for a resource state record.
+type Resource struct {
+	ID              string
+	Kind            string
+	ContextName     string
+	DeclarationHash string
+	EffectiveHash   string
+	Model           string
+	SettledAt       time.Time
+}
+
+// GeneratedFile is the store's domain type for a generated file record.
+type GeneratedFile struct {
+	Path        string
+	ResourceID  string
+	ContentHash string
+	PromptHash  string
+	Model       string
+	CreatedAt   time.Time
+}
+
+// Dependency is the store's domain type for a resource dependency edge.
+type Dependency struct {
+	SourceID string
+	TargetID string
+	Kind     string
+}
+
 // Store wraps a SQLite database and provides domain operations for
 // jobs, locks, and migrations.
 type Store struct {
@@ -385,4 +413,160 @@ func (s *Store) GetLock() (*Lock, error) {
 		out.AcquiredAt = t
 	}
 	return &out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Resource/GeneratedFile/Dependency converters
+// ---------------------------------------------------------------------------
+
+func dbResourceToResource(r db.Resource) Resource {
+	out := Resource{
+		ID:              r.ID,
+		Kind:            r.Kind,
+		DeclarationHash: r.DeclarationHash,
+		EffectiveHash:   r.EffectiveHash,
+	}
+	if r.ContextName != nil {
+		out.ContextName = *r.ContextName
+	}
+	if r.Model != nil {
+		out.Model = *r.Model
+	}
+	if t, err := time.Parse(time.RFC3339Nano, r.SettledAt); err == nil {
+		out.SettledAt = t
+	}
+	return out
+}
+
+func dbGeneratedFileToGeneratedFile(f db.GeneratedFile) GeneratedFile {
+	out := GeneratedFile{
+		Path:        f.Path,
+		ResourceID:  f.ResourceID,
+		ContentHash: f.ContentHash,
+		PromptHash:  f.PromptHash,
+		Model:       f.Model,
+	}
+	if t, err := time.Parse(time.RFC3339Nano, f.CreatedAt); err == nil {
+		out.CreatedAt = t
+	}
+	return out
+}
+
+func dbDependencyToDependency(d db.Dependency) Dependency {
+	return Dependency{
+		SourceID: d.SourceID,
+		TargetID: d.TargetID,
+		Kind:     d.Kind,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Resource CRUD
+// ---------------------------------------------------------------------------
+
+func (s *Store) GetResource(id string) (*Resource, error) {
+	r, err := s.queries.GetResource(context.Background(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, cserrors.ErrNotFound
+		}
+		return nil, err
+	}
+	out := dbResourceToResource(r)
+	return &out, nil
+}
+
+func (s *Store) ListResources() ([]Resource, error) {
+	rows, err := s.queries.ListResources(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Resource, len(rows))
+	for i, r := range rows {
+		out[i] = dbResourceToResource(r)
+	}
+	return out, nil
+}
+
+func (s *Store) SetResource(r Resource) error {
+	var contextName *string
+	if r.ContextName != "" {
+		contextName = &r.ContextName
+	}
+	var model *string
+	if r.Model != "" {
+		model = &r.Model
+	}
+	return s.queries.SetResource(context.Background(), db.SetResourceParams{
+		ID:              r.ID,
+		Kind:            r.Kind,
+		ContextName:     contextName,
+		DeclarationHash: r.DeclarationHash,
+		EffectiveHash:   r.EffectiveHash,
+		Model:           model,
+		SettledAt:       r.SettledAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (s *Store) DeleteResource(id string) error {
+	return s.queries.DeleteResource(context.Background(), id)
+}
+
+// ---------------------------------------------------------------------------
+// GeneratedFile CRUD
+// ---------------------------------------------------------------------------
+
+func (s *Store) GetGeneratedFiles(resourceID string) ([]GeneratedFile, error) {
+	rows, err := s.queries.GetGeneratedFiles(context.Background(), resourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GeneratedFile, len(rows))
+	for i, f := range rows {
+		out[i] = dbGeneratedFileToGeneratedFile(f)
+	}
+	return out, nil
+}
+
+func (s *Store) SetGeneratedFile(f GeneratedFile) error {
+	return s.queries.SetGeneratedFile(context.Background(), db.SetGeneratedFileParams{
+		Path:        f.Path,
+		ResourceID:  f.ResourceID,
+		ContentHash: f.ContentHash,
+		PromptHash:  f.PromptHash,
+		Model:       f.Model,
+		CreatedAt:   f.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (s *Store) DeleteGeneratedFiles(resourceID string) error {
+	return s.queries.DeleteGeneratedFiles(context.Background(), resourceID)
+}
+
+// ---------------------------------------------------------------------------
+// Dependency CRUD
+// ---------------------------------------------------------------------------
+
+func (s *Store) SetDependency(sourceID, targetID, kind string) error {
+	return s.queries.SetDependency(context.Background(), db.SetDependencyParams{
+		SourceID: sourceID,
+		TargetID: targetID,
+		Kind:     kind,
+	})
+}
+
+func (s *Store) GetDependencies(sourceID string) ([]Dependency, error) {
+	rows, err := s.queries.GetDependencies(context.Background(), sourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Dependency, len(rows))
+	for i, d := range rows {
+		out[i] = dbDependencyToDependency(d)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteDependencies(sourceID string) error {
+	return s.queries.DeleteDependencies(context.Background(), sourceID)
 }
