@@ -52,13 +52,13 @@ Terraform works because of five interlocking properties:
 
 ### What's Partially Working
 
-| Concept | Gap | Impact |
-|---|---|---|
-| Constraint loop | Generate → Parse → Validate → Invariant → Review chain exists, but review step is basic string matching ("FAIL"/"PASS") | Medium — false positives/negatives in review gate |
-| Wave verification | TypeCheck/TestCommand run between waves, but error attribution is just substring matching on file paths | Medium — errors may be attributed to wrong resource |
-| State machine | All states defined, transitions work for happy path, but `completed` state is skipped (goes directly pending → dispatched → committed or rejected) | Low — functional but doesn't match spec diagram |
-| Drift revert | Only "accept" works; "revert" returns unimplemented | Low — regenerate works as alternative |
-| Progress reporting | No SSE streaming; agents poll with poll_result | Medium — works but wasteful |
+| Concept | Gap | Impact | Status |
+|---|---|---|---|
+| Constraint loop | Review step uses structured JSON parsing with string-matching fallback | Low | FIXED |
+| Wave verification | Error attribution now parses Go, Rust, TS, Python, C compiler output formats | Low | FIXED |
+| State machine | Commit flow now transitions through `completed` before `committed` | Low | FIXED |
+| Drift revert | Only "accept" works; "revert" returns unimplemented | Low — regenerate works as alternative | OPEN |
+| Progress reporting | No SSE streaming; agents poll with poll_result | Medium — works but wasteful | OPEN |
 
 ### What's Missing (Critical Gaps)
 
