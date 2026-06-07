@@ -126,7 +126,9 @@ func (s *Server) registerTools() {
 		}
 
 		if p.Consume && (job.Status == "completed" || job.Status == "failed" || job.Status == "cancelled") {
-			s.store.DeleteJob(p.JobID)
+			if err := s.store.DeleteJob(p.JobID); err != nil {
+				return errorResult(fmt.Sprintf("delete job: %v", err))
+			}
 		}
 
 		return jsonResult(resp)

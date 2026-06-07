@@ -245,9 +245,9 @@ func (s *Server) handleLine(ctx context.Context, line string) {
 		return
 	}
 
-	// Notifications (no ID) -- fire and forget
-	if req.ID == nil && req.Method == "notifications/initialized" {
-		handler(ctx, req.ID, req.Params)
+	// Notifications (no ID) -- fire and forget, no response per JSON-RPC spec
+	if req.ID == nil {
+		handler(ctx, nil, req.Params)
 		return
 	}
 
@@ -287,7 +287,9 @@ func (s *Server) writeResponse(resp jsonRPCResponse) {
 
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	s.stdout.Write(data)
+	if _, err := s.stdout.Write(data); err != nil {
+		s.log.Error().Err(err).Msg("write response failed")
+	}
 }
 
 // writeNotification writes a JSON-RPC notification (no ID, no response expected).
@@ -311,7 +313,9 @@ func (s *Server) writeNotification(method string, params any) {
 
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	s.stdout.Write(data)
+	if _, err := s.stdout.Write(data); err != nil {
+		s.log.Error().Err(err).Msg("write notification failed")
+	}
 }
 
 // ServeHTTP handles HTTP transport requests.
@@ -429,7 +433,7 @@ func (s *Server) runAsync(
 		}
 	}()
 
-	return textResult(fmt.Sprintf(`{"job_id":"%s"}`, id))
+	return jsonResult(map[string]string{"job_id": id})
 }
 
 // ---------------------------------------------------------------------------
