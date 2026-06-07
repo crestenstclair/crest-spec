@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,6 +61,10 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/jobs", d.handleJobs)
 	mux.HandleFunc("GET /api/notes/{applyID}", d.handleNotes)
 	mux.HandleFunc("GET /api/session-resources/{sessionID}", d.handleSessionResources)
+	mux.HandleFunc("GET /api/session-resources/{sessionID}/wave/{waveIndex}", d.handleSessionResourcesByWave)
+	mux.HandleFunc("GET /api/invariant-checks/{applyID}", d.handleInvariantChecks)
+	mux.HandleFunc("GET /api/generations-recent", d.handleRecentGenerations)
+	mux.HandleFunc("GET /api/live-status", d.handleLiveStatus)
 
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -304,6 +310,114 @@ func (d *dashboard) handleSessionResources(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	d.writeJSON(w, resources)
+}
+
+func (d *dashboard) handleSessionResourcesByWave(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionID")
+	waveStr := r.PathValue("waveIndex")
+	waveIndex, err := strconv.Atoi(waveStr)
+	if err != nil {
+		d.writeError(w, 400, "invalid wave index")
+		return
+	}
+	resources, err := d.store.ListSessionResourcesByWave(sessionID, waveIndex)
+	if err != nil {
+		d.writeError(w, 500, err.Error())
+		return
+	}
+	d.writeJSON(w, resources)
+}
+
+func (d *dashboard) handleInvariantChecks(w http.ResponseWriter, r *http.Request) {
+	applyID := r.PathValue("applyID")
+	checks, err := d.store.ListInvariantChecks(applyID)
+	if err != nil {
+		d.writeError(w, 500, err.Error())
+		return
+	}
+	d.writeJSON(w, checks)
+}
+
+func (d *dashboard) handleRecentGenerations(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	query := fmt.Sprintf(
+		`SELECT id, apply_id, resource_id, model, outcome, rejection_reason, `+
+			`retry_count, duration_ms, input_tokens, output_tokens, cost_usd, created_at `+
+			`FROM generations ORDER BY created_at DESC LIMIT %d`, limit,
+	)
+	rows, err := d.store.ReadOnlyQuery(query)
+	if err != nil {
+		d.writeError(w, 500, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		d.writeError(w, 500, "streaming not supported")
+		return
+	}
+
+	ctx := r.Context()
+	var mu sync.Mutex
+	var lastHash string
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	sendUpdate := func() {
+		session, _ := d.store.GetActiveSession()
+		jobs, _ := d.store.ListJobs(50)
+		applies, _ := d.store.ListApplies(1)
+
+		payload := map[string]interface{}{
+			"session": session,
+			"jobs":    jobs,
+		}
+		if len(applies) > 0 {
+			payload["latest_apply"] = applies[0]
+		}
+		if session != nil {
+			sr, _ := d.store.ListSessionResources(session.ID)
+			payload["session_resources"] = sr
+		}
+
+		data, _ := json.Marshal(payload)
+		hash := fmt.Sprintf("%x", len(data))
+
+		mu.Lock()
+		defer mu.Unlock()
+		if hash == lastHash {
+			return
+		}
+		lastHash = hash
+
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	sendUpdate()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sendUpdate()
+		}
+	}
 }
 
 func fatal(err error) {
