@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+
+	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 )
 
 // handleInitialize returns the MCP protocol initialization response.
@@ -77,38 +79,131 @@ func (s *Server) handleToolCall(ctx context.Context, id any, params json.RawMess
 	}
 }
 
-// handleResourcesList returns an empty resource list (implemented in SP3+).
+// handleResourcesList returns the list of available MCP resources.
 func (s *Server) handleResourcesList(ctx context.Context, id any, params json.RawMessage) jsonRPCResponse {
+	resources := []map[string]string{
+		{"uri": "crest-spec://plan", "name": "Current Plan", "mimeType": "application/json"},
+		{"uri": "crest-spec://state", "name": "Spec State", "mimeType": "application/json"},
+		{"uri": "crest-spec://graph", "name": "Dependency Graph", "mimeType": "application/json"},
+		{"uri": "crest-spec://session", "name": "Active Session", "mimeType": "application/json"},
+		{"uri": "crest-spec://metrics", "name": "Server Metrics", "mimeType": "application/json"},
+	}
 	return jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Result:  map[string]any{"resources": []any{}},
+		Result:  map[string]any{"resources": resources},
 	}
 }
 
-// handleResourcesRead returns an error (no resources available yet).
+// handleResourcesRead reads a specific MCP resource by URI.
 func (s *Server) handleResourcesRead(ctx context.Context, id any, params json.RawMessage) jsonRPCResponse {
+	var p struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: err.Error()}}
+	}
+
+	if s.spec == nil {
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32603, Message: "spec engine not initialized"}}
+	}
+
+	var content any
+	var readErr error
+
+	switch p.URI {
+	case "crest-spec://plan":
+		result, err := s.spec.Plan(ctx)
+		if err != nil {
+			readErr = err
+		} else {
+			content = result.Actions
+		}
+	case "crest-spec://state":
+		result, err := s.spec.Status(ctx)
+		if err != nil {
+			readErr = err
+		} else {
+			content = result
+		}
+	case "crest-spec://graph":
+		result, err := s.spec.GraphInfo(ctx)
+		if err != nil {
+			readErr = err
+		} else {
+			content = result
+		}
+	case "crest-spec://session":
+		result, err := s.spec.Status(ctx)
+		if err != nil {
+			readErr = err
+		} else {
+			content = result.Session
+		}
+	case "crest-spec://metrics":
+		content = s.metrics.Snapshot()
+	default:
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: "unknown resource: " + p.URI}}
+	}
+
+	if readErr != nil {
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32603, Message: readErr.Error()}}
+	}
+
+	b, _ := json.Marshal(content)
 	return jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &rpcError{Code: -32602, Message: "no resources available yet"},
+		Result: map[string]any{
+			"contents": []map[string]any{
+				{"uri": p.URI, "mimeType": "application/json", "text": string(b)},
+			},
+		},
 	}
 }
 
-// handlePromptsList returns an empty prompt list (implemented in SP4+).
+// handlePromptsList returns the list of available MCP prompts.
 func (s *Server) handlePromptsList(ctx context.Context, id any, params json.RawMessage) jsonRPCResponse {
-	return jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  map[string]any{"prompts": []any{}},
+	prompts := []map[string]any{
+		{"name": "system_prompt", "description": "The system prompt for sub-agents"},
+		{"name": "resource_prompt", "description": "Full resource prompt for a specific resource", "arguments": []map[string]string{{"name": "resource_id", "description": "Resource identifier", "required": "true"}}},
+		{"name": "orchestrator_instructions", "description": "Orchestrator protocol instructions"},
 	}
+	return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{"prompts": prompts}}
 }
 
-// handlePromptsGet returns an error (no prompts available yet).
+// handlePromptsGet retrieves a specific MCP prompt by name.
 func (s *Server) handlePromptsGet(ctx context.Context, id any, params json.RawMessage) jsonRPCResponse {
-	return jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &rpcError{Code: -32602, Message: "no prompts available yet"},
+	var p struct {
+		Name      string            `json:"name"`
+		Arguments map[string]string `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: err.Error()}}
+	}
+
+	if s.spec == nil {
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32603, Message: "spec engine not initialized"}}
+	}
+
+	switch p.Name {
+	case "system_prompt":
+		result, err := s.spec.Plan(ctx)
+		if err != nil {
+			return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32603, Message: err.Error()}}
+		}
+		prompt := promptpkg.BuildSystemPrompt(result.Registry.Project)
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
+			"messages": []map[string]string{{"role": "user", "content": prompt}},
+		}}
+
+	case "orchestrator_instructions":
+		instructions := "You are a dispatcher, not a code generator. Do not write code yourself.\nFor each resource: call spec/context to get its prompt, then call run_prompt with that prompt."
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
+			"messages": []map[string]string{{"role": "user", "content": instructions}},
+		}}
+
+	default:
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: "unknown prompt: " + p.Name}}
 	}
 }

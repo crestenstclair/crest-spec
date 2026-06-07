@@ -710,9 +710,9 @@ func TestResourcesList_Empty(t *testing.T) {
 	assert.Nil(t, resp.Error)
 	result, ok := resp.Result.(map[string]any)
 	require.True(t, ok)
-	resources, ok := result["resources"].([]any)
+	resources, ok := result["resources"].([]map[string]string)
 	require.True(t, ok)
-	assert.Empty(t, resources)
+	assert.NotEmpty(t, resources)
 }
 
 func TestResourcesRead_Error(t *testing.T) {
@@ -730,9 +730,9 @@ func TestPromptsList_Empty(t *testing.T) {
 	assert.Nil(t, resp.Error)
 	result, ok := resp.Result.(map[string]any)
 	require.True(t, ok)
-	prompts, ok := result["prompts"].([]any)
+	prompts, ok := result["prompts"].([]map[string]any)
 	require.True(t, ok)
-	assert.Empty(t, prompts)
+	assert.NotEmpty(t, prompts)
 }
 
 func TestPromptsGet_Error(t *testing.T) {
