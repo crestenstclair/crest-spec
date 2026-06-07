@@ -81,6 +81,9 @@ func buildDomainPrompt(resource cuepkg.Resource, registry *cuepkg.Registry) stri
 		}
 	}
 
+	// Event flow
+	writeEventFlow(&b, resource)
+
 	// Dependencies
 	deps := nonImplementsDeps(resource, registry)
 	if len(deps) > 0 {
@@ -176,12 +179,44 @@ func extractName(id string) string {
 	return parts[len(parts)-1]
 }
 
+func writeEventFlow(b *strings.Builder, resource cuepkg.Resource) {
+	var consumes, publishes []string
+	for _, dep := range resource.Dependencies {
+		switch dep.Kind {
+		case "consumes":
+			consumes = append(consumes, dep.TargetID)
+		case "publishes":
+			publishes = append(publishes, dep.TargetID)
+		}
+	}
+	if len(consumes) == 0 && len(publishes) == 0 {
+		return
+	}
+	b.WriteString("## Event Flow\n\n")
+	if len(consumes) > 0 {
+		b.WriteString("**Consumes:**\n")
+		for _, c := range consumes {
+			b.WriteString("- " + c + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if len(publishes) > 0 {
+		b.WriteString("**Publishes:**\n")
+		for _, p := range publishes {
+			b.WriteString("- " + p + "\n")
+		}
+		b.WriteString("\n")
+	}
+}
+
 func nonImplementsDeps(resource cuepkg.Resource, registry *cuepkg.Registry) []cuepkg.Edge {
 	var deps []cuepkg.Edge
 	for _, dep := range resource.Dependencies {
-		if dep.Kind != "implements" {
-			deps = append(deps, dep)
+		switch dep.Kind {
+		case "implements", "consumes", "publishes":
+			continue
 		}
+		deps = append(deps, dep)
 	}
 	return deps
 }

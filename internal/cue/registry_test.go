@@ -154,6 +154,82 @@ func TestNewRegistry_DanglingReference(t *testing.T) {
 	assert.Contains(t, err.Error(), "nonexistent.Thing")
 }
 
+func TestNewRegistry_ConsumesPublishesEdges(t *testing.T) {
+	p := &Project{
+		Name: "event-test",
+		Contexts: map[string]Context{
+			"Orders": {
+				Purpose: "Order processing",
+				Aggregates: map[string]Aggregate{
+					"Order": {
+						Root:    true,
+						Purpose: "Manages an order",
+						Publishes: []string{
+							"domainService.Orders.Fulfillment",
+						},
+					},
+				},
+				DomainServices: map[string]DomainService{
+					"Fulfillment": {
+						Purpose: "Fulfills orders",
+						Consumes: []string{
+							"aggregate.Orders.Order",
+						},
+						Publishes: []string{
+							"port.Orders.EventBus",
+						},
+					},
+				},
+				Ports: map[string]Port{
+					"EventBus": {
+						Consumes: []string{
+							"aggregate.Orders.Order",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	reg, err := NewRegistry(p)
+	require.NoError(t, err)
+
+	// Aggregate publishes
+	order := reg.Resources["aggregate.Orders.Order"]
+	hasPublishes := false
+	for _, dep := range order.Dependencies {
+		if dep.TargetID == "domainService.Orders.Fulfillment" && dep.Kind == "publishes" {
+			hasPublishes = true
+		}
+	}
+	assert.True(t, hasPublishes, "aggregate should have publishes edge")
+
+	// DomainService consumes and publishes
+	svc := reg.Resources["domainService.Orders.Fulfillment"]
+	hasConsumes := false
+	hasSvcPublishes := false
+	for _, dep := range svc.Dependencies {
+		if dep.TargetID == "aggregate.Orders.Order" && dep.Kind == "consumes" {
+			hasConsumes = true
+		}
+		if dep.TargetID == "port.Orders.EventBus" && dep.Kind == "publishes" {
+			hasSvcPublishes = true
+		}
+	}
+	assert.True(t, hasConsumes, "domain service should have consumes edge")
+	assert.True(t, hasSvcPublishes, "domain service should have publishes edge")
+
+	// Port consumes
+	port := reg.Resources["port.Orders.EventBus"]
+	hasPortConsumes := false
+	for _, dep := range port.Dependencies {
+		if dep.TargetID == "aggregate.Orders.Order" && dep.Kind == "consumes" {
+			hasPortConsumes = true
+		}
+	}
+	assert.True(t, hasPortConsumes, "port should have consumes edge")
+}
+
 func TestNewRegistry_Declaration(t *testing.T) {
 	p := loadMinimalProject(t)
 	reg, err := NewRegistry(p)

@@ -135,6 +135,7 @@ type Aggregate struct {
 	Events       FlexMap `json:"events,omitempty"`
 	Invariants   []string                     `json:"invariants,omitempty"`
 	Implements   string                       `json:"implements,omitempty"`
+	Publishes    []string                     `json:"publishes,omitempty"`
 	Meta         Meta                         `json:"meta,omitempty"`
 	Entities     map[string]Entity            `json:"entities,omitempty"`
 	ValueObjects map[string]ValueObject       `json:"valueObjects,omitempty"`
@@ -159,6 +160,7 @@ type ValueObject struct {
 
 type Port struct {
 	Contract map[string]string `json:"contract,omitempty"`
+	Consumes []string          `json:"consumes,omitempty"`
 	Meta     Meta              `json:"meta,omitempty"`
 }
 
@@ -179,6 +181,8 @@ type Repository struct {
 type DomainService struct {
 	Purpose     string       `json:"purpose,omitempty"`
 	Uses        []string     `json:"uses,omitempty"`
+	Consumes    []string     `json:"consumes,omitempty"`
+	Publishes   []string     `json:"publishes,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
 }

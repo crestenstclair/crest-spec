@@ -161,6 +161,35 @@ func TestBuildResourcePrompt_Asset(t *testing.T) {
 	assert.Contains(t, prompt, "aggregate.Synth.Voice")
 }
 
+func TestBuildResourcePrompt_EventFlow(t *testing.T) {
+	reg := &cuepkg.Registry{
+		Project: &cuepkg.Project{Name: "test"},
+		Resources: map[string]cuepkg.Resource{
+			"domainService.Orders.Fulfillment": {
+				ID: "domainService.Orders.Fulfillment", Kind: "domainService", ContextName: "Orders",
+				Declaration: cuepkg.DomainService{
+					Purpose:   "Fulfills orders",
+					Consumes:  []string{"event.OrderCreated"},
+					Publishes: []string{"event.OrderFulfilled"},
+				},
+				Dependencies: []cuepkg.Edge{
+					{TargetID: "event.OrderCreated", Kind: "consumes"},
+					{TargetID: "event.OrderFulfilled", Kind: "publishes"},
+				},
+			},
+		},
+	}
+
+	r := reg.Resources["domainService.Orders.Fulfillment"]
+	prompt := BuildResourcePrompt(r, reg)
+
+	assert.Contains(t, prompt, "## Event Flow")
+	assert.Contains(t, prompt, "**Consumes:**")
+	assert.Contains(t, prompt, "event.OrderCreated")
+	assert.Contains(t, prompt, "**Publishes:**")
+	assert.Contains(t, prompt, "event.OrderFulfilled")
+}
+
 func TestBuildResourcePrompt_NoDependencies(t *testing.T) {
 	reg := makeTestRegistry()
 	r := reg.Resources["port.Synth.AudioOutput"]
