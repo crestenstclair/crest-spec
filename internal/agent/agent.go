@@ -153,59 +153,7 @@ func parseResult(stdout, stderr []byte) *RunResult {
 
 // RunPrompt executes a Claude CLI prompt with the given options and returns the result.
 func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error) {
-	args := []string{"--print", "--output-format", "json", "--strict-mcp-config"}
-
-	model := opts.Model
-	if model == "" {
-		model = a.defaultModel
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-
-	if a.permissionMode != "" {
-		args = append(args, "--permission-mode", a.permissionMode)
-	}
-
-	if opts.Effort != "" {
-		args = append(args, "--effort", opts.Effort)
-	}
-
-	for _, dir := range opts.AddDirs {
-		args = append(args, "--add-dir", dir)
-	}
-
-	if opts.Continue {
-		args = append(args, "--continue")
-	}
-	if opts.Resume {
-		args = append(args, "--resume")
-	}
-	if opts.SessionID != "" {
-		args = append(args, "--session-id", opts.SessionID)
-	}
-	if opts.Force {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-
-	if len(opts.AllowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
-	}
-	if len(opts.DisallowedTools) > 0 {
-		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
-	}
-
-	if opts.AppendSystemPrompt != "" {
-		args = append(args, "--append-system-prompt", opts.AppendSystemPrompt)
-	}
-	if opts.NoSessionPersistence {
-		args = append(args, "--no-session-persistence")
-	}
-
-	useStdin := len(opts.Prompt) > 8192
-	if !useStdin && opts.Prompt != "" {
-		args = append(args, opts.Prompt)
-	}
+	args, useStdin := a.buildArgs(opts)
 
 	cmd := exec.CommandContext(ctx, a.path, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -221,6 +169,90 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	env, cleanup, err := a.buildEnv()
+	if err != nil {
+		return nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cmd.Env = env
+
+	if opts.Cwd != "" {
+		cmd.Dir = opts.Cwd
+	}
+	if useStdin {
+		cmd.Stdin = strings.NewReader(opts.Prompt)
+	}
+
+	runErr := cmd.Run()
+	result := parseResult(stdout.Bytes(), stderr.Bytes())
+
+	if runErr != nil {
+		return result, fmt.Errorf("claude exited with error: %w (stderr: %s) (stdout: %s)", runErr, result.Stderr, result.Output)
+	}
+	if result.IsError {
+		return result, fmt.Errorf("claude returned is_error: %s", result.Output)
+	}
+
+	return result, nil
+}
+
+// buildArgs constructs the CLI argument list from RunOpts. Returns the args
+// and whether the prompt should be piped via stdin.
+func (a *Agent) buildArgs(opts RunOpts) ([]string, bool) {
+	args := []string{"--print", "--output-format", "json", "--strict-mcp-config"}
+
+	model := opts.Model
+	if model == "" {
+		model = a.defaultModel
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if a.permissionMode != "" {
+		args = append(args, "--permission-mode", a.permissionMode)
+	}
+	if opts.Effort != "" {
+		args = append(args, "--effort", opts.Effort)
+	}
+	for _, dir := range opts.AddDirs {
+		args = append(args, "--add-dir", dir)
+	}
+	if opts.Continue {
+		args = append(args, "--continue")
+	}
+	if opts.Resume {
+		args = append(args, "--resume")
+	}
+	if opts.SessionID != "" {
+		args = append(args, "--session-id", opts.SessionID)
+	}
+	if opts.Force {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	if len(opts.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
+	}
+	if len(opts.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
+	}
+	if opts.AppendSystemPrompt != "" {
+		args = append(args, "--append-system-prompt", opts.AppendSystemPrompt)
+	}
+	if opts.NoSessionPersistence {
+		args = append(args, "--no-session-persistence")
+	}
+
+	useStdin := len(opts.Prompt) > 8192
+	if !useStdin && opts.Prompt != "" {
+		args = append(args, opts.Prompt)
+	}
+
+	return args, useStdin
+}
+
+func (a *Agent) buildEnv() ([]string, func(), error) {
 	var env []string
 	for _, e := range os.Environ() {
 		key := e[:strings.IndexByte(e, '=')]
@@ -231,38 +263,19 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 		}
 		env = append(env, e)
 	}
-	if a.apiKey != "" {
-		tmpConfigDir, cleanup, err := a.setupConfigIsolation()
-		if err != nil {
-			return nil, fmt.Errorf("config isolation: %w", err)
-		}
-		defer cleanup()
-		env = append(env, "CLAUDE_CONFIG_DIR="+tmpConfigDir)
-		env = append(env, "ANTHROPIC_API_KEY="+a.apiKey)
-	}
-	cmd.Env = env
 
-	if opts.Cwd != "" {
-		cmd.Dir = opts.Cwd
+	if a.apiKey == "" {
+		return env, nil, nil
 	}
 
-	if useStdin {
-		cmd.Stdin = strings.NewReader(opts.Prompt)
+	tmpConfigDir, cleanup, err := a.setupConfigIsolation()
+	if err != nil {
+		return nil, nil, fmt.Errorf("config isolation: %w", err)
 	}
+	env = append(env, "CLAUDE_CONFIG_DIR="+tmpConfigDir)
+	env = append(env, "ANTHROPIC_API_KEY="+a.apiKey)
 
-	runErr := cmd.Run()
-
-	result := parseResult(stdout.Bytes(), stderr.Bytes())
-
-	if runErr != nil {
-		return result, fmt.Errorf("claude exited with error: %w (stderr: %s) (stdout: %s)", runErr, result.Stderr, result.Output)
-	}
-
-	if result.IsError {
-		return result, fmt.Errorf("claude returned is_error: %s", result.Output)
-	}
-
-	return result, nil
+	return env, cleanup, nil
 }
 
 // runSimple executes a simple Claude CLI command and returns its stdout.
