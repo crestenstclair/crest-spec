@@ -33,3 +33,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Build output
+bin/
+
+# Runtime state
+.crest-spec/
