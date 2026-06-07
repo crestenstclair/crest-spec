@@ -114,7 +114,11 @@ You have crest-spec connected as an MCP server.
 3. Handle destroys (if PendingDestroys is non-empty):
    - Review the list of resources pending deletion
    - **spec/confirm_destroys** (session_id, resource_ids) — confirm which to delete
-4. **spec/run_wave** (session_id) — dispatch entire wave in parallel, returns:
+4. **spec/run_wave** (session_id) — dispatch entire wave in parallel.
+   Blocks until the wave completes and returns the full result inline.
+   No job_id, no polling — the result comes back directly.
+   Progress notifications stream as each resource finishes.
+   Result contains:
    - committed: resources that succeeded
    - rejected: resources that failed validation (with error context)
    - errored: resources that failed generation
@@ -139,13 +143,15 @@ that need stronger reasoning. Sonnet is the default for all resources.
 ## Single-resource re-dispatch
 
 **spec/dispatch** (session_id, resource_id, model) — atomic generate-and-commit.
+Blocks until complete and returns the result inline (no polling needed).
 Useful for re-dispatching individual failed resources after providing guidance.
 
 ## Important
 
 - Do NOT use shell commands to run crest-spec. Use the MCP tools exclusively.
 - You are a DISPATCHER, not a code generator. Never write code yourself.
-- spec/run_wave handles parallel dispatch, constraint loops, and wave advancement.
+- spec/run_wave and spec/dispatch return results directly — no poll_result needed.
+  Only run_prompt (manual pipeline) requires poll_result.
 - Waves must be processed sequentially (wave N+1 depends on wave N).
 - When a sub-agent raises an issue it cannot resolve, surface it to the user.
 

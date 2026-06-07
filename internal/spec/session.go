@@ -798,7 +798,11 @@ decisions. You MUST NOT write implementation code yourself.
 
   1. spec/plan          → see what needs generating
   2. spec/begin         → start session (returns session_id + plan + waves)
-  3. spec/run_wave      → dispatch entire wave in parallel, returns summary
+  3. spec/run_wave      → dispatch entire wave in parallel
+     Blocks until the wave completes and returns the full result inline.
+     No job_id, no polling — the result comes back directly.
+     Progress notifications stream as each resource finishes.
+     Result contains:
      - committed: resources that succeeded
      - rejected: resources that failed validation (with error context)
      - errored: resources that failed generation
@@ -825,12 +829,14 @@ decisions. You MUST NOT write implementation code yourself.
 ## Single-resource dispatch:
 
   spec/dispatch (session_id, resource_id, model) → atomic generate-and-commit.
+  Blocks until complete and returns the result inline (no polling needed).
   Useful for re-dispatching individual failed resources after providing guidance.
 
 ## Manual pipeline (full control):
 
   spec/context → run_prompt → poll_result → parse code blocks → spec/commit
   Use this when you need to inspect or modify sub-agent output before committing.
+  Only run_prompt requires poll_result — spec/run_wave and spec/dispatch do not.
 
 DO NOT:
   - Write implementation code directly — every file must come from a sub-agent
@@ -840,9 +846,14 @@ DO NOT:
 
 func dispatchInstructions(resourceID string) string {
 	return fmt.Sprintf(`Dispatch a sub-agent to generate code for %s.
+
+Preferred: use spec/dispatch (session_id, resource_id) — it handles the full
+generate → parse → validate → commit loop and returns the result inline.
+
+Manual pipeline (if you need to inspect output before committing):
 1. Call run_prompt with prompt, system_prompt, session_id, and resource_id
    (session_id and resource_id enable generation tracking in SQLite)
-2. Call poll_result to collect the generated code
+2. Call poll_result to collect the generated code (only run_prompt needs polling)
 3. Parse code blocks with // path: annotations
 4. Call spec/commit with the parsed files
 5. If validation fails, re-dispatch with the error details`, resourceID)
