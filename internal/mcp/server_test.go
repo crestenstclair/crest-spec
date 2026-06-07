@@ -342,8 +342,8 @@ func TestToolsList_ReturnsAllTools(t *testing.T) {
 	tools, ok := result["tools"].([]toolDef)
 	require.True(t, ok)
 
-	// 10 engine tools + 24 spec stubs = 34 total
-	assert.Len(t, tools, 34)
+	// 10 engine tools + 27 spec stubs = 37 total
+	assert.Len(t, tools, 37)
 
 	// Check that key engine tools exist
 	toolNames := make(map[string]bool)

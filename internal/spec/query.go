@@ -369,3 +369,34 @@ func (s *Spec) RemoveResource(ctx context.Context, resourceID string) error {
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Prompt — build and return the prompt WITHOUT dispatching
+// ---------------------------------------------------------------------------
+
+type PromptResult struct {
+	ResourceID   string `json:"resource_id"`
+	SystemPrompt string `json:"system_prompt"`
+	Prompt       string `json:"prompt"`
+}
+
+func (s *Spec) Prompt(ctx context.Context, resourceID string) (*PromptResult, error) {
+	planResult, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+
+	resource, ok := planResult.Registry.Resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource not found: %s", resourceID)
+	}
+
+	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
+	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
+
+	return &PromptResult{
+		ResourceID:   resourceID,
+		SystemPrompt: systemPrompt,
+		Prompt:       resourcePrompt,
+	}, nil
+}

@@ -54,6 +54,7 @@ type specStore interface {
 	ListSessionResources(sessionID string) ([]store.SessionResource, error)
 	ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error)
 	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
+	GetGeneration(id string) (*store.Generation, error)
 	RecordInvariantCheck(ic store.InvariantCheck) error
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)

@@ -140,6 +140,7 @@ type specHandler interface {
 	ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error)
 	RemoveResource(ctx context.Context, resourceID string) error
 	Import(ctx context.Context, opts specmod.ImportOpts) (*specmod.ImportResult, error)
+	Prompt(ctx context.Context, resourceID string) (*specmod.PromptResult, error)
 }
 
 // ---------------------------------------------------------------------------

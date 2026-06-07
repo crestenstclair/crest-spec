@@ -814,6 +814,16 @@ func (s *Store) UpdateGeneration(id, outputText, outcome, rejectionReason string
 	})
 }
 
+// GetGeneration returns a single generation by ID.
+func (s *Store) GetGeneration(id string) (*Generation, error) {
+	row, err := s.queries.GetGeneration(context.Background(), id)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	g := dbGenerationToGeneration(row)
+	return &g, nil
+}
+
 // ListGenerations returns up to limit generations for a resource, ordered by created_at DESC.
 func (s *Store) ListGenerations(resourceID string, limit int) ([]Generation, error) {
 	rows, err := s.queries.ListGenerations(context.Background(), db.ListGenerationsParams{

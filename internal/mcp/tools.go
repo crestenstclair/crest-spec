@@ -328,6 +328,9 @@ Do NOT use spec_apply — it runs unattended with no agent control.`, about, sta
 			{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
 			{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 			{Name: "spec/mode", Description: "Show the current mode (environment)", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+			{Name: "spec/inspect", Description: "Full debug view of a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
+			{Name: "spec/import", Description: "Scan directory and generate skeleton CUE spec", InputSchema: json.RawMessage(`{"type":"object","properties":{"directory":{"type":"string","description":"Directory to scan"}},"required":["directory"]}`)},
+			{Name: "spec/prompt", Description: "Build and return the prompt for a resource without dispatching", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		}
 
 		for _, def := range specStubs {
@@ -796,6 +799,20 @@ func (s *Server) registerSpecTools() {
 		})
 		if err != nil {
 			return errorResult(fmt.Sprintf("import: %v", err))
+		}
+		return jsonResult(result)
+	})
+
+	// spec/prompt — build and return the prompt without dispatching
+	s.addTool(toolDef{
+		Name: "spec/prompt", Description: "Build and return the full prompt for a resource WITHOUT dispatching to an LLM. Useful for reviewing what the model would see.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct{ ResourceID string `json:"resource_id"` }
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Prompt(ctx, p.ResourceID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("prompt: %v", err))
 		}
 		return jsonResult(result)
 	})
