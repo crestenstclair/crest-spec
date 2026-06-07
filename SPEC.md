@@ -9,10 +9,10 @@ The mental model is **Terraform for code generation**: you declare what your sys
 **Runtime:** A standalone Go binary (`crest-spec`) that acts as an MCP server. Its sub-agent execution engine is adapted from the proven `claude-mcp` server — the same agent wrapper (config isolation, process groups, concurrency semaphore), async job model (SQLite-persisted, PID-liveness-reconciled), and dual transports (stdio + Streamable HTTP) that are already battle-tested. The orchestrator dispatches sub-agents for code generation via `run_prompt`, and can invoke `code_review` and `bugbot` as verification steps in the constraint loop. On top of this engine, crest-spec adds CUE spec loading (via `cuelang.org/go`), a plan/apply lifecycle, prompt construction, wave-based execution, and the constraint loop.
 
 - **Module:** `github.com/crestenstclair/crest-spec`
-- **Go version:** 1.26.3
+- **Go version:** 1.26.4
 - **Server version reported over MCP:** `0.1.0`
 - **MCP protocol version:** `2024-11-05`
-- **Transport:** stdio (JSON-RPC over stdin/stdout) and Streamable HTTP (`POST /mcp` with SSE upgrade)
+- **Transport:** stdio (JSON-RPC over stdin/stdout) and Streamable HTTP (`POST /mcp`; SSE upgrade for progress streaming is planned but not yet implemented — currently plain JSON-RPC only)
 - **Sub-agent invocation:** `runner.RunPrompt` (claude `--print` subprocess), with `--disallowedTools` for constrained code generation
 - **Platform assumptions:** Unix-like (uses `syscall.Kill`, process groups, `ps`); developed on macOS/Darwin.
 
@@ -529,12 +529,24 @@ meta: {
     style?:      string       // Code style guidance
     notes?:      string       // Free-form notes
     rationale?:  string       // Why this exists
+    framework?:  string       // Framework/library to use (e.g., "nih-plug", "actix-web")
     reviewLevel?: "full" | "light" | "solid" | "skip"  // Constraint loop review depth (see section 8.2)
     ...                       // Extensible
 }
 ```
 
-Meta merges hierarchically via CUE unification: project meta -> context meta -> resource meta. List fields concatenate; scalar fields from more-specific levels override less-specific ones.
+**`reviewLevel` values:**
+
+| Value | Behavior |
+|-------|----------|
+| `"full"` | Multi-model code review via `engine.CodeReview`. Heavyweight — fans out across opus/sonnet/haiku. Default for aggregates, domain services, adapters. |
+| `"light"` | Single-model severity-ranked scan via `engine.Bugbot`. Default for value objects, entities, assets. |
+| `"solid"` | Single-model SOLID/DI/interface review via `engine.Review`. Explicit opt-in for any resource. |
+| `"skip"` | No LLM review. For generated boilerplate (mod.rs, Cargo.toml, manifests). |
+
+The `framework` field is injected into prompts to guide framework-specific code generation (e.g., a `plugin` context with `framework: "nih-plug"` tells the LLM to generate nih-plug compatible code).
+
+Meta merges hierarchically via CUE unification: project meta -> context meta -> resource meta. List fields are merged with deduplication (duplicate values are removed); scalar fields from more-specific levels override less-specific ones.
 
 ### 1.6 Resource IDs and Dependencies
 
@@ -562,8 +574,9 @@ Dependencies are tracked as typed edges in the resource graph:
 | `implements` | Adapter implements a port |
 | `uses` | Service/asset depends on an aggregate/kind |
 | `of` | Repository or entity belongs to an aggregate |
-| `consumes` | Resource consumes events from another |
-| `publishes` | Resource publishes events |
+| `targets` | Asset targets a specific resource (links generated artifact to its source resource) |
+| `consumes` | Resource consumes events from another (used for planning/diffing and sub-agent context) |
+| `publishes` | Resource publishes events (used for planning/diffing and sub-agent context) |
 
 In CUE, dependencies are expressed as ID strings (e.g., `uses: ["aggregate.Synth.Voice"]`). The Go loader resolves these into the resource graph at load time, validating that all referenced IDs exist.
 
@@ -583,32 +596,28 @@ cmd/crest-spec/main.go               Entrypoint + flag/help handling
   +- engine.New(agent, store, ...)    wraps run_prompt / code_review / bugbot execution
   +- spec.New(engine, store, ...)     plan/apply/verify lifecycle
   +- mcp.New(...)                     MCP server (tools, dispatch, metrics)
-       +- StdioTransport              reads stdin, writes stdout
-       +- HTTPTransport               net/http server, POST /mcp, SSE upgrade
+       +- stdio transport             reads stdin, writes stdout (Server handles directly)
+       +- HTTP transport              net/http server, POST /mcp (Server handles directly)
        +- app.New(srv).Run(ctx)       lifecycle wrapper (Run until ctx cancelled)
 
 internal/
   ## Engine layer (adapted from claude-mcp)
   agent/        Wraps the claude binary via os/exec; config isolation, process groups, concurrency
-  app/          Minimal application lifecycle (New + Run)
   config/       envconfig-based configuration + usage/help text
   engine/       Orchestration primitives: run_prompt, code_review, bugbot as callable functions
   mcp/          JSON-RPC server, tool definitions, dispatch, async jobs, metrics, recursion guard
-  jobs/         Async job lifecycle: create/complete/fail/cancel, orphan cleanup, wait
 
   ## Spec layer (crest-spec domain)
   cue/          CUE loader: multi-file unification, resource parsing
   graph/        Resource dependency graph: topological sort, wave computation, hash propagation
   plan/         Planner: diff registry against state, compute effective hashes, produce PlannedAction[]
   prompt/       Prompt builder: system prompt, resource prompt, fix prompt, context injection
-  spec/         Spec engine: plan/apply lifecycle, wave execution, constraint loop, sub-agent state machine
-  verify/       Verification steps: parse output, type check, invariant check, test, LLM review
+  spec/         Spec engine: plan/apply lifecycle, wave execution, constraint loop, sub-agent state machine; includes validation (validate.go)
 
   ## Shared
   db/           sqlc-generated query code (DO NOT EDIT)
   errors/       Const error sentinel type (`type New string`)
   store/        SQLite store: jobs, resources, files, applies, generations, sessions, notes, lock
-  mocks/        counterfeiter fakes (committed)
 migrations/     SQL schema, embedded via go:embed; applied at store startup
 sql/queries/    sqlc query definitions (source for internal/db)
 ```
@@ -635,7 +644,7 @@ Mocks are generated with counterfeiter (`//go:generate` directives) and committe
 
 ### 2.4 Startup Sequence (`main.go`)
 
-1. **Subcommand check** — if `os.Args` is `check job <id>`, run `checkJob()` and exit (see section 13.2).
+1. **Subcommand check** — if `os.Args` is `check job <id>`, run `checkJob()` and exit (see section 13.3).
 2. **Help** — `-h`/`--help` prints usage + env var table (`config.Help()`), exits 0.
 3. **Config** — `config.New()`; on error, print help and panic.
 4. **Store** — `store.New(dbPath())` where `dbPath()` is `.crest-spec/state.db` in the project directory. `defer store.Close()`.
@@ -705,7 +714,7 @@ The agent wrapper is taken directly from the working claude-mcp implementation. 
 - Prompts <= 8 KB passed as positional arg; larger prompts piped via stdin.
 
 **Subprocess robustness** (proven in claude-mcp):
-- **Config isolation** — each invocation gets a fresh temp config dir mirroring `~/.claude`. `.claude.json` is copied (writable per-process); credentials are hard-linked; subdirectories are symlinked. Prevents concurrent processes from racing.
+- **Config isolation** — when an API key is configured (`CREST_SPEC_API_KEY`), each invocation gets a fresh temp config dir mirroring `~/.claude`. `.claude.json` is copied (writable per-process); credentials are hard-linked; subdirectories are symlinked. Prevents concurrent processes from racing. When no API key is set, config isolation is not activated — there is nothing to isolate since the child uses the developer's existing session.
 - **Process groups** — `SysProcAttr{Setpgid: true}`; `cmd.Cancel` sends `SIGKILL` to the whole group (`syscall.Kill(-pid, SIGKILL)`); `cmd.WaitDelay = 5s`.
 - **Partial results** — on error, parses whatever stdout was produced, attaches Stderr, returns `(partialResult, wrappedError)`.
 - **`is_error` detection** — a JSON envelope with `is_error: true` is surfaced as an error even with exit code 0.
@@ -720,18 +729,18 @@ The engine wraps the agent with higher-level operations that the spec layer call
 
 **Operations:**
 
-- **`Generate(ctx, prompt, systemPrompt, model, opts) (*RunResult, error)`** — the primary code generation path. Calls `runner.RunPrompt` with:
+- **`Generate(ctx, prompt, systemPrompt, model, GenerateOpts) (*RunResult, error)`** — the primary code generation path. Calls `runner.RunPrompt` with:
   - `--disallowedTools Bash Read Edit Write Glob Grep WebFetch WebSearch` — no tool access, pure code output
   - `--no-session-persistence` — stateless
   - `--append-system-prompt` with the crest-spec system prompt
   - Model defaults to `GenerateModel` config
   - Acquires a concurrency slot before spawning, releases on exit
 
-- **`Review(ctx, code, requirements, model, opts) (*RunResult, error)`** — LLM verification pass. Calls `runner.RunPrompt` with a review prompt that checks SOLID principles, folder structure, DI, interfaces, tests, and declared invariants. Parses for `PASS`/`FAIL` verdict. Uses `VerifyModel` config.
+- **`Review(ctx, code, requirements, model) (*RunResult, error)`** — LLM verification pass. Calls `runner.RunPrompt` with a generic review prompt. SOLID/DI/clean code checks are not hardcoded in the review template — they come from the user's meta rules (e.g., `meta.rules` in the CUE spec). Parses for `PASS`/`FAIL` verdict. Uses `VerifyModel` config.
 
-- **`CodeReview(ctx, cwd, models, prompt, opts) (string, error)`** — multi-model code review of generated files. Adapted from claude-mcp's `execCodeReview`: fans out across models (default `[opus, sonnet, haiku]`), each checking for architecture issues, nil derefs, bounds errors, performance, leaks. Results aggregated per model. Useful as a heavyweight verification step for critical resources.
+- **`CodeReview(ctx, cwd, models, prompt, CodeReviewOpts) (string, error)`** — multi-model code review of generated files. Adapted from claude-mcp's `execCodeReview`: fans out across models (default `[opus, sonnet, haiku]`), each checking for architecture issues, nil derefs, bounds errors, performance, leaks. Results aggregated per model. Useful as a heavyweight verification step for critical resources.
 
-- **`Bugbot(ctx, cwd, models, prompt, opts) (string, error)`** — lightweight severity-ranked scan. Adapted from claude-mcp's `execBugbot`: defaults to `[haiku]` for speed, demands per-finding severity + remedy. Useful as a fast sanity check in the constraint loop.
+- **`Bugbot(ctx, cwd, models, prompt, BugbotOpts) (string, error)`** — lightweight severity-ranked scan. Adapted from claude-mcp's `execBugbot`: defaults to `[haiku]` for speed, demands per-finding severity + remedy. Useful as a fast sanity check in the constraint loop.
 
 All operations acquire a slot from the shared concurrency semaphore. The spec layer never needs to think about subprocess limits — the engine enforces them.
 
@@ -881,7 +890,7 @@ This gives the LLM full context on what it produced and exactly what went wrong.
 SQLite is the single source of truth for all system state. One database (`.crest-spec/state.db` in the project directory) holds everything: async job tracking, spec state, generation audit trail, and sub-agent coordination.
 
 - SQLite via `modernc.org/sqlite` (pure-Go, CGO-free).
-- PRAGMAs at open: `journal_mode=WAL`, `busy_timeout=5000`.
+- PRAGMAs at open: `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON` (enables cascade behavior for foreign key constraints).
 - Migrations: SQL files embedded via `migrations.FS` (go:embed), applied in filename order, tracked in a `schema_migrations(filename)` table; each applied transactionally.
 - Queries are sqlc-generated into `internal/db/` (do not hand-edit); query source is `sql/queries/*.sql`.
 
@@ -909,8 +918,11 @@ State transitions are guarded by `AND status = 'running'` clauses so terminal st
 ### 7.2 State Tracking (What exists)
 
 **`resources` table:** Tracks every resource that has been successfully generated.
+- `kind`: Resource kind (e.g., `aggregate`, `valueObject`, `asset`)
+- `context_name`: Bounded context this resource belongs to (if applicable)
 - `declaration_hash`: Hash of the resource's declaration (detects spec changes)
 - `effective_hash`: Hash including all transitive dependencies (detects cascading changes)
+- `model`: Which LLM model last generated this resource
 - `settled_at`: When this resource was last successfully generated
 
 **`generated_files` table:** Maps file paths to the resources that generated them.
@@ -924,7 +936,7 @@ State transitions are guarded by `AND status = 'running'` clauses so terminal st
 
 **`applies` table:** Records every plan execution with status, timestamps, and spec hash.
 
-**`apply_actions` table:** What action was taken per resource per apply (create/modify/destroy with outcome).
+**`apply_actions` table:** What action was taken per resource per apply. The action column is free-text (the CHECK constraint limiting it to `create/modify/destroy` was removed in migration 006). Current values used in practice include `create`, `modify`, `destroy`, and `drift`.
 
 **`generations` table:** Full audit of every LLM invocation:
 - Complete prompt text and output text
@@ -1347,8 +1359,8 @@ Always active. `Server.Run(ctx)`:
 Active when `HTTPAddr` is configured. A `net/http` server (stdlib, no framework).
 
 - **Single endpoint:** `POST /mcp` — clients send JSON-RPC requests in the POST body.
-- **Sync tools:** the response is a plain JSON-RPC response (no SSE upgrade).
-- **Async tools:** the response is upgraded to an SSE stream. The server emits progress notifications as SSE events, then the final tool result, then closes the stream.
+- **Sync tools:** the response is a plain JSON-RPC response.
+- **Async tools:** the response is a plain JSON-RPC response with a job ID. SSE streaming for progress notifications is planned but not yet implemented.
 - **Session management:** stateless — each request is independent. Job IDs are the correlation mechanism.
 - **Shutdown:** `http.Server.Shutdown(ctx)` with a 30s drain timeout.
 
@@ -1383,7 +1395,7 @@ The server exposes two groups of tools: **spec tools** (the plan/apply lifecycle
 | `spec/validate` | sync | Check structural invariants against the spec without generating code. |
 | `spec/begin` | sync | Start an interactive agent session: compute plan, create waves, acquire lock. Returns plan and orchestrator instructions. |
 | `spec/next` | sync | Get the next wave of uncommitted resources. Returns `done: true` when complete. |
-| `spec/context` | sync | Get the scoped prompt for a specific resource. Returns `systemPrompt`, `prompt`, `dependencyNotes`, and `dispatchInstructions`. |
+| `spec/context` | sync | Get the scoped prompt for a specific resource. Returns `systemPrompt`, `prompt`, `dependencyNotes`, and `instructions`. |
 | `spec/validate-resource` | sync | Run invariant checks and optional type check/tests against files on disk for a specific resource. |
 | `spec/note` | sync | Save a design decision note for a resource. Notes are injected into downstream prompts. |
 | `spec/commit` | sync | Record a resource as complete in state. |
@@ -1499,6 +1511,8 @@ Prompts are templates exposed via `prompts/list` and `prompts/get`.
 
 On detection, the server replaces all tools with a single placeholder and `dispatch` refuses real work.
 
+**`--strict-mcp-config` flag:** When invoking `claude` subprocesses, the agent wrapper passes `--strict-mcp-config` to prevent the child process from loading MCP server configurations that could cause recursion. Combined with env var filtering (stripping `CREST_SPEC_*` and `MCP_*` variables from the child environment), this ensures sub-agents cannot accidentally invoke `crest-spec` as an MCP server.
+
 ### 9.10 Metrics
 
 Lock-free per-tool counters using `atomic.Int64` for Calls, Errors, TotalNs, MinNs, MaxNs (min/max via CAS loops). `Metrics` holds a `map[string]*toolMetric` under an `RWMutex` and a start time. `snapshot()` reports uptime, total calls/errors, and per-tool `{calls, errors, avg_ms, min_ms, max_ms}`. Metric keys include model-scoped variants (`generate:<model>`, `verify:<model>`, etc.) for tracking sub-agent performance.
@@ -1559,7 +1573,7 @@ For integration testing, the same spec is also expressed as numbered phase files
 - **Graceful shutdown** — SIGINT/SIGTERM via `signal.NotifyContext`; HTTP server (if active) shuts down via `http.Server.Shutdown(ctx)`; server drains in-flight jobs up to 30s; `cmd.Cancel` + process groups + `WaitDelay` ensure subprocess trees are SIGKILLed rather than leaked.
 - **Global concurrency** — a `chan struct{}` semaphore of size `MaxConcurrency` (default 5) ensures at most N `claude` subprocesses run simultaneously across all tools and transports.
 - **Process groups** — every subprocess runs with `Setpgid: true` and is killed via `kill(-pid, SIGKILL)` so children die too.
-- **Config isolation** — prevents concurrent `claude` processes from corrupting `~/.claude/.claude.json` or contending on the session store.
+- **Config isolation** — prevents concurrent `claude` processes from corrupting `~/.claude/.claude.json` or contending on the session store. Only activates when `CREST_SPEC_API_KEY` is set.
 - **Logging** — zerolog to stderr with timestamps; `Panic` (not `Fatal`) per convention so deferred cleanup runs.
 - **Crash recovery** — persistent SQLite state + PID liveness reconciliation means stale `running` jobs from a previous (dead) process are cleaned up on next start. The `lock` table similarly detects stale locks from dead processes.
 - **Exclusive apply lock** — the `lock` table prevents concurrent applies from corrupting generation state. `spec/unlock` provides a manual escape hatch for stale locks.
@@ -1602,7 +1616,7 @@ For integration testing, the same spec is also expressed as numbered phase files
 
 ## 13. Running Modes & Client Integration
 
-The `crest-spec` binary has two running modes: **MCP server** (long-lived, serves tools to an orchestrating agent) and **CLI** (short-lived subcommands the orchestrator invokes directly).
+The `crest-spec` binary has three running modes: **MCP server** (long-lived, serves tools to an orchestrating agent), **Dashboard** (monitoring interface with API endpoints), and **CLI** (short-lived subcommands the orchestrator invokes directly).
 
 ### 13.1 Mode 1: MCP Server
 
@@ -1625,7 +1639,11 @@ The primary mode. An orchestrating AI agent (Claude Code, Cursor, or any MCP cli
 
 Auth: uses the developer's existing local Claude Code session (`~/.claude` OAuth/keychain); no API key required unless `CREST_SPEC_API_KEY` is set (passed through as `ANTHROPIC_API_KEY`).
 
-### 13.2 Mode 2: CLI Subcommands
+### 13.2 Mode 2: Dashboard
+
+A monitoring interface that exposes API endpoints for inspecting system state. The dashboard provides visibility into active sessions, job status, resource state, and generation history without going through the MCP protocol.
+
+### 13.3 Mode 3: CLI Subcommands
 
 The orchestrating agent runs these as background shell commands to interact with SQLite state and collect async job results without going through the MCP protocol.
 
@@ -1647,7 +1665,11 @@ Implementation:
 3. `completed` -> print `result` to stdout, soft-delete the job, exit `0`.
 4. `failed`/`cancelled` -> print status+error to stderr, soft-delete, exit `1`.
 
-### 13.3 Typical Orchestration Flows
+### 13.4 Multi-Phase Agent Runner
+
+`scripts/run-phased-agent.sh` is a shell script that drives crest-spec through all 10 crest-synth phases with state carry-over. It automates the full lifecycle: for each phase, it loads the corresponding CUE spec subset, runs `spec/plan` and `spec/apply`, and carries forward SQLite state between phases so that incremental planning works correctly across the full spec evolution.
+
+### 13.5 Typical Orchestration Flows
 
 **Automated (spec/apply):**
 1. Client calls `spec/plan` -> sees planned changes.
