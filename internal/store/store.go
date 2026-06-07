@@ -62,6 +62,66 @@ type Dependency struct {
 	Kind     string
 }
 
+// Apply is the store's domain type for a spec apply run.
+type Apply struct {
+	ID        string
+	Status    string
+	SpecHash  string
+	StartedAt time.Time
+	DoneAt    *time.Time
+}
+
+// ApplyAction is the store's domain type for an action taken during an apply.
+type ApplyAction struct {
+	ID         string
+	ApplyID    string
+	ResourceID string
+	Action     string
+	Outcome    string
+	Error      string
+	StartedAt  time.Time
+	DoneAt     *time.Time
+}
+
+// Generation is the store's domain type for a single LLM generation attempt.
+type Generation struct {
+	ID              string
+	ApplyID         string
+	ResourceID      string
+	PromptText      string
+	PromptHash      string
+	OutputText      string
+	Model           string
+	Outcome         string
+	RejectionReason string
+	RetryCount      int
+	DurationMS      int64
+	InputTokens     int64
+	OutputTokens    int64
+	CostUSD         float64
+	CreatedAt       time.Time
+}
+
+// Session is the store's domain type for a spec engine agent session.
+type Session struct {
+	ID          string
+	PlanJSON    string
+	WavesJSON   string
+	HashesJSON  string
+	CurrentWave int
+	Status      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// AgentNote is the store's domain type for a per-resource note left by the agent.
+type AgentNote struct {
+	ResourceID string
+	ApplyID    string
+	Content    string
+	CreatedAt  time.Time
+}
+
 // Store wraps a SQLite database and provides domain operations for
 // jobs, locks, and migrations.
 type Store struct {
@@ -569,4 +629,413 @@ func (s *Store) GetDependencies(sourceID string) ([]Dependency, error) {
 
 func (s *Store) DeleteDependencies(sourceID string) error {
 	return s.queries.DeleteDependencies(context.Background(), sourceID)
+}
+
+// ---------------------------------------------------------------------------
+// Apply converters
+// ---------------------------------------------------------------------------
+
+func dbApplyToApply(a db.Apply) Apply {
+	out := Apply{
+		ID:       a.ID,
+		Status:   a.Status,
+		SpecHash: a.SpecHash,
+	}
+	if t, err := time.Parse(time.RFC3339Nano, a.StartedAt); err == nil {
+		out.StartedAt = t
+	}
+	if a.DoneAt != nil {
+		if t, err := time.Parse(time.RFC3339Nano, *a.DoneAt); err == nil {
+			out.DoneAt = &t
+		}
+	}
+	return out
+}
+
+func dbApplyActionToApplyAction(a db.ApplyAction) ApplyAction {
+	out := ApplyAction{
+		ID:         a.ID,
+		ApplyID:    a.ApplyID,
+		ResourceID: a.ResourceID,
+		Action:     a.Action,
+	}
+	if a.Outcome != nil {
+		out.Outcome = *a.Outcome
+	}
+	if a.Error != nil {
+		out.Error = *a.Error
+	}
+	if t, err := time.Parse(time.RFC3339Nano, a.StartedAt); err == nil {
+		out.StartedAt = t
+	}
+	if a.DoneAt != nil {
+		if t, err := time.Parse(time.RFC3339Nano, *a.DoneAt); err == nil {
+			out.DoneAt = &t
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Apply CRUD
+// ---------------------------------------------------------------------------
+
+// CreateApply inserts a new running apply record.
+func (s *Store) CreateApply(id, specHash string) error {
+	return s.queries.CreateApply(context.Background(), db.CreateApplyParams{
+		ID:        id,
+		SpecHash:  specHash,
+		StartedAt: now(),
+	})
+}
+
+// GetApply retrieves an apply by ID. Returns ErrNotFound if not found.
+func (s *Store) GetApply(id string) (*Apply, error) {
+	a, err := s.queries.GetApply(context.Background(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, cserrors.ErrNotFound
+		}
+		return nil, err
+	}
+	out := dbApplyToApply(a)
+	return &out, nil
+}
+
+// CompleteApply marks a running apply as completed.
+// Returns ErrAlreadyDone if the apply is not in running state.
+func (s *Store) CompleteApply(id string) error {
+	ts := now()
+	res, err := s.queries.CompleteApply(context.Background(), db.CompleteApplyParams{
+		DoneAt: &ts,
+		ID:     id,
+	})
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return cserrors.ErrAlreadyDone
+	}
+	return nil
+}
+
+// FailApply marks a running apply as failed.
+// Returns ErrAlreadyDone if the apply is not in running state.
+func (s *Store) FailApply(id string) error {
+	ts := now()
+	res, err := s.queries.FailApply(context.Background(), db.FailApplyParams{
+		DoneAt: &ts,
+		ID:     id,
+	})
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return cserrors.ErrAlreadyDone
+	}
+	return nil
+}
+
+// ListApplies returns up to limit applies ordered by started_at DESC.
+func (s *Store) ListApplies(limit int) ([]Apply, error) {
+	rows, err := s.queries.ListApplies(context.Background(), int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Apply, len(rows))
+	for i, r := range rows {
+		out[i] = dbApplyToApply(r)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// ApplyAction CRUD
+// ---------------------------------------------------------------------------
+
+// CreateApplyAction inserts a new apply action record.
+func (s *Store) CreateApplyAction(id, applyID, resourceID, action string) error {
+	return s.queries.CreateApplyAction(context.Background(), db.CreateApplyActionParams{
+		ID:         id,
+		ApplyID:    applyID,
+		ResourceID: resourceID,
+		Action:     action,
+		StartedAt:  now(),
+	})
+}
+
+// UpdateApplyAction sets the outcome and optional error on an apply action.
+func (s *Store) UpdateApplyAction(id, outcome, errMsg string) error {
+	ts := now()
+	var errPtr *string
+	if errMsg != "" {
+		errPtr = &errMsg
+	}
+	return s.queries.UpdateApplyAction(context.Background(), db.UpdateApplyActionParams{
+		Outcome: &outcome,
+		Error:   errPtr,
+		DoneAt:  &ts,
+		ID:      id,
+	})
+}
+
+// ListApplyActions returns all actions for an apply, ordered by started_at.
+func (s *Store) ListApplyActions(applyID string) ([]ApplyAction, error) {
+	rows, err := s.queries.ListApplyActions(context.Background(), applyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ApplyAction, len(rows))
+	for i, r := range rows {
+		out[i] = dbApplyActionToApplyAction(r)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Generation converter
+// ---------------------------------------------------------------------------
+
+func dbGenerationToGeneration(g db.Generation) Generation {
+	out := Generation{
+		ID:         g.ID,
+		ResourceID: g.ResourceID,
+		PromptText: g.PromptText,
+		PromptHash: g.PromptHash,
+		Model:      g.Model,
+		RetryCount: int(g.RetryCount),
+	}
+	if g.ApplyID != nil {
+		out.ApplyID = *g.ApplyID
+	}
+	if g.OutputText != nil {
+		out.OutputText = *g.OutputText
+	}
+	if g.Outcome != nil {
+		out.Outcome = *g.Outcome
+	}
+	if g.RejectionReason != nil {
+		out.RejectionReason = *g.RejectionReason
+	}
+	if g.DurationMs != nil {
+		out.DurationMS = *g.DurationMs
+	}
+	if g.InputTokens != nil {
+		out.InputTokens = *g.InputTokens
+	}
+	if g.OutputTokens != nil {
+		out.OutputTokens = *g.OutputTokens
+	}
+	if g.CostUsd != nil {
+		out.CostUSD = *g.CostUsd
+	}
+	if t, err := time.Parse(time.RFC3339Nano, g.CreatedAt); err == nil {
+		out.CreatedAt = t
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Generation CRUD
+// ---------------------------------------------------------------------------
+
+// CreateGeneration inserts a new generation record.
+func (s *Store) CreateGeneration(g Generation) error {
+	var applyID *string
+	if g.ApplyID != "" {
+		applyID = &g.ApplyID
+	}
+	return s.queries.CreateGeneration(context.Background(), db.CreateGenerationParams{
+		ID:         g.ID,
+		ApplyID:    applyID,
+		ResourceID: g.ResourceID,
+		PromptText: g.PromptText,
+		PromptHash: g.PromptHash,
+		Model:      g.Model,
+		RetryCount: int64(g.RetryCount),
+		CreatedAt:  now(),
+	})
+}
+
+// UpdateGeneration sets the output and metrics on a generation record.
+func (s *Store) UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error {
+	var outputPtr *string
+	if outputText != "" {
+		outputPtr = &outputText
+	}
+	var outcomePtr *string
+	if outcome != "" {
+		outcomePtr = &outcome
+	}
+	var rejectionPtr *string
+	if rejectionReason != "" {
+		rejectionPtr = &rejectionReason
+	}
+	return s.queries.UpdateGeneration(context.Background(), db.UpdateGenerationParams{
+		OutputText:      outputPtr,
+		Outcome:         outcomePtr,
+		RejectionReason: rejectionPtr,
+		DurationMs:      &durationMS,
+		InputTokens:     &inputTokens,
+		OutputTokens:    &outputTokens,
+		CostUsd:         &costUSD,
+		ID:              id,
+	})
+}
+
+// ListGenerations returns up to limit generations for a resource, ordered by created_at DESC.
+func (s *Store) ListGenerations(resourceID string, limit int) ([]Generation, error) {
+	rows, err := s.queries.ListGenerations(context.Background(), db.ListGenerationsParams{
+		ResourceID: resourceID,
+		Limit:      int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Generation, len(rows))
+	for i, r := range rows {
+		out[i] = dbGenerationToGeneration(r)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Session converter
+// ---------------------------------------------------------------------------
+
+func dbSessionToSession(s db.AgentSession) Session {
+	out := Session{
+		ID:          s.ID,
+		PlanJSON:    s.PlanJson,
+		WavesJSON:   s.WavesJson,
+		HashesJSON:  s.HashesJson,
+		CurrentWave: int(s.CurrentWave),
+		Status:      s.Status,
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s.CreatedAt); err == nil {
+		out.CreatedAt = t
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s.UpdatedAt); err == nil {
+		out.UpdatedAt = t
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Session CRUD
+// ---------------------------------------------------------------------------
+
+// CreateSession inserts a new active agent session.
+func (s *Store) CreateSession(sess Session) error {
+	ts := now()
+	return s.queries.CreateSession(context.Background(), db.CreateSessionParams{
+		ID:         sess.ID,
+		PlanJson:   sess.PlanJSON,
+		WavesJson:  sess.WavesJSON,
+		HashesJson: sess.HashesJSON,
+		CreatedAt:  ts,
+		UpdatedAt:  ts,
+	})
+}
+
+// GetSession retrieves a session by ID. Returns ErrNotFound if not found.
+func (s *Store) GetSession(id string) (*Session, error) {
+	sess, err := s.queries.GetSession(context.Background(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, cserrors.ErrNotFound
+		}
+		return nil, err
+	}
+	out := dbSessionToSession(sess)
+	return &out, nil
+}
+
+// GetActiveSession returns the current active session. Returns ErrNotFound if none.
+func (s *Store) GetActiveSession() (*Session, error) {
+	sess, err := s.queries.GetActiveSession(context.Background())
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, cserrors.ErrNotFound
+		}
+		return nil, err
+	}
+	out := dbSessionToSession(sess)
+	return &out, nil
+}
+
+// UpdateSession sets the status and current wave on a session.
+func (s *Store) UpdateSession(id, status string, currentWave int) error {
+	return s.queries.UpdateSessionStatus(context.Background(), db.UpdateSessionStatusParams{
+		Status:      status,
+		CurrentWave: int64(currentWave),
+		UpdatedAt:   now(),
+		ID:          id,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Note converter
+// ---------------------------------------------------------------------------
+
+func dbNoteToAgentNote(n db.AgentNote) AgentNote {
+	out := AgentNote{
+		ResourceID: n.ResourceID,
+		ApplyID:    n.ApplyID,
+		Content:    n.Content,
+	}
+	if t, err := time.Parse(time.RFC3339Nano, n.CreatedAt); err == nil {
+		out.CreatedAt = t
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Note CRUD
+// ---------------------------------------------------------------------------
+
+// SetNote upserts a note for a resource+apply combination.
+func (s *Store) SetNote(resourceID, applyID, content string) error {
+	return s.queries.CreateNote(context.Background(), db.CreateNoteParams{
+		ResourceID: resourceID,
+		ApplyID:    applyID,
+		Content:    content,
+		CreatedAt:  now(),
+	})
+}
+
+// GetNote retrieves the content of a note. Returns ("", nil) if not found.
+func (s *Store) GetNote(resourceID, applyID string) (string, error) {
+	n, err := s.queries.GetNote(context.Background(), db.GetNoteParams{
+		ResourceID: resourceID,
+		ApplyID:    applyID,
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return n.Content, nil
+}
+
+// ListNotes returns all notes for an apply.
+func (s *Store) ListNotes(applyID string) ([]AgentNote, error) {
+	rows, err := s.queries.ListNotes(context.Background(), applyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentNote, len(rows))
+	for i, r := range rows {
+		out[i] = dbNoteToAgentNote(r)
+	}
+	return out, nil
 }

@@ -506,3 +506,116 @@ func TestGetDependencies_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, deps)
 }
+
+// ---------------------------------------------------------------------------
+// Apply CRUD Tests
+// ---------------------------------------------------------------------------
+
+func TestApplyCRUD(t *testing.T) {
+	s := testStore(t)
+	err := s.CreateApply("apply-1", "hash-abc")
+	require.NoError(t, err)
+	a, err := s.GetApply("apply-1")
+	require.NoError(t, err)
+	assert.Equal(t, "running", a.Status)
+	assert.Equal(t, "hash-abc", a.SpecHash)
+	err = s.CompleteApply("apply-1")
+	require.NoError(t, err)
+	a, err = s.GetApply("apply-1")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", a.Status)
+	assert.NotNil(t, a.DoneAt)
+	err = s.CompleteApply("apply-1")
+	assert.ErrorIs(t, err, cserrors.ErrAlreadyDone)
+}
+
+func TestApplyActionCRUD(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("apply-1", "hash"))
+	err := s.CreateApplyAction("action-1", "apply-1", "aggregate.Synth.Voice", "create")
+	require.NoError(t, err)
+	err = s.UpdateApplyAction("action-1", "committed", "")
+	require.NoError(t, err)
+	actions, err := s.ListApplyActions("apply-1")
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Equal(t, "committed", actions[0].Outcome)
+}
+
+func TestGenerationCRUD(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("apply-1", "hash"))
+	gen := Generation{
+		ID: "gen-1", ApplyID: "apply-1", ResourceID: "aggregate.Synth.Voice",
+		PromptText: "generate voice", PromptHash: "phash", Model: "claude-sonnet-4-6",
+	}
+	err := s.CreateGeneration(gen)
+	require.NoError(t, err)
+	err = s.UpdateGeneration("gen-1", "code output", "accepted", "", 1500, 100, 200, 0.01)
+	require.NoError(t, err)
+	gens, err := s.ListGenerations("aggregate.Synth.Voice", 10)
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	assert.Equal(t, "accepted", gens[0].Outcome)
+	assert.Equal(t, int64(1500), gens[0].DurationMS)
+}
+
+func TestSessionCRUD(t *testing.T) {
+	s := testStore(t)
+	sess := Session{
+		ID: "sess-1", PlanJSON: `[{"id":"a"}]`, WavesJSON: `[["a"]]`, HashesJSON: `{"a":"h1"}`,
+	}
+	err := s.CreateSession(sess)
+	require.NoError(t, err)
+	got, err := s.GetSession("sess-1")
+	require.NoError(t, err)
+	assert.Equal(t, "active", got.Status)
+	got, err = s.GetActiveSession()
+	require.NoError(t, err)
+	assert.Equal(t, "sess-1", got.ID)
+	err = s.UpdateSession("sess-1", "completed", 2)
+	require.NoError(t, err)
+	got, err = s.GetSession("sess-1")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", got.Status)
+	assert.Equal(t, 2, got.CurrentWave)
+}
+
+func TestNoteCRUD(t *testing.T) {
+	s := testStore(t)
+	err := s.SetNote("aggregate.Synth.Voice", "apply-1", "used newtype wrappers")
+	require.NoError(t, err)
+	content, err := s.GetNote("aggregate.Synth.Voice", "apply-1")
+	require.NoError(t, err)
+	assert.Equal(t, "used newtype wrappers", content)
+	content, err = s.GetNote("nonexistent", "apply-1")
+	require.NoError(t, err)
+	assert.Equal(t, "", content)
+	err = s.SetNote("aggregate.Synth.Voice", "apply-1", "updated note")
+	require.NoError(t, err)
+	content, err = s.GetNote("aggregate.Synth.Voice", "apply-1")
+	require.NoError(t, err)
+	assert.Equal(t, "updated note", content)
+	notes, err := s.ListNotes("apply-1")
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+}
+
+func TestListApplies(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("a1", "h1"))
+	require.NoError(t, s.CreateApply("a2", "h2"))
+	applies, err := s.ListApplies(10)
+	require.NoError(t, err)
+	assert.Len(t, applies, 2)
+}
+
+func TestFailApply(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("a1", "h1"))
+	err := s.FailApply("a1")
+	require.NoError(t, err)
+	a, err := s.GetApply("a1")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", a.Status)
+}
