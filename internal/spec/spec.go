@@ -68,6 +68,8 @@ func New(eng specEngine, st specStore, fs fileSystem, cfg *config.Config) *Spec 
 	}
 }
 
+type PlanAction = planpkg.PlannedAction
+
 type PlanResult struct {
 	Actions  []planpkg.PlannedAction
 	Registry *cuepkg.Registry

@@ -32,8 +32,19 @@ func main() {
 
 	for _, arg := range os.Args[1:] {
 		if arg == "-h" || arg == "--help" {
-			config.Help()
+			cliHelp()
 			os.Exit(0)
+		}
+	}
+
+	if len(os.Args) >= 2 {
+		cmd := os.Args[1]
+		switch cmd {
+		case "plan", "apply", "validate", "graph", "status", "unlock":
+			runCLI(cmd, os.Args[2:])
+			return
+		case "serve":
+			// fall through to MCP server mode
 		}
 	}
 

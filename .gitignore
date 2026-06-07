@@ -39,3 +39,9 @@ bin/
 
 # Runtime state
 .crest-spec/
+
+# E2E generated output
+e2e/output/
+
+# Phased agent workspace
+fixtures/crest-synth/workspace/

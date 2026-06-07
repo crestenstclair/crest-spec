@@ -12,12 +12,19 @@ import (
 func Load(specDir string) (*Project, error) {
 	ctx := cuecontext.New()
 
+	// Try loading with "_" (anonymous/no-package files) first,
+	// fall back to default (any named package) if that fails.
 	cfg := &load.Config{
 		Dir:     specDir,
 		Package: "_",
 	}
 
 	instances := load.Instances(nil, cfg)
+	if len(instances) == 0 || instances[0].Err != nil {
+		cfg = &load.Config{Dir: specDir}
+		instances = load.Instances(nil, cfg)
+	}
+
 	if len(instances) == 0 {
 		return nil, fmt.Errorf("no CUE files found in %s", specDir)
 	}

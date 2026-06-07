@@ -1,5 +1,87 @@
 package cue
 
+import "encoding/json"
+
+// FlexMap handles CUE fields that can be either a map or an array of named entries.
+// Map form:     {NoteOn: {frequency: "float64"}}
+// Array form:   [{name: "NoteOn", payload: {frequency: "float64"}}]
+type FlexMap map[string]map[string]string
+
+func (f *FlexMap) UnmarshalJSON(data []byte) error {
+	// Try map form first
+	var m map[string]map[string]string
+	if err := json.Unmarshal(data, &m); err == nil {
+		*f = m
+		return nil
+	}
+
+	// Try array form: [{name: "...", payload: {...}}, ...]
+	var arr []struct {
+		Name    string            `json:"name"`
+		Payload map[string]string `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+
+	result := make(map[string]map[string]string, len(arr))
+	for _, entry := range arr {
+		result[entry.Name] = entry.Payload
+	}
+	*f = result
+	return nil
+}
+
+// FlexInvariants handles invariants as either an array or a named map of arrays.
+// Array form:  [{text: "..."}]
+// Map form:    {groupName: [{text: "..."}, ...]}
+type FlexInvariants []Invariant
+
+func (f *FlexInvariants) UnmarshalJSON(data []byte) error {
+	var arr []Invariant
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+
+	var m map[string][]Invariant
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+
+	var result []Invariant
+	for _, group := range m {
+		result = append(result, group...)
+	}
+	*f = result
+	return nil
+}
+
+// FlexContextMap handles contextMap as either an array or a named map of entries.
+// Array form:  [{from: "A", to: "B", kind: "..."}]
+// Map form:    {name: {from: "A", to: "B", kind: "..."}}
+type FlexContextMap []ContextRelationship
+
+func (f *FlexContextMap) UnmarshalJSON(data []byte) error {
+	var arr []ContextRelationship
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+
+	var m map[string]ContextRelationship
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+
+	result := make([]ContextRelationship, 0, len(m))
+	for _, v := range m {
+		result = append(result, v)
+	}
+	*f = result
+	return nil
+}
+
 type Project struct {
 	Name       string                `json:"name"`
 	Layers     []string              `json:"layers"`
@@ -9,8 +91,8 @@ type Project struct {
 	Adapters   map[string]Adapter    `json:"adapters"`
 	AssetKinds map[string]AssetKind  `json:"assetKinds"`
 	Assets     map[string]Asset      `json:"assets"`
-	Invariants []Invariant           `json:"invariants"`
-	ContextMap []ContextRelationship `json:"contextMap"`
+	Invariants FlexInvariants    `json:"invariants"`
+	ContextMap FlexContextMap   `json:"contextMap"`
 }
 
 type LayerRule struct {
@@ -48,8 +130,8 @@ type Aggregate struct {
 	Root         bool                         `json:"root,omitempty"`
 	Purpose      string                       `json:"purpose,omitempty"`
 	State        map[string]string            `json:"state,omitempty"`
-	Commands     map[string]map[string]string `json:"commands,omitempty"`
-	Events       map[string]map[string]string `json:"events,omitempty"`
+	Commands     FlexMap `json:"commands,omitempty"`
+	Events       FlexMap `json:"events,omitempty"`
 	Invariants   []string                     `json:"invariants,omitempty"`
 	Implements   string                       `json:"implements,omitempty"`
 	Meta         Meta                         `json:"meta,omitempty"`
