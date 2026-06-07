@@ -86,6 +86,9 @@ graph: build
 status: build
 	CREST_SPEC_SPEC_DIR=$(SPEC_DIR) $(CLI) status
 
+dashboard: build
+	CREST_SPEC_SPEC_DIR=$(SPEC_DIR) $(CLI) dashboard
+
 e2e-clean:
 	rm -rf e2e/output
 	@echo "Cleaned generated code from e2e/"

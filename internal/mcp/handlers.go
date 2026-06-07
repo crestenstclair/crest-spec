@@ -23,7 +23,34 @@ func (s *Server) handleInitialize(ctx context.Context, id any, params json.RawMe
 				"name":    "crest-spec",
 				"version": "0.1.0",
 			},
-			"instructions": "crest-spec is a declarative code generation system. Use run_prompt for ad-hoc generation, code_review for multi-model review, bugbot for bug scanning. Use poll_result to check async job results.",
+			"instructions": `crest-spec is a declarative code generation system. YOU are the orchestrator.
+
+## Spec workflow — agent-driven generation
+
+To generate code from a spec, drive this pipeline yourself. Do NOT use spec_apply — it is unattended mode and gives you no control.
+
+1. spec_plan          → see what needs generating
+2. spec_begin         → start a session, get session_id
+3. spec_next          → get the next wave of resources (respects dependency order)
+4. For each resource in the wave:
+   a. spec_context    → get the scoped prompt + system_prompt for this resource
+   b. run_prompt      → dispatch the prompt to a Claude sub-agent (async, returns job_id)
+   c. poll_result     → retrieve the generated output when ready
+   d. Parse the output: extract code blocks with "// path:" annotations
+   e. spec_commit     → commit the parsed files for this resource
+   f. If generation fails or output is bad: fix the prompt and retry, or spec_skip
+5. Repeat step 3 until spec_next returns done=true
+6. spec_finish        → finalize the session
+
+You can run multiple run_prompt calls in parallel for resources within the same wave.
+Review the generated code before committing — you are the quality gate.
+
+## Other tools
+- run_prompt: ad-hoc generation (not tied to a spec session)
+- code_review: multi-model code review
+- bugbot: lightweight bug scan
+- poll_result: check async job status (use with run_prompt, code_review, bugbot)
+- cancel_job: kill a running async job`,
 		},
 	}
 }

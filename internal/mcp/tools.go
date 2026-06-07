@@ -26,7 +26,7 @@ func (s *Server) registerTools() {
 
 	s.addTool(toolDef{
 		Name:        "run_prompt",
-		Description: "Run a prompt via the claude CLI sub-agent. Returns a job ID immediately; use poll_result to retrieve the output.",
+		Description: "Step 4: Dispatch a prompt to a Claude sub-agent. Returns job_id immediately — use poll_result to retrieve the output. In spec workflow, pass the prompt and system_prompt from spec_context here.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"The prompt to send"},"system_prompt":{"type":"string","description":"System prompt appended to the agent"},"model":{"type":"string","description":"Model override (default: generate model from config)"}},"required":["prompt"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -104,7 +104,7 @@ func (s *Server) registerTools() {
 
 	s.addTool(toolDef{
 		Name:        "poll_result",
-		Description: "Check a job's status. Optionally consume (delete) the result.",
+		Description: "Check an async job's status and retrieve its output. Returns status (queued/running/done/error) and output when complete. Use after run_prompt, code_review, or bugbot.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID to poll"},"consume":{"type":"boolean","description":"If true, delete the job after reading (default: false)"}},"required":["job_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -200,7 +200,7 @@ func (s *Server) registerTools() {
 
 	s.addTool(toolDef{
 		Name:        "about",
-		Description: "Show claude CLI version and auth status.",
+		Description: "Show system info and the spec workflow guide. Call this first to understand how to use the tools.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		about, aboutErr := s.eng.About(ctx)
@@ -211,7 +211,28 @@ func (s *Server) registerTools() {
 		if statusErr != nil {
 			return errorResult(fmt.Sprintf("status: %v", statusErr))
 		}
-		return textResult(fmt.Sprintf("Version: %s\nAuth: %s", about, status))
+		return textResult(fmt.Sprintf(`Version: %s
+Auth: %s
+
+## Spec workflow — you are the orchestrator
+
+To generate code from a spec, drive this pipeline:
+
+1. spec_plan       → see what needs generating
+2. spec_begin      → start session (returns session_id)
+3. spec_next       → get next wave of resources
+4. For each resource:
+   a. spec_context → get scoped prompt + system_prompt
+   b. run_prompt   → dispatch to Claude sub-agent (returns job_id)
+   c. poll_result  → retrieve output when ready
+   d. Parse output: extract code blocks with "// path:" annotations
+   e. spec_commit  → commit parsed files
+   f. On failure: retry with feedback, or spec_skip
+5. Repeat step 3 until done
+6. spec_finish     → finalize session
+
+Parallelize run_prompt calls within a wave. Review output before committing.
+Do NOT use spec_apply — it runs unattended with no agent control.`, about, status))
 	})
 
 	s.addTool(toolDef{
@@ -243,18 +264,18 @@ func (s *Server) registerTools() {
 		// Fallback stubs when no spec handler is provided (e.g. tests)
 		specStubs := []toolDef{
 			{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
-			{Name: "spec/apply", Description: "Execute the plan (async)", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`)},
+			{Name: "spec/apply", Description: "Unattended apply (no agent control). Prefer the manual pipeline: spec_begin → spec_next → spec_context → run_prompt → spec_commit.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`)},
 			{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-			{Name: "spec/begin", Description: "Start interactive agent session", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
-			{Name: "spec/next", Description: "Get next wave of uncommitted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`)},
-			{Name: "spec/context", Description: "Get scoped prompt for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`)},
+			{Name: "spec/begin", Description: "Step 1: Start a generation session. Returns session_id and plan. Then call spec_next to get resources.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
+			{Name: "spec/next", Description: "Step 2: Get next wave of resources to generate (respects dependency order). Returns done=true when all waves complete.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`)},
+			{Name: "spec/context", Description: "Step 3: Get the generation prompt for a resource. Returns system_prompt and prompt — pass both to run_prompt.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`)},
 			{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 			{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
-			{Name: "spec/commit", Description: "Record a resource as complete", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["session_id","resource_id"]}`)},
+			{Name: "spec/commit", Description: "Step 5: Commit generated files for a resource. Parse code blocks from run_prompt output (look for '// path:' annotations), then pass files here.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["session_id","resource_id"]}`)},
 			{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`)},
 			{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
-			{Name: "spec/skip", Description: "Skip a failed resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
-			{Name: "spec/finish", Description: "Finalize session, release lock", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`)},
+			{Name: "spec/skip", Description: "Skip a resource that failed generation (allows the wave to advance).", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
+			{Name: "spec/finish", Description: "Step 6: Finalize the session and release the lock. Call after all waves are done.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`)},
 			{Name: "spec/status", Description: "Show current state", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 			{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
 			{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
@@ -289,9 +310,9 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(result.Actions)
 	})
 
-	// spec/apply
+	// spec/apply — unattended mode, no agent control. Prefer the manual pipeline: begin → next → context → run_prompt → commit.
 	s.addTool(toolDef{
-		Name: "spec/apply", Description: "Execute the plan (async)",
+		Name: "spec/apply", Description: "Unattended apply (no agent control). Prefer the manual pipeline: spec_begin → spec_next → spec_context → run_prompt → spec_commit for full orchestration.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		return s.runAsync("spec/apply", func(ctx context.Context) (string, error) {
@@ -316,9 +337,9 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(result)
 	})
 
-	// spec/begin
+	// spec/begin — step 1: start a session
 	s.addTool(toolDef{
-		Name: "spec/begin", Description: "Start interactive agent session",
+		Name: "spec/begin", Description: "Step 1: Start a generation session. Returns session_id and plan. Then call spec_next to get resources.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -334,9 +355,9 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(result)
 	})
 
-	// spec/next
+	// spec/next — step 2: get the next wave
 	s.addTool(toolDef{
-		Name: "spec/next", Description: "Get next wave of uncommitted resources",
+		Name: "spec/next", Description: "Step 2: Get next wave of resources to generate (respects dependency order). Returns done=true when all waves complete.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct{ SessionID string `json:"session_id"` }
@@ -348,9 +369,9 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(result)
 	})
 
-	// spec/context
+	// spec/context — step 3: get the prompt
 	s.addTool(toolDef{
-		Name: "spec/context", Description: "Get scoped prompt for a resource",
+		Name: "spec/context", Description: "Step 3: Get the generation prompt for a resource. Returns system_prompt and prompt — pass both to run_prompt.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -396,9 +417,9 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(map[string]bool{"saved": true})
 	})
 
-	// spec/commit
+	// spec/commit — step 5: commit generated files
 	s.addTool(toolDef{
-		Name: "spec/commit", Description: "Record a resource as complete",
+		Name: "spec/commit", Description: "Step 5: Commit generated files for a resource. Parse code blocks from run_prompt output (look for '// path:' annotations), then pass files here.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["session_id","resource_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -457,7 +478,7 @@ func (s *Server) registerSpecTools() {
 
 	// spec/skip
 	s.addTool(toolDef{
-		Name: "spec/skip", Description: "Skip a failed resource",
+		Name: "spec/skip", Description: "Skip a resource that failed generation (allows the wave to advance).",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
@@ -474,7 +495,7 @@ func (s *Server) registerSpecTools() {
 
 	// spec/finish
 	s.addTool(toolDef{
-		Name: "spec/finish", Description: "Finalize session, release lock",
+		Name: "spec/finish", Description: "Step 6: Finalize the session and release the lock. Call after all waves are done.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {

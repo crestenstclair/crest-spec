@@ -221,7 +221,16 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	env := os.Environ()
+	var env []string
+	for _, e := range os.Environ() {
+		key := e[:strings.IndexByte(e, '=')]
+		switch key {
+		case "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "AI_AGENT",
+			"CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_VERSION":
+			continue
+		}
+		env = append(env, e)
+	}
 	if a.apiKey != "" {
 		tmpConfigDir, cleanup, err := a.setupConfigIsolation()
 		if err != nil {

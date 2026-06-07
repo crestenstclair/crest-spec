@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"text/tabwriter"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -27,17 +25,22 @@ func cliHelp() {
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  serve         start MCP server on stdio (default)")
 	fmt.Fprintln(os.Stderr, "  plan          show what would change")
-	fmt.Fprintln(os.Stderr, "  apply         generate all resources")
 	fmt.Fprintln(os.Stderr, "  validate      check spec structural validity")
 	fmt.Fprintln(os.Stderr, "  graph         dump resource dependency graph")
 	fmt.Fprintln(os.Stderr, "  status        show current state")
 	fmt.Fprintln(os.Stderr, "  unlock        force-clear stale lock")
+	fmt.Fprintln(os.Stderr, "  dashboard     start web dashboard")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Code generation is driven by an agent through MCP tools.")
+	fmt.Fprintln(os.Stderr, "Use 'serve' to start the MCP server, then orchestrate via:")
+	fmt.Fprintln(os.Stderr, "  spec_begin → spec_next → spec_context → run_prompt → spec_commit → spec_finish")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Flags:")
 	fmt.Fprintln(os.Stderr, "  --target <id>       apply a single resource")
 	fmt.Fprintln(os.Stderr, "  --model <model>     override generation model")
 	fmt.Fprintln(os.Stderr, "  --force             force regeneration of all")
 	fmt.Fprintln(os.Stderr, "  --incremental       wave-by-wave with verification")
+	fmt.Fprintln(os.Stderr, "  --addr <host:port>  dashboard listen address (default: :8080)")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Environment:")
 	config.Help()
@@ -48,6 +51,7 @@ type cliFlags struct {
 	model       string
 	force       bool
 	incremental bool
+	addr        string
 }
 
 func parseFlags(args []string) cliFlags {
@@ -68,6 +72,11 @@ func parseFlags(args []string) cliFlags {
 			f.force = true
 		case "--incremental":
 			f.incremental = true
+		case "--addr":
+			if i+1 < len(args) {
+				f.addr = args[i+1]
+				i++
+			}
 		}
 	}
 	return f
@@ -121,6 +130,8 @@ func runCLI(command string, args []string) {
 		cmdStatus()
 	case "unlock":
 		cmdUnlock()
+	case "dashboard":
+		cmdDashboard(flags)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", command)
 		cliHelp()
@@ -177,128 +188,14 @@ func filterPlanWave(wave []string, actions []specmod.PlanAction) []string {
 }
 
 func cmdApply(flags cliFlags) {
-	cc, cleanup, err := newCLIContext()
-	if err != nil {
-		fatal(err)
-	}
-	defer cleanup()
-
-	ctx := context.Background()
-
-	if flags.model != "" {
-		cc.cfg.GenerateModel = flags.model
-	}
-
-	beginResult, err := cc.spec.Begin(ctx, specmod.BeginOpts{
-		Target: flags.target,
-		Force:  flags.force,
-		Model:  flags.model,
-	})
-	if err != nil {
-		fatal(err)
-	}
-
-	if beginResult.SessionID == "" {
-		fmt.Println(beginResult.Instructions)
-		return
-	}
-
-	fmt.Printf("Session: %s\n", beginResult.SessionID)
-	fmt.Printf("Apply:   %s\n", beginResult.ApplyID)
-	fmt.Printf("Plan:    %d resources across %d waves\n", len(beginResult.Plan), len(beginResult.Waves))
-	fmt.Println()
-
-	waveNum := 0
-	for {
-		next, err := cc.spec.Next(ctx, beginResult.SessionID)
-		if err != nil {
-			fatal(fmt.Errorf("next: %w", err))
-		}
-		if next.Done {
-			break
-		}
-
-		waveNum++
-		fmt.Printf("── Wave %d (%d resources) ──\n", waveNum, len(next.Resources))
-
-		type result struct {
-			resourceID string
-			output     string
-		}
-		results := make([]result, len(next.Resources))
-		var wg sync.WaitGroup
-		for i, res := range next.Resources {
-			wg.Add(1)
-			go func(idx int, res specmod.ResourceStatus) {
-				defer wg.Done()
-				start := time.Now()
-
-				ctxResult, err := cc.spec.Context(ctx, beginResult.SessionID, res.ResourceID)
-				if err != nil {
-					results[idx] = result{res.ResourceID, fmt.Sprintf("CONTEXT ERROR: %v", err)}
-					return
-				}
-
-				loopResult, err := specmod.RunConstraintLoopPublic(ctx, cc.eng, specmod.LoopOpts{
-					SystemPrompt: ctxResult.SystemPrompt,
-					Prompt:       ctxResult.Prompt,
-					Model:        flags.model,
-					MaxRetries:   cc.cfg.MaxRetries,
-				})
-				if err != nil {
-					results[idx] = result{res.ResourceID, fmt.Sprintf("GENERATE ERROR: %v", err)}
-					return
-				}
-
-				elapsed := time.Since(start)
-
-				if loopResult.Outcome != "accepted" {
-					results[idx] = result{res.ResourceID, fmt.Sprintf("REJECTED (%s) [%s, %d attempts]", loopResult.RejectionReason, elapsed.Round(time.Millisecond), loopResult.Attempts)}
-					return
-				}
-
-				var files []specmod.CommitFile
-				for _, block := range loopResult.Files {
-					if block.Path == "" {
-						continue
-					}
-					files = append(files, specmod.CommitFile{
-						Path:    block.Path,
-						Content: block.Content,
-					})
-				}
-
-				if err := cc.spec.Commit(ctx, beginResult.SessionID, res.ResourceID, files, ""); err != nil {
-					results[idx] = result{res.ResourceID, fmt.Sprintf("COMMIT ERROR: %v", err)}
-					return
-				}
-
-				paths := make([]string, len(files))
-				for i, f := range files {
-					paths[i] = f.Path
-				}
-				results[idx] = result{res.ResourceID, fmt.Sprintf("OK [%s, %d files: %s]", elapsed.Round(time.Millisecond), len(files), strings.Join(paths, ", "))}
-			}(i, res)
-		}
-		wg.Wait()
-
-		for _, r := range results {
-			fmt.Printf("  → %s ... %s\n", r.resourceID, r.output)
-		}
-
-		if err := cc.spec.AdvanceWave(ctx, beginResult.SessionID); err != nil {
-			fatal(fmt.Errorf("advance wave: %w", err))
-		}
-		fmt.Println()
-	}
-
-	finishResult, err := cc.spec.Finish(ctx, beginResult.SessionID, false)
-	if err != nil {
-		fatal(fmt.Errorf("finish: %w", err))
-	}
-
-	fmt.Printf("Done. Committed: %d, Skipped: %d, Errored: %d\n",
-		finishResult.Committed, finishResult.Skipped, finishResult.Errored)
+	fmt.Fprintln(os.Stderr, "The 'apply' command has been removed.")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Code generation is driven by an agent through MCP tools:")
+	fmt.Fprintln(os.Stderr, "  spec_begin → spec_next → spec_context → run_prompt → spec_commit → spec_finish")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Use 'crest-spec plan' to see what needs generating,")
+	fmt.Fprintln(os.Stderr, "then let the agent orchestrate via MCP.")
+	os.Exit(1)
 }
 
 func cmdValidate() {

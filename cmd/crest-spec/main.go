@@ -40,7 +40,7 @@ func main() {
 	if len(os.Args) >= 2 {
 		cmd := os.Args[1]
 		switch cmd {
-		case "plan", "apply", "validate", "graph", "status", "unlock":
+		case "plan", "apply", "validate", "graph", "status", "unlock", "dashboard":
 			runCLI(cmd, os.Args[2:])
 			return
 		case "serve":

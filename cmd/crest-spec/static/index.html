@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crest-spec</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --orange: #db6d28;
+  --purple: #bc8cff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  padding: 24px;
+}
+h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+h2 { font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text-muted); }
+.pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+.pulse.idle { background: var(--text-muted); animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.grid { display: grid; grid-template-columns: 300px 1fr; gap: 24px; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+
+.stat { margin-bottom: 12px; }
+.stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-row { display: flex; gap: 24px; }
+
+.progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+.progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.progress-fill.green { background: var(--green); }
+.progress-fill.yellow { background: var(--yellow); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; background: var(--surface); }
+td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(88, 166, 255, 0.04); }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.badge-green { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.badge-yellow { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.badge-red { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+.badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+.badge-muted { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); }
+.badge-orange { background: rgba(219, 109, 40, 0.15); color: var(--orange); }
+
+.wave-label { font-weight: 600; color: var(--accent); font-size: 12px; padding: 12px 12px 4px; }
+
+.resource-id { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 12px; }
+
+.empty { color: var(--text-muted); font-style: italic; padding: 24px; text-align: center; }
+
+.files-list { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 11px; color: var(--text-muted); }
+.files-list span { display: block; }
+
+.tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab { padding: 8px 16px; font-size: 13px; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.log-entry { padding: 4px 0; font-size: 12px; font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; }
+.log-time { color: var(--text-muted); margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>crest-spec</h1>
+    <span style="font-size:13px;color:var(--text-muted)" id="spec-dir"></span>
+  </div>
+  <div class="header-right">
+    <span id="last-update"></span>
+    <span class="pulse idle" id="status-pulse"></span>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="sidebar">
+    <div class="card">
+      <h2>Status</h2>
+      <div class="stat">
+        <div class="stat-label">Session</div>
+        <div id="session-status" class="stat-value" style="font-size:16px">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat">
+          <div class="stat-label">Resources</div>
+          <div id="resource-count" class="stat-value">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Settled</div>
+          <div id="settled-count" class="stat-value">—</div>
+        </div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Wave</div>
+        <div id="wave-status" class="stat-value" style="font-size:16px">—</div>
+      </div>
+      <div class="progress-bar"><div class="progress-fill green" id="progress-bar" style="width:0%"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Latest Apply</h2>
+      <div id="apply-info" class="empty">No applies yet</div>
+    </div>
+
+    <div class="card">
+      <h2>Active Jobs</h2>
+      <div id="jobs-info" class="empty">No active jobs</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tab-bar">
+      <div class="tab active" data-tab="plan">Plan</div>
+      <div class="tab" data-tab="resources">Settled Resources</div>
+      <div class="tab" data-tab="log">Apply Log</div>
+    </div>
+
+    <div class="tab-content active" id="tab-plan">
+      <div class="card" style="overflow-x:auto">
+        <div id="plan-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-resources">
+      <div class="card" style="overflow-x:auto">
+        <div id="resources-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-log">
+      <div class="card">
+        <div id="apply-log" class="empty">No applies yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentTab = 'plan';
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    currentTab = tab.dataset.tab;
+    document.getElementById('tab-' + currentTab).classList.add('active');
+  });
+});
+
+function badge(text, color) {
+  return `<span class="badge badge-${color}">${text}</span>`;
+}
+
+function statusBadge(status) {
+  const map = {
+    'running': 'yellow', 'active': 'yellow', 'pending': 'muted',
+    'completed': 'green', 'committed': 'green',
+    'failed': 'red', 'errored': 'red', 'rejected': 'red',
+    'cancelled': 'orange', 'skipped': 'orange', 'timed_out': 'orange',
+    'blocked': 'purple', 'dispatched': 'blue',
+    'create': 'green', 'modify': 'yellow', 'destroy': 'red', 'drift': 'orange',
+  };
+  return badge(status, map[status] || 'muted');
+}
+
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return d.toLocaleDateString();
+}
+
+function shortID(id) {
+  return id ? id.substring(0, 8) : '—';
+}
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(API + url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function refresh() {
+  const [status, plan, resources, applies, jobs] = await Promise.all([
+    fetchJSON('/api/status'),
+    fetchJSON('/api/plan'),
+    fetchJSON('/api/resources'),
+    fetchJSON('/api/applies'),
+    fetchJSON('/api/jobs'),
+  ]);
+
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+  if (status) {
+    const pulse = document.getElementById('status-pulse');
+    const hasActivity = status.session || status.running_jobs > 0;
+    pulse.className = hasActivity ? 'pulse' : 'pulse idle';
+
+    const sess = status.session;
+    if (sess) {
+      document.getElementById('session-status').innerHTML = statusBadge(sess.Status) + ' <span style="font-size:12px;color:var(--text-muted)">' + shortID(sess.ID) + '</span>';
+
+      let waves = [];
+      try { waves = JSON.parse(sess.WavesJSON || '[]'); } catch {}
+      const total = waves.length;
+      const current = sess.CurrentWave || 0;
+      document.getElementById('wave-status').textContent = current + ' / ' + total;
+      const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+      document.getElementById('progress-bar').style.width = pct + '%';
+    } else {
+      document.getElementById('session-status').innerHTML = badge('idle', 'muted');
+      document.getElementById('wave-status').textContent = '—';
+      document.getElementById('progress-bar').style.width = '0%';
+    }
+
+    const settled = resources ? resources.length : 0;
+    document.getElementById('settled-count').textContent = settled;
+  }
+
+  if (plan) {
+    document.getElementById('resource-count').textContent = plan.total_count || 0;
+    renderPlan(plan);
+  }
+
+  if (resources) {
+    renderResources(resources);
+  }
+
+  if (applies && applies.length > 0) {
+    renderApplyInfo(applies[0]);
+    renderApplyLog(applies);
+  }
+
+  if (jobs) {
+    renderJobs(jobs);
+  }
+}
+
+function renderPlan(plan) {
+  const el = document.getElementById('plan-table');
+  if (!plan.actions || plan.actions.length === 0) {
+    el.innerHTML = '<div class="empty">No pending changes — spec is up to date</div>';
+    return;
+  }
+
+  const byWave = {};
+  for (const a of plan.actions) {
+    const w = a.wave_index;
+    if (!byWave[w]) byWave[w] = [];
+    byWave[w].push(a);
+  }
+
+  let html = '<table><thead><tr><th>Resource</th><th>Action</th><th>Reason</th></tr></thead><tbody>';
+
+  const waveKeys = Object.keys(byWave).sort((a,b) => a-b);
+  for (const w of waveKeys) {
+    html += `<tr><td colspan="3" class="wave-label">Wave ${parseInt(w)+1}</td></tr>`;
+    for (const a of byWave[w]) {
+      html += `<tr>
+        <td class="resource-id">${a.resource_id}</td>
+        <td>${statusBadge(a.kind)}</td>
+        <td style="color:var(--text-muted)">${a.reason}</td>
+      </tr>`;
+    }
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderResources(resources) {
+  const el = document.getElementById('resources-table');
+  if (!resources || resources.length === 0) {
+    el.innerHTML = '<div class="empty">No settled resources yet</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr><th>Resource</th><th>Kind</th><th>Context</th><th>Model</th><th>Files</th><th>Settled</th></tr></thead><tbody>';
+
+  for (const r of resources) {
+    const files = r.files || r.Files || [];
+    const fileList = files.map(f => `<span>${f.Path || f.path}</span>`).join('');
+    html += `<tr>
+      <td class="resource-id">${r.ID || r.id}</td>
+      <td>${badge(r.Kind || r.kind, 'blue')}</td>
+      <td style="color:var(--text-muted)">${r.ContextName || r.context_name || '—'}</td>
+      <td style="color:var(--text-muted);font-size:12px">${r.Model || r.model || '—'}</td>
+      <td><div class="files-list">${fileList || '—'}</div></td>
+      <td style="color:var(--text-muted);font-size:12px">${timeAgo(r.SettledAt || r.settled_at)}</td>
+    </tr>`;
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderApplyInfo(apply) {
+  const el = document.getElementById('apply-info');
+  el.innerHTML = `
+    <div class="stat">
+      <div class="stat-label">ID</div>
+      <div style="font-family:monospace;font-size:12px">${shortID(apply.ID || apply.id)}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Status</div>
+      <div>${statusBadge(apply.Status || apply.status)}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Started</div>
+      <div style="font-size:12px;color:var(--text-muted)">${timeAgo(apply.StartedAt || apply.started_at)}</div>
+    </div>
+  `;
+}
+
+function renderApplyLog(applies) {
+  const el = document.getElementById('apply-log');
+  if (!applies || applies.length === 0) {
+    el.innerHTML = '<div class="empty">No applies yet</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr><th>Apply</th><th>Status</th><th>Started</th><th>Done</th></tr></thead><tbody>';
+  for (const a of applies) {
+    html += `<tr>
+      <td style="font-family:monospace;font-size:12px">${shortID(a.ID || a.id)}</td>
+      <td>${statusBadge(a.Status || a.status)}</td>
+      <td style="color:var(--text-muted);font-size:12px">${timeAgo(a.StartedAt || a.started_at)}</td>
+      <td style="color:var(--text-muted);font-size:12px">${a.DoneAt || a.done_at ? timeAgo(a.DoneAt || a.done_at) : '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderJobs(jobs) {
+  const el = document.getElementById('jobs-info');
+  const active = jobs.filter(j => (j.Status || j.status) === 'running');
+  if (active.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No active jobs</div>';
+    return;
+  }
+
+  let html = '';
+  for (const j of active) {
+    html += `<div class="log-entry">
+      <span class="log-time">${timeAgo(j.StartedAt || j.started_at)}</span>
+      ${badge(j.Tool || j.tool, 'blue')}
+      <span style="font-family:monospace;font-size:11px;color:var(--text-muted)">${shortID(j.ID || j.id)}</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
