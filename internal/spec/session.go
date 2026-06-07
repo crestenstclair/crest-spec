@@ -812,8 +812,8 @@ decisions. You MUST NOT write implementation code yourself.
   6. Repeat step 3 until done=true
   7. spec/finish        → finalize session
 
-  Use model_overrides in spec/run_wave to assign cheap models (haiku)
-  to simple resources and capable models (sonnet/opus) to complex ones.
+  Use model_overrides in spec/run_wave to assign opus to complex resources
+  that need stronger reasoning. Sonnet is the default for all resources.
 
 ## Single-resource dispatch:
 
