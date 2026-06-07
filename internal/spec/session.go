@@ -815,6 +815,13 @@ decisions. You MUST NOT write implementation code yourself.
   Use model_overrides in spec/run_wave to assign opus to complex resources
   that need stronger reasoning. Sonnet is the default for all resources.
 
+## Observability (check progress at any time):
+
+  spec/status (session_id) → session overview: current wave, total waves,
+    per-wave counts of committed/rejected/errored/pending resources.
+  spec/wave_status (session_id, wave_index) → detailed per-resource view
+    within a wave: state, attempts, max_retries, last_error.
+
 ## Single-resource dispatch:
 
   spec/dispatch (session_id, resource_id, model) → atomic generate-and-commit.

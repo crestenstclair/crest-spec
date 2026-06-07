@@ -146,6 +146,8 @@ type specHandler interface {
 	RunWave(ctx context.Context, opts specmod.RunWaveOpts) (*specmod.RunWaveResult, error)
 	Bootstrap(ctx context.Context, opts specmod.BootstrapOpts) (*specmod.BootstrapResult, error)
 	DeepReview(ctx context.Context, opts specmod.DeepReviewOpts) (*specmod.DeepReviewResult, error)
+	SessionStatus(ctx context.Context, sessionID string) (*specmod.SessionStatusResult, error)
+	WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error)
 }
 
 // ---------------------------------------------------------------------------

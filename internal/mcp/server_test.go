@@ -342,8 +342,8 @@ func TestToolsList_ReturnsAllTools(t *testing.T) {
 	tools, ok := result["tools"].([]toolDef)
 	require.True(t, ok)
 
-	// 10 engine tools + 32 spec stubs = 42 total
-	assert.Len(t, tools, 42)
+	// 10 engine tools + 33 spec stubs = 43 total
+	assert.Len(t, tools, 43)
 
 	// Check that key engine tools exist
 	toolNames := make(map[string]bool)
@@ -695,7 +695,7 @@ func TestSpecToolStubs_ReturnNotImplemented(t *testing.T) {
 		"spec/plan", "spec/apply", "spec/validate", "spec/begin",
 		"spec/confirm_destroys", "spec/next", "spec/context", "spec/validate-resource",
 		"spec/note", "spec/commit", "spec/resolve", "spec/amend",
-		"spec/skip", "spec/finish", "spec/status", "spec/log",
+		"spec/skip", "spec/finish", "spec/status", "spec/wave_status", "spec/log",
 		"spec/history", "spec/graph", "spec/diff", "spec/state",
 		"spec/drift", "spec/vacuum", "spec/sql", "spec/unlock",
 		"spec/bootstrap", "spec/deep_review",

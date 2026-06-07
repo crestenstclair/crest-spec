@@ -320,7 +320,8 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/skip", Description: "Skip a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
 		{Name: "spec/finish", Description: "Step 6: Finalize the session.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`)},
-		{Name: "spec/status", Description: "Show current state", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/status", Description: "Session-level status overview", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional)"}}}`)},
+		{Name: "spec/wave_status", Description: "Detailed wave-level view", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index"}},"required":["session_id","wave_index"]}`)},
 		{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
 		{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
 		{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
@@ -496,6 +497,11 @@ type specImportArgs struct {
 
 type specBootstrapArgs struct {
 	SpecDir string `json:"spec_dir"`
+}
+
+type specWaveStatusArgs struct {
+	SessionID string `json:"session_id"`
+	WaveIndex int    `json:"wave_index"`
 }
 
 // ---------------------------------------------------------------------------
@@ -678,9 +684,16 @@ func (s *Server) handleSpecDeepReview(_ context.Context, args json.RawMessage, p
 // registerSpecQueryTools adds spec query and admin tools (status through prompt).
 func (s *Server) registerSpecQueryTools() {
 	s.addTool(toolDef{
-		Name: "spec/status", Description: "Show current state",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+		Name: "spec/status", Description: "Session-level status overview. Without session_id: shows general state. With session_id: shows wave progress, per-wave resource counts (committed/rejected/errored/pending).",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional — omit for general status)"}}}`),
 	}, s.handleSpecStatus)
+
+	s.addTool(toolDef{
+		Name: "spec/wave_status", Description: "Detailed wave-level view: per-resource state, attempts, retries, errors. Use to inspect progress within a specific wave.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`),
+	}, specTool("wave_status", func(ctx context.Context, a specWaveStatusArgs) (any, error) {
+		return s.spec.WaveStatus(ctx, a.SessionID, a.WaveIndex)
+	}))
 
 	s.addTool(toolDef{
 		Name: "spec/log", Description: "List past applies",
@@ -825,7 +838,18 @@ func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage, _ s
 	return jsonResult(result)
 }
 
-func (s *Server) handleSpecStatus(ctx context.Context, _ json.RawMessage, _ string) toolResult {
+func (s *Server) handleSpecStatus(ctx context.Context, args json.RawMessage, _ string) toolResult {
+	var p specSessionArgs
+	json.Unmarshal(args, &p)
+
+	if p.SessionID != "" {
+		result, err := s.spec.SessionStatus(ctx, p.SessionID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("session status: %v", err))
+		}
+		return jsonResult(result)
+	}
+
 	result, err := s.spec.Status(ctx)
 	if err != nil {
 		return errorResult(fmt.Sprintf("status: %v", err))
