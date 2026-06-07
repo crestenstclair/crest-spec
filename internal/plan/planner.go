@@ -8,7 +8,6 @@ import (
 	"sort"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
-	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -59,7 +58,10 @@ func (p *Planner) Plan(
 	var destroys []PlannedAction
 	var createModify []PlannedAction
 
-	topoOrder, _ := g.TopologicalSort()
+	topoOrder, err := g.TopologicalSort()
+	if err != nil {
+		return nil, fmt.Errorf("topo sort: %w", err)
+	}
 	topoIndex := make(map[string]int, len(topoOrder))
 	for i, id := range topoOrder {
 		topoIndex[id] = i
@@ -111,11 +113,8 @@ func (p *Planner) Plan(
 		for _, f := range files {
 			data, err := p.fs.ReadFile(f.Path)
 			if err != nil {
-				if err == cserrors.ErrNotFound {
-					drifted = true
-					break
-				}
-				continue
+				drifted = true
+				break
 			}
 			diskHash := fmt.Sprintf("%x", sha256.Sum256(data))
 			if diskHash != f.ContentHash {
