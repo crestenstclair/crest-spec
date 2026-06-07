@@ -93,6 +93,7 @@ func (a *Agent) setupConfigIsolation() (string, func(), error) {
 		return tmpDir, cleanup, nil
 	}
 
+	copiedConfig := false
 	for _, entry := range entries {
 		src := filepath.Join(a.configDir, entry.Name())
 		dst := filepath.Join(tmpDir, entry.Name())
@@ -103,6 +104,14 @@ func (a *Agent) setupConfigIsolation() (string, func(), error) {
 				continue
 			}
 			os.WriteFile(dst, data, 0o600)
+			copiedConfig = true
+			continue
+		}
+
+		// Don't symlink backups — stale backups from the source dir
+		// confuse Claude CLI into thinking the config was corrupted.
+		if entry.Name() == "backups" {
+			os.MkdirAll(dst, 0o700)
 			continue
 		}
 
@@ -126,6 +135,10 @@ func (a *Agent) setupConfigIsolation() (string, func(), error) {
 		os.Link(src, dst)
 	}
 
+	if !copiedConfig {
+		os.WriteFile(filepath.Join(tmpDir, ".claude.json"), []byte("{}"), 0o600)
+	}
+
 	return tmpDir, cleanup, nil
 }
 
@@ -140,7 +153,7 @@ func parseResult(stdout, stderr []byte) *RunResult {
 
 // RunPrompt executes a Claude CLI prompt with the given options and returns the result.
 func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error) {
-	args := []string{"--print", "--output-format", "json"}
+	args := []string{"--print", "--output-format", "json", "--strict-mcp-config"}
 
 	model := opts.Model
 	if model == "" {
@@ -194,12 +207,6 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 		args = append(args, opts.Prompt)
 	}
 
-	tmpConfigDir, cleanup, err := a.setupConfigIsolation()
-	if err != nil {
-		return nil, fmt.Errorf("config isolation: %w", err)
-	}
-	defer cleanup()
-
 	cmd := exec.CommandContext(ctx, a.path, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -215,8 +222,13 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	cmd.Stderr = &stderr
 
 	env := os.Environ()
-	env = append(env, "CLAUDE_CONFIG_DIR="+tmpConfigDir)
 	if a.apiKey != "" {
+		tmpConfigDir, cleanup, err := a.setupConfigIsolation()
+		if err != nil {
+			return nil, fmt.Errorf("config isolation: %w", err)
+		}
+		defer cleanup()
+		env = append(env, "CLAUDE_CONFIG_DIR="+tmpConfigDir)
 		env = append(env, "ANTHROPIC_API_KEY="+a.apiKey)
 	}
 	cmd.Env = env
@@ -234,7 +246,7 @@ func (a *Agent) RunPrompt(ctx context.Context, opts RunOpts) (*RunResult, error)
 	result := parseResult(stdout.Bytes(), stderr.Bytes())
 
 	if runErr != nil {
-		return result, fmt.Errorf("claude exited with error: %w (stderr: %s)", runErr, result.Stderr)
+		return result, fmt.Errorf("claude exited with error: %w (stderr: %s) (stdout: %s)", runErr, result.Stderr, result.Output)
 	}
 
 	if result.IsError {

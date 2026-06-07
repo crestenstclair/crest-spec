@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -220,52 +221,69 @@ func cmdApply(flags cliFlags) {
 		waveNum++
 		fmt.Printf("── Wave %d (%d resources) ──\n", waveNum, len(next.Resources))
 
-		for _, res := range next.Resources {
-			fmt.Printf("  → %s ... ", res.ResourceID)
-			start := time.Now()
+		type result struct {
+			resourceID string
+			output     string
+		}
+		results := make([]result, len(next.Resources))
+		var wg sync.WaitGroup
+		for i, res := range next.Resources {
+			wg.Add(1)
+			go func(idx int, res specmod.ResourceStatus) {
+				defer wg.Done()
+				start := time.Now()
 
-			ctxResult, err := cc.spec.Context(ctx, beginResult.SessionID, res.ResourceID)
-			if err != nil {
-				fmt.Printf("CONTEXT ERROR: %v\n", err)
-				continue
-			}
+				ctxResult, err := cc.spec.Context(ctx, beginResult.SessionID, res.ResourceID)
+				if err != nil {
+					results[idx] = result{res.ResourceID, fmt.Sprintf("CONTEXT ERROR: %v", err)}
+					return
+				}
 
-			loopResult, err := specmod.RunConstraintLoopPublic(ctx, cc.eng, specmod.LoopOpts{
-				SystemPrompt: ctxResult.SystemPrompt,
-				Prompt:       ctxResult.Prompt,
-				Model:        flags.model,
-				MaxRetries:   cc.cfg.MaxRetries,
-			})
-			if err != nil {
-				fmt.Printf("GENERATE ERROR: %v\n", err)
-				continue
-			}
-
-			elapsed := time.Since(start)
-
-			if loopResult.Outcome != "accepted" {
-				fmt.Printf("REJECTED (%s) [%s, %d attempts]\n", loopResult.RejectionReason, elapsed.Round(time.Millisecond), loopResult.Attempts)
-				continue
-			}
-
-			var files []specmod.CommitFile
-			for _, block := range loopResult.Files {
-				files = append(files, specmod.CommitFile{
-					Path:    block.Path,
-					Content: block.Content,
+				loopResult, err := specmod.RunConstraintLoopPublic(ctx, cc.eng, specmod.LoopOpts{
+					SystemPrompt: ctxResult.SystemPrompt,
+					Prompt:       ctxResult.Prompt,
+					Model:        flags.model,
+					MaxRetries:   cc.cfg.MaxRetries,
 				})
-			}
+				if err != nil {
+					results[idx] = result{res.ResourceID, fmt.Sprintf("GENERATE ERROR: %v", err)}
+					return
+				}
 
-			if err := cc.spec.Commit(ctx, beginResult.SessionID, res.ResourceID, files, ""); err != nil {
-				fmt.Printf("COMMIT ERROR: %v\n", err)
-				continue
-			}
+				elapsed := time.Since(start)
 
-			paths := make([]string, len(files))
-			for i, f := range files {
-				paths[i] = f.Path
-			}
-			fmt.Printf("OK [%s, %d files: %s]\n", elapsed.Round(time.Millisecond), len(files), strings.Join(paths, ", "))
+				if loopResult.Outcome != "accepted" {
+					results[idx] = result{res.ResourceID, fmt.Sprintf("REJECTED (%s) [%s, %d attempts]", loopResult.RejectionReason, elapsed.Round(time.Millisecond), loopResult.Attempts)}
+					return
+				}
+
+				var files []specmod.CommitFile
+				for _, block := range loopResult.Files {
+					if block.Path == "" {
+						continue
+					}
+					files = append(files, specmod.CommitFile{
+						Path:    block.Path,
+						Content: block.Content,
+					})
+				}
+
+				if err := cc.spec.Commit(ctx, beginResult.SessionID, res.ResourceID, files, ""); err != nil {
+					results[idx] = result{res.ResourceID, fmt.Sprintf("COMMIT ERROR: %v", err)}
+					return
+				}
+
+				paths := make([]string, len(files))
+				for i, f := range files {
+					paths[i] = f.Path
+				}
+				results[idx] = result{res.ResourceID, fmt.Sprintf("OK [%s, %d files: %s]", elapsed.Round(time.Millisecond), len(files), strings.Join(paths, ", "))}
+			}(i, res)
+		}
+		wg.Wait()
+
+		for _, r := range results {
+			fmt.Printf("  → %s ... %s\n", r.resourceID, r.output)
 		}
 
 		if err := cc.spec.AdvanceWave(ctx, beginResult.SessionID); err != nil {
