@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
@@ -50,6 +51,17 @@ type specStore interface {
 	SetNote(resourceID, applyID, content string) error
 	GetNote(resourceID, applyID string) (string, error)
 	ListNotes(applyID string) ([]store.AgentNote, error)
+	UpsertSessionResource(r store.SessionResource) error
+	GetSessionResource(sessionID, resourceID string) (*store.SessionResource, error)
+	ListSessionResources(sessionID string) ([]store.SessionResource, error)
+	ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error)
+	ListSessionResourcesByState(sessionID, state string) ([]store.SessionResource, error)
+	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
+	DeleteSessionResources(sessionID string) error
+	RecordInvariantCheck(ic store.InvariantCheck) error
+	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
+	Vacuum(before time.Time) (int, error)
+	ReadOnlyQuery(query string) ([]map[string]interface{}, error)
 }
 
 type Spec struct {
@@ -67,8 +79,6 @@ func New(eng specEngine, st specStore, fs fileSystem, cfg *config.Config) *Spec 
 		cfg:    cfg,
 	}
 }
-
-type PlanAction = planpkg.PlannedAction
 
 type PlanResult struct {
 	Actions  []planpkg.PlannedAction

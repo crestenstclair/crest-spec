@@ -105,6 +105,7 @@ type Generation struct {
 // Session is the store's domain type for a spec engine agent session.
 type Session struct {
 	ID          string
+	ApplyID     string
 	PlanJSON    string
 	WavesJSON   string
 	HashesJSON  string
@@ -112,6 +113,18 @@ type Session struct {
 	Status      string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// InvariantCheck is the store's domain type for an invariant check record.
+type InvariantCheck struct {
+	ID         string
+	ApplyID    string
+	ResourceID string
+	CheckType  string
+	Passed     bool
+	Output     string
+	DurationMS int64
+	CreatedAt  time.Time
 }
 
 // AgentNote is the store's domain type for a per-resource note left by the agent.
@@ -914,6 +927,7 @@ func (s *Store) ListGenerations(resourceID string, limit int) ([]Generation, err
 func dbSessionToSession(s db.AgentSession) Session {
 	out := Session{
 		ID:          s.ID,
+		ApplyID:     s.ApplyID,
 		PlanJSON:    s.PlanJson,
 		WavesJSON:   s.WavesJson,
 		HashesJSON:  s.HashesJson,
@@ -938,6 +952,7 @@ func (s *Store) CreateSession(sess Session) error {
 	ts := now()
 	return s.queries.CreateSession(context.Background(), db.CreateSessionParams{
 		ID:         sess.ID,
+		ApplyID:    sess.ApplyID,
 		PlanJson:   sess.PlanJSON,
 		WavesJson:  sess.WavesJSON,
 		HashesJson: sess.HashesJSON,
@@ -1038,4 +1053,290 @@ func (s *Store) ListNotes(applyID string) ([]AgentNote, error) {
 		out[i] = dbNoteToAgentNote(r)
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// InvariantCheck CRUD
+// ---------------------------------------------------------------------------
+
+// RecordInvariantCheck inserts a new invariant check record.
+func (s *Store) RecordInvariantCheck(ic InvariantCheck) error {
+	var passedInt int64
+	if ic.Passed {
+		passedInt = 1
+	}
+	var details *string
+	if ic.Output != "" {
+		details = &ic.Output
+	}
+	return s.queries.CreateInvariantCheck(context.Background(), db.CreateInvariantCheckParams{
+		ID:         ic.ID,
+		ApplyID:    ic.ApplyID,
+		ResourceID: ic.ResourceID,
+		Invariant:  ic.CheckType,
+		Passed:     passedInt,
+		Details:    details,
+		CheckedAt:  ic.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// ListInvariantChecks returns all invariant checks for an apply, ordered by checked_at.
+func (s *Store) ListInvariantChecks(applyID string) ([]InvariantCheck, error) {
+	rows, err := s.queries.ListInvariantChecks(context.Background(), applyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InvariantCheck, len(rows))
+	for i, r := range rows {
+		out[i] = dbInvariantCheckToInvariantCheck(r)
+	}
+	return out, nil
+}
+
+func dbInvariantCheckToInvariantCheck(ic db.InvariantCheck) InvariantCheck {
+	out := InvariantCheck{
+		ID:         ic.ID,
+		ApplyID:    ic.ApplyID,
+		ResourceID: ic.ResourceID,
+		CheckType:  ic.Invariant,
+		Passed:     ic.Passed != 0,
+	}
+	if ic.Details != nil {
+		out.Output = *ic.Details
+	}
+	if t, err := time.Parse(time.RFC3339Nano, ic.CheckedAt); err == nil {
+		out.CreatedAt = t
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// SessionResource — per-resource state within a session
+// ---------------------------------------------------------------------------
+
+// SessionResource tracks a resource's state within an active session.
+type SessionResource struct {
+	SessionID  string
+	ResourceID string
+	State      string
+	WaveIndex  int
+	Attempts   int
+	MaxRetries int
+	LastError  string
+	LastOutput string
+	JobID      string
+	UpdatedAt  time.Time
+}
+
+func dbSessionResourceToSessionResource(r db.SessionResource) SessionResource {
+	out := SessionResource{
+		SessionID:  r.SessionID,
+		ResourceID: r.ResourceID,
+		State:      r.State,
+		WaveIndex:  int(r.WaveIndex),
+		Attempts:   int(r.Attempts),
+		MaxRetries: int(r.MaxRetries),
+		LastError:  stringVal(r.LastError),
+		LastOutput: stringVal(r.LastOutput),
+		JobID:      stringVal(r.JobID),
+	}
+	if t, err := time.Parse(time.RFC3339Nano, r.UpdatedAt); err == nil {
+		out.UpdatedAt = t
+	}
+	return out
+}
+
+func stringVal(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func stringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// UpsertSessionResource creates or updates a resource state within a session.
+func (s *Store) UpsertSessionResource(r SessionResource) error {
+	return s.queries.UpsertSessionResource(context.Background(), db.UpsertSessionResourceParams{
+		SessionID:  r.SessionID,
+		ResourceID: r.ResourceID,
+		State:      r.State,
+		WaveIndex:  int64(r.WaveIndex),
+		Attempts:   int64(r.Attempts),
+		MaxRetries: int64(r.MaxRetries),
+		LastError:  stringPtr(r.LastError),
+		LastOutput: stringPtr(r.LastOutput),
+		JobID:      stringPtr(r.JobID),
+		UpdatedAt:  now(),
+	})
+}
+
+// GetSessionResource retrieves a single resource state.
+func (s *Store) GetSessionResource(sessionID, resourceID string) (*SessionResource, error) {
+	r, err := s.queries.GetSessionResource(context.Background(), db.GetSessionResourceParams{
+		SessionID:  sessionID,
+		ResourceID: resourceID,
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, cserrors.ErrNotFound
+		}
+		return nil, err
+	}
+	out := dbSessionResourceToSessionResource(r)
+	return &out, nil
+}
+
+// ListSessionResources returns all resource states for a session.
+func (s *Store) ListSessionResources(sessionID string) ([]SessionResource, error) {
+	rows, err := s.queries.ListSessionResources(context.Background(), sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SessionResource, len(rows))
+	for i, r := range rows {
+		out[i] = dbSessionResourceToSessionResource(r)
+	}
+	return out, nil
+}
+
+// ListSessionResourcesByWave returns resource states for a specific wave.
+func (s *Store) ListSessionResourcesByWave(sessionID string, wave int) ([]SessionResource, error) {
+	rows, err := s.queries.ListSessionResourcesByWave(context.Background(), db.ListSessionResourcesByWaveParams{
+		SessionID: sessionID,
+		WaveIndex: int64(wave),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SessionResource, len(rows))
+	for i, r := range rows {
+		out[i] = dbSessionResourceToSessionResource(r)
+	}
+	return out, nil
+}
+
+// UpdateSessionResourceState transitions a resource's state.
+func (s *Store) UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error {
+	return s.queries.UpdateSessionResourceState(context.Background(), db.UpdateSessionResourceStateParams{
+		State:      state,
+		LastError:  stringPtr(lastError),
+		LastOutput: stringPtr(lastOutput),
+		Attempts:   int64(attempts),
+		JobID:      stringPtr(jobID),
+		UpdatedAt:  now(),
+		SessionID:  sessionID,
+		ResourceID: resourceID,
+	})
+}
+
+// ListSessionResourcesByState returns resources filtered by state.
+func (s *Store) ListSessionResourcesByState(sessionID, state string) ([]SessionResource, error) {
+	rows, err := s.queries.ListSessionResourcesByState(context.Background(), db.ListSessionResourcesByStateParams{
+		SessionID: sessionID,
+		State:     state,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SessionResource, len(rows))
+	for i, r := range rows {
+		out[i] = dbSessionResourceToSessionResource(r)
+	}
+	return out, nil
+}
+
+// DeleteSessionResources removes all resource state for a session.
+func (s *Store) DeleteSessionResources(sessionID string) error {
+	return s.queries.DeleteSessionResources(context.Background(), sessionID)
+}
+
+// ---------------------------------------------------------------------------
+// Vacuum — compact old history
+// ---------------------------------------------------------------------------
+
+// Vacuum deletes generations, invariant checks, and apply records
+// (along with their actions) that were created before the given time.
+// Returns the total number of rows deleted across all tables.
+func (s *Store) Vacuum(before time.Time) (int, error) {
+	ts := before.UTC().Format(time.RFC3339Nano)
+	total := 0
+
+	tables := []string{
+		"DELETE FROM generations WHERE created_at < ?",
+		"DELETE FROM invariant_checks WHERE checked_at < ?",
+		"DELETE FROM apply_actions WHERE started_at < ?",
+		"DELETE FROM applies WHERE started_at < ?",
+	}
+
+	for _, stmt := range tables {
+		res, err := s.sqlDB.Exec(stmt, ts)
+		if err != nil {
+			return total, fmt.Errorf("vacuum: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("vacuum rows affected: %w", err)
+		}
+		total += int(n)
+	}
+
+	return total, nil
+}
+
+// ---------------------------------------------------------------------------
+// ReadOnlyQuery — execute arbitrary SELECT queries
+// ---------------------------------------------------------------------------
+
+// ReadOnlyQuery executes a read-only SQL query against the database.
+// Only SELECT statements are allowed; any other statement is rejected.
+// Returns the result rows as a slice of column-name-to-value maps.
+func (s *Store) ReadOnlyQuery(query string) ([]map[string]interface{}, error) {
+	trimmed := strings.TrimSpace(query)
+	if len(trimmed) < 6 || strings.ToUpper(trimmed[:6]) != "SELECT" {
+		return nil, fmt.Errorf("only SELECT queries are allowed")
+	}
+
+	rows, err := s.sqlDB.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("columns: %w", err)
+	}
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		row := make(map[string]interface{}, len(cols))
+		for i, col := range cols {
+			val := values[i]
+			// Convert []byte to string for readability
+			if b, ok := val.([]byte); ok {
+				val = string(b)
+			}
+			row[col] = val
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+
+	return results, nil
 }

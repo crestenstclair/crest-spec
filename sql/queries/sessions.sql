@@ -1,6 +1,6 @@
 -- name: CreateSession :exec
-INSERT INTO agent_sessions (id, plan_json, waves_json, hashes_json, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, 'active', ?, ?);
+INSERT INTO agent_sessions (id, apply_id, plan_json, waves_json, hashes_json, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 'active', ?, ?);
 
 -- name: GetSession :one
 SELECT * FROM agent_sessions WHERE id = ?;

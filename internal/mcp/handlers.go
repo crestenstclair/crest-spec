@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 )
@@ -94,8 +95,8 @@ func (s *Server) handleToolCall(ctx context.Context, id any, params json.RawMess
 	}
 
 	var progressToken string
-	if tcp.Meta != nil {
-		progressToken = tcp.Meta.ProgressToken
+	if tcp.Meta != nil && len(tcp.Meta.ProgressToken) > 0 {
+		progressToken = strings.Trim(string(tcp.Meta.ProgressToken), "\"")
 	}
 
 	result := handler(ctx, tcp.Arguments, progressToken)
@@ -222,6 +223,27 @@ func (s *Server) handlePromptsGet(ctx context.Context, id any, params json.RawMe
 		prompt := promptpkg.BuildSystemPrompt(result.Registry.Project)
 		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"messages": []map[string]string{{"role": "user", "content": prompt}},
+		}}
+
+	case "resource_prompt":
+		resourceID := p.Arguments["resource_id"]
+		if resourceID == "" {
+			return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: "resource_id argument required"}}
+		}
+		result, err := s.spec.Plan(ctx)
+		if err != nil {
+			return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32603, Message: err.Error()}}
+		}
+		resource, ok := result.Registry.Resources[resourceID]
+		if !ok {
+			return jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: -32602, Message: "resource not found: " + resourceID}}
+		}
+		sysPrompt := promptpkg.BuildSystemPrompt(result.Registry.Project)
+		resPrompt := promptpkg.BuildResourcePrompt(resource, result.Registry)
+		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
+			"messages": []map[string]string{
+				{"role": "user", "content": sysPrompt + "\n\n" + resPrompt},
+			},
 		}}
 
 	case "orchestrator_instructions":

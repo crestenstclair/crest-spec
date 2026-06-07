@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
@@ -77,6 +78,27 @@ func CheckAssertions(assertions []cuepkg.Assertion, stdout, stderr string, exitC
 			r.Passed = err == nil && info.Size() > 0
 			if !r.Passed {
 				r.Message = fmt.Sprintf("file empty or missing: %s", a.Path)
+			}
+		case "file_matches":
+			content, err := os.ReadFile(a.Path)
+			if err != nil {
+				r.Passed = false
+				r.Message = fmt.Sprintf("cannot read file %s: %v", a.Path, err)
+			} else {
+				pattern := a.Pattern
+				if pattern == "" {
+					pattern = a.Regex
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					r.Passed = false
+					r.Message = fmt.Sprintf("invalid regex %q: %v", pattern, err)
+				} else {
+					r.Passed = re.Match(content)
+					if !r.Passed {
+						r.Message = fmt.Sprintf("file %s does not match pattern %q", a.Path, pattern)
+					}
+				}
 			}
 		default:
 			r.Passed = false

@@ -244,6 +244,18 @@ func (f *fakeStore) CleanupOrphans(aliveFn func(int) bool) (int, error) {
 	return 0, nil
 }
 
+func (f *fakeStore) CreateGeneration(g storemod.Generation) error { return nil }
+func (f *fakeStore) UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error {
+	return nil
+}
+func (f *fakeStore) GetActiveSession() (*storemod.Session, error) { return nil, nil }
+func (f *fakeStore) UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error {
+	return nil
+}
+func (f *fakeStore) GetSessionResource(sessionID, resourceID string) (*storemod.SessionResource, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Fake process tree (no recursion by default)
 // ---------------------------------------------------------------------------

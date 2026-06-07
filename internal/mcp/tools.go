@@ -2,11 +2,18 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	enginemod "github.com/crestenstclair/crest-spec/internal/engine"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
+	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
 
 // registerTools populates s.tools, s.dispatch, and s.toolFns.
@@ -27,22 +34,56 @@ func (s *Server) registerTools() {
 	s.addTool(toolDef{
 		Name:        "run_prompt",
 		Description: "Step 4: Dispatch a prompt to a Claude sub-agent. Returns job_id immediately — use poll_result to retrieve the output. In spec workflow, pass the prompt and system_prompt from spec_context here.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"The prompt to send"},"system_prompt":{"type":"string","description":"System prompt appended to the agent"},"model":{"type":"string","description":"Model override (default: generate model from config)"}},"required":["prompt"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"prompt":{"type":"string","description":"The prompt to send"},"system_prompt":{"type":"string","description":"System prompt appended to the agent"},"model":{"type":"string","description":"Model override (default: generate model from config)"},"session_id":{"type":"string","description":"Session ID (optional, enables generation tracking in SQLite)"},"resource_id":{"type":"string","description":"Resource ID (optional, links generation to a resource)"}},"required":["prompt"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
 		var p struct {
 			Prompt       string `json:"prompt"`
 			SystemPrompt string `json:"system_prompt"`
 			Model        string `json:"model"`
+			SessionID    string `json:"session_id"`
+			ResourceID   string `json:"resource_id"`
 		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return errorResult("invalid arguments: " + err.Error())
 		}
+
+		// Record generation in SQLite if session context is provided
+		var genID string
+		var applyID string
+		if p.SessionID != "" && p.ResourceID != "" {
+			sess, _ := s.store.GetActiveSession()
+			if sess != nil {
+				applyID = sess.ApplyID
+			}
+			genID = uuid.NewString()
+			promptHash := fmt.Sprintf("%x", sha256.Sum256([]byte(p.Prompt)))
+			s.store.CreateGeneration(storemod.Generation{
+				ID:         genID,
+				ApplyID:    applyID,
+				ResourceID: p.ResourceID,
+				PromptText: p.Prompt,
+				PromptHash: promptHash,
+				Model:      p.Model,
+			})
+		}
+
 		return s.runAsync("run_prompt", func(ctx context.Context) (string, error) {
+			startTime := time.Now()
 			res, err := s.eng.Generate(ctx, enginemod.GenerateOpts{
 				Prompt:             p.Prompt,
 				Model:              p.Model,
 				AppendSystemPrompt: p.SystemPrompt,
 			})
+			durationMS := time.Since(startTime).Milliseconds()
+
+			if genID != "" {
+				if err != nil {
+					s.store.UpdateGeneration(genID, "", "error", err.Error(), durationMS, 0, 0, 0)
+				} else {
+					s.store.UpdateGeneration(genID, res.Output, "success", "", durationMS, 0, 0, 0)
+				}
+			}
+
 			if err != nil {
 				return "", err
 			}
@@ -310,13 +351,25 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(result.Actions)
 	})
 
-	// spec/apply — unattended mode, no agent control. Prefer the manual pipeline: begin → next → context → run_prompt → commit.
+	// spec/apply — automated pipeline: begin → constraint loop → commit → finish
 	s.addTool(toolDef{
-		Name: "spec/apply", Description: "Unattended apply (no agent control). Prefer the manual pipeline: spec_begin → spec_next → spec_context → run_prompt → spec_commit for full orchestration.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"}}}`),
+		Name: "spec/apply", Description: "Automated apply: runs the full constraint loop (generate → validate → retry) for all resources. Prefer the manual pipeline (begin → next → context → run_prompt → commit) for agent-controlled orchestration.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			Target string `json:"target"`
+			Force  bool   `json:"force"`
+			Model  string `json:"model"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return errorResult("invalid arguments: " + err.Error())
+		}
 		return s.runAsync("spec/apply", func(ctx context.Context) (string, error) {
-			result, err := s.spec.Begin(ctx, specmod.BeginOpts{})
+			result, err := s.spec.Apply(ctx, specmod.BeginOpts{
+				Target: p.Target,
+				Force:  p.Force,
+				Model:  p.Model,
+			})
 			if err != nil {
 				return "", err
 			}
@@ -411,7 +464,7 @@ func (s *Server) registerSpecTools() {
 			SessionID  string `json:"session_id"`
 		}
 		json.Unmarshal(args, &p)
-		if err := s.spec.Resolve(ctx, p.SessionID, p.ResourceID, p.Content, ""); err != nil {
+		if err := s.spec.Note(ctx, p.SessionID, p.ResourceID, p.Content); err != nil {
 			return errorResult(fmt.Sprintf("note: %v", err))
 		}
 		return jsonResult(map[string]bool{"saved": true})
@@ -436,10 +489,11 @@ func (s *Server) registerSpecTools() {
 		for _, f := range p.Files {
 			files = append(files, specmod.CommitFile{Path: f.Path, Content: f.Content})
 		}
-		if err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes); err != nil {
+		result, err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes)
+		if err != nil {
 			return errorResult(fmt.Sprintf("commit: %v", err))
 		}
-		return jsonResult(map[string]bool{"committed": true})
+		return jsonResult(result)
 	})
 
 	// spec/resolve
@@ -570,19 +624,51 @@ func (s *Server) registerSpecTools() {
 		Name: "spec/diff", Description: "Reconstruct state delta between applies",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
-		return textResult("diff not yet implemented")
+		var p struct {
+			ApplyIDA string `json:"apply_id_a"`
+			ApplyIDB string `json:"apply_id_b"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return errorResult("invalid arguments: " + err.Error())
+		}
+		if p.ApplyIDA == "" || p.ApplyIDB == "" {
+			return errorResult("both apply_id_a and apply_id_b are required")
+		}
+		result, err := s.spec.DiffApplies(ctx, p.ApplyIDA, p.ApplyIDB)
+		if err != nil {
+			return errorResult(fmt.Sprintf("diff: %v", err))
+		}
+		return jsonResult(result)
 	})
 
 	// spec/state
 	s.addTool(toolDef{
 		Name: "spec/state", Description: "Inspect/modify state tracking",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: get, set, clear"}}}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: list or rm"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
-		result, err := s.spec.Status(ctx)
-		if err != nil {
-			return errorResult(fmt.Sprintf("state: %v", err))
+		var p struct {
+			ResourceID string `json:"resource_id"`
+			Action     string `json:"action"`
 		}
-		return jsonResult(result)
+		json.Unmarshal(args, &p)
+
+		switch p.Action {
+		case "rm":
+			if p.ResourceID == "" {
+				return errorResult("resource_id is required for rm action")
+			}
+			if err := s.spec.RemoveResource(ctx, p.ResourceID); err != nil {
+				return errorResult(fmt.Sprintf("remove resource: %v", err))
+			}
+			return jsonResult(map[string]any{"removed": p.ResourceID})
+		default:
+			// "list" or empty — return full status with resource hashes
+			result, err := s.spec.Status(ctx)
+			if err != nil {
+				return errorResult(fmt.Sprintf("state: %v", err))
+			}
+			return jsonResult(result)
+		}
 	})
 
 	// spec/drift
@@ -604,9 +690,32 @@ func (s *Server) registerSpecTools() {
 	// spec/vacuum
 	s.addTool(toolDef{
 		Name: "spec/vacuum", Description: "Compact old history",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d, 7d, 24h)"}}}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
-		return textResult("vacuum not yet implemented")
+		var p struct {
+			OlderThan string `json:"older_than"`
+		}
+		json.Unmarshal(args, &p)
+
+		if p.OlderThan == "" {
+			p.OlderThan = "30d"
+		}
+
+		dur, err := parseDuration(p.OlderThan)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid older_than: %v", err))
+		}
+
+		before := time.Now().Add(-dur)
+		deleted, err := s.spec.Vacuum(ctx, before)
+		if err != nil {
+			return errorResult(fmt.Sprintf("vacuum: %v", err))
+		}
+		return jsonResult(map[string]any{
+			"deleted":    deleted,
+			"older_than": p.OlderThan,
+			"before":     before.UTC().Format(time.RFC3339),
+		})
 	})
 
 	// spec/sql
@@ -614,7 +723,21 @@ func (s *Server) registerSpecTools() {
 		Name: "spec/sql", Description: "Read-only SQLite shell",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`),
 	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
-		return textResult("sql not yet implemented")
+		var p struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return errorResult("invalid arguments: " + err.Error())
+		}
+		trimmed := strings.TrimSpace(p.Query)
+		if len(trimmed) < 6 || !strings.EqualFold(trimmed[:6], "SELECT") {
+			return errorResult("only SELECT queries are allowed")
+		}
+		rows, err := s.spec.ReadOnlyQuery(ctx, p.Query)
+		if err != nil {
+			return errorResult(fmt.Sprintf("sql: %v", err))
+		}
+		return jsonResult(rows)
 	})
 
 	// spec/unlock
@@ -633,4 +756,26 @@ func (s *Server) registerSpecTools() {
 func (s *Server) addTool(def toolDef, handler toolHandler) {
 	s.tools = append(s.tools, def)
 	s.toolFns[def.Name] = handler
+}
+
+// parseDuration parses duration strings like "30d", "7d", "24h", "2h30m".
+// It extends time.ParseDuration to support "d" (days) as a suffix.
+func parseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+
+	// Check for day suffix: e.g. "30d"
+	if strings.HasSuffix(s, "d") {
+		numStr := s[:len(s)-1]
+		days, err := strconv.Atoi(numStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid day duration %q: %w", s, err)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+
+	// Fall back to standard Go duration parsing (supports h, m, s, etc.)
+	return time.ParseDuration(s)
 }

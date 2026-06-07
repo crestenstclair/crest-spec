@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -150,4 +151,130 @@ func (s *Spec) ValidateResource(ctx context.Context, resourceID string) (*Valida
 type ValidateResourceResult struct {
 	ResourceID  string
 	Validations []ValidationResult
+}
+
+// ---------------------------------------------------------------------------
+// DiffApplies — compare two applies
+// ---------------------------------------------------------------------------
+
+// DiffResult holds the delta between two applies.
+type DiffResult struct {
+	ApplyIDA string              `json:"apply_id_a"`
+	ApplyIDB string              `json:"apply_id_b"`
+	OnlyInA  []DiffAction        `json:"only_in_a"`
+	OnlyInB  []DiffAction        `json:"only_in_b"`
+	Changed  []DiffResourceDelta `json:"changed"`
+}
+
+// DiffAction describes a single apply action entry.
+type DiffAction struct {
+	ResourceID string `json:"resource_id"`
+	Action     string `json:"action"`
+	Outcome    string `json:"outcome"`
+}
+
+// DiffResourceDelta describes a resource that appears in both applies but
+// with different actions or outcomes.
+type DiffResourceDelta struct {
+	ResourceID string `json:"resource_id"`
+	ActionA    string `json:"action_a"`
+	OutcomeA   string `json:"outcome_a"`
+	ActionB    string `json:"action_b"`
+	OutcomeB   string `json:"outcome_b"`
+}
+
+// DiffApplies compares the actions taken in two apply runs and returns a diff.
+func (s *Spec) DiffApplies(ctx context.Context, applyIDA, applyIDB string) (*DiffResult, error) {
+	actionsA, err := s.store.ListApplyActions(applyIDA)
+	if err != nil {
+		return nil, fmt.Errorf("list actions for apply %s: %w", applyIDA, err)
+	}
+	actionsB, err := s.store.ListApplyActions(applyIDB)
+	if err != nil {
+		return nil, fmt.Errorf("list actions for apply %s: %w", applyIDB, err)
+	}
+
+	mapA := make(map[string]store.ApplyAction, len(actionsA))
+	for _, a := range actionsA {
+		mapA[a.ResourceID] = a
+	}
+	mapB := make(map[string]store.ApplyAction, len(actionsB))
+	for _, a := range actionsB {
+		mapB[a.ResourceID] = a
+	}
+
+	result := &DiffResult{
+		ApplyIDA: applyIDA,
+		ApplyIDB: applyIDB,
+	}
+
+	for _, a := range actionsA {
+		b, inB := mapB[a.ResourceID]
+		if !inB {
+			result.OnlyInA = append(result.OnlyInA, DiffAction{
+				ResourceID: a.ResourceID,
+				Action:     a.Action,
+				Outcome:    a.Outcome,
+			})
+		} else if a.Action != b.Action || a.Outcome != b.Outcome {
+			result.Changed = append(result.Changed, DiffResourceDelta{
+				ResourceID: a.ResourceID,
+				ActionA:    a.Action,
+				OutcomeA:   a.Outcome,
+				ActionB:    b.Action,
+				OutcomeB:   b.Outcome,
+			})
+		}
+	}
+
+	for _, b := range actionsB {
+		if _, inA := mapA[b.ResourceID]; !inA {
+			result.OnlyInB = append(result.OnlyInB, DiffAction{
+				ResourceID: b.ResourceID,
+				Action:     b.Action,
+				Outcome:    b.Outcome,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Vacuum — delete old history
+// ---------------------------------------------------------------------------
+
+// Vacuum deletes old generations, apply_actions, and applies older than the
+// given threshold. Returns the total count of deleted records.
+func (s *Spec) Vacuum(ctx context.Context, before time.Time) (int, error) {
+	return s.store.Vacuum(before)
+}
+
+// ---------------------------------------------------------------------------
+// ReadOnlyQuery — execute arbitrary SELECT
+// ---------------------------------------------------------------------------
+
+// ReadOnlyQuery executes a read-only SQL query and returns the results as
+// a slice of column-to-value maps.
+func (s *Spec) ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error) {
+	return s.store.ReadOnlyQuery(query)
+}
+
+// ---------------------------------------------------------------------------
+// RemoveResource — delete a resource and its related data
+// ---------------------------------------------------------------------------
+
+// RemoveResource deletes a resource from state along with its generated files
+// and dependency edges.
+func (s *Spec) RemoveResource(ctx context.Context, resourceID string) error {
+	if err := s.store.DeleteGeneratedFiles(resourceID); err != nil {
+		return fmt.Errorf("delete generated files for %s: %w", resourceID, err)
+	}
+	if err := s.store.DeleteDependencies(resourceID); err != nil {
+		return fmt.Errorf("delete dependencies for %s: %w", resourceID, err)
+	}
+	if err := s.store.DeleteResource(resourceID); err != nil {
+		return fmt.Errorf("delete resource %s: %w", resourceID, err)
+	}
+	return nil
 }

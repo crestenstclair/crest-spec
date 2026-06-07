@@ -58,6 +58,7 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/generations/{resourceID}", d.handleGenerations)
 	mux.HandleFunc("GET /api/jobs", d.handleJobs)
 	mux.HandleFunc("GET /api/notes/{applyID}", d.handleNotes)
+	mux.HandleFunc("GET /api/session-resources/{sessionID}", d.handleSessionResources)
 
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -115,12 +116,25 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	type resourceStateCounts struct {
+		Pending    int `json:"pending"`
+		Dispatched int `json:"dispatched"`
+		Committed  int `json:"committed"`
+		Rejected   int `json:"rejected"`
+		Skipped    int `json:"skipped"`
+		Errored    int `json:"errored"`
+		Blocked    int `json:"blocked"`
+		Total      int `json:"total"`
+	}
+
 	type statusResp struct {
-		Resources    int           `json:"resources"`
-		Lock         *store.Lock   `json:"lock"`
-		Session      *store.Session `json:"session"`
-		LatestApply  *store.Apply  `json:"latest_apply"`
-		RunningJobs  int           `json:"running_jobs"`
+		Resources       int                  `json:"resources"`
+		Lock            *store.Lock          `json:"lock"`
+		Session         *store.Session       `json:"session"`
+		LatestApply     *store.Apply         `json:"latest_apply"`
+		RunningJobs     int                  `json:"running_jobs"`
+		SessionActions  []store.ApplyAction  `json:"session_actions,omitempty"`
+		ResourceStates  *resourceStateCounts `json:"resource_states,omitempty"`
 	}
 
 	resp := statusResp{
@@ -131,6 +145,35 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(applies) > 0 {
 		resp.LatestApply = &applies[0]
+	}
+	if session != nil && session.ApplyID != "" {
+		actions, _ := d.store.ListApplyActions(session.ApplyID)
+		resp.SessionActions = actions
+	}
+	if session != nil {
+		sessResources, _ := d.store.ListSessionResources(session.ID)
+		if len(sessResources) > 0 {
+			counts := &resourceStateCounts{Total: len(sessResources)}
+			for _, sr := range sessResources {
+				switch sr.State {
+				case "pending":
+					counts.Pending++
+				case "dispatched":
+					counts.Dispatched++
+				case "committed":
+					counts.Committed++
+				case "rejected":
+					counts.Rejected++
+				case "skipped":
+					counts.Skipped++
+				case "errored":
+					counts.Errored++
+				case "blocked":
+					counts.Blocked++
+				}
+			}
+			resp.ResourceStates = counts
+		}
 	}
 
 	d.writeJSON(w, resp)
@@ -251,4 +294,19 @@ func (d *dashboard) handleNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.writeJSON(w, notes)
+}
+
+func (d *dashboard) handleSessionResources(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionID")
+	resources, err := d.store.ListSessionResources(sessionID)
+	if err != nil {
+		d.writeError(w, 500, err.Error())
+		return
+	}
+	d.writeJSON(w, resources)
+}
+
+func fatal(err error) {
+	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	os.Exit(1)
 }

@@ -47,6 +47,11 @@ type store interface {
 	ListJobs(limit int) ([]storemod.Job, error)
 	DeleteJob(id string) error
 	CleanupOrphans(aliveFn func(int) bool) (int, error)
+	CreateGeneration(g storemod.Generation) error
+	UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error
+	GetActiveSession() (*storemod.Session, error)
+	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
+	GetSessionResource(sessionID, resourceID string) (*storemod.SessionResource, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +96,7 @@ type toolCallParams struct {
 }
 
 type toolCallMeta struct {
-	ProgressToken string `json:"progressToken,omitempty"`
+	ProgressToken json.RawMessage `json:"progressToken,omitempty"`
 }
 
 type toolResult struct {
@@ -110,13 +115,15 @@ type toolHandler func(ctx context.Context, args json.RawMessage, progressToken s
 // specHandler is the consumer-side surface of the Spec engine.
 type specHandler interface {
 	Plan(ctx context.Context) (*specmod.PlanResult, error)
+	Apply(ctx context.Context, opts specmod.BeginOpts) (*specmod.ApplyResult, error)
 	Begin(ctx context.Context, opts specmod.BeginOpts) (*specmod.BeginResult, error)
 	Next(ctx context.Context, sessionID string) (*specmod.NextResult, error)
 	Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error)
-	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string) error
+	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
 	AdvanceWave(ctx context.Context, sessionID string) error
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
+	Note(ctx context.Context, sessionID, resourceID, content string) error
 	Amend(ctx context.Context, sessionID, resourceID string) error
 	Skip(ctx context.Context, sessionID, resourceID, reason string) error
 	Status(ctx context.Context) (*specmod.StatusResult, error)
@@ -127,6 +134,10 @@ type specHandler interface {
 	ValidateResource(ctx context.Context, resourceID string) (*specmod.ValidateResourceResult, error)
 	DriftAction(ctx context.Context, action, resourceID string) error
 	Unlock(ctx context.Context) error
+	DiffApplies(ctx context.Context, applyIDA, applyIDB string) (*specmod.DiffResult, error)
+	Vacuum(ctx context.Context, before time.Time) (int, error)
+	ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error)
+	RemoveResource(ctx context.Context, resourceID string) error
 }
 
 // ---------------------------------------------------------------------------

@@ -79,14 +79,6 @@ func runConstraintLoop(ctx context.Context, eng specEngine, opts LoopOpts) (*Loo
 	}, nil
 }
 
-// SpecEngine is the exported engine interface for CLI callers.
-type SpecEngine = specEngine
-
-// RunConstraintLoopPublic is the exported entry point for CLI callers.
-func RunConstraintLoopPublic(ctx context.Context, eng SpecEngine, opts LoopOpts) (*LoopResult, error) {
-	return runConstraintLoop(ctx, eng, opts)
-}
-
 func runReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*ValidationResult, error) {
 	switch opts.ReviewLevel {
 	case "full":

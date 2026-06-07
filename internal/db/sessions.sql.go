@@ -33,12 +33,13 @@ func (q *Queries) CreateNote(ctx context.Context, arg CreateNoteParams) error {
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO agent_sessions (id, plan_json, waves_json, hashes_json, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, 'active', ?, ?)
+INSERT INTO agent_sessions (id, apply_id, plan_json, waves_json, hashes_json, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
 `
 
 type CreateSessionParams struct {
 	ID         string
+	ApplyID    string
 	PlanJson   string
 	WavesJson  string
 	HashesJson string
@@ -49,6 +50,7 @@ type CreateSessionParams struct {
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
 	_, err := q.db.ExecContext(ctx, createSession,
 		arg.ID,
+		arg.ApplyID,
 		arg.PlanJson,
 		arg.WavesJson,
 		arg.HashesJson,
@@ -59,7 +61,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const getActiveSession = `-- name: GetActiveSession :one
-SELECT id, plan_json, waves_json, hashes_json, current_wave, status, created_at, updated_at FROM agent_sessions WHERE status = 'active' LIMIT 1
+SELECT id, plan_json, waves_json, hashes_json, current_wave, status, created_at, updated_at, apply_id FROM agent_sessions WHERE status = 'active' LIMIT 1
 `
 
 func (q *Queries) GetActiveSession(ctx context.Context) (AgentSession, error) {
@@ -74,6 +76,7 @@ func (q *Queries) GetActiveSession(ctx context.Context) (AgentSession, error) {
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApplyID,
 	)
 	return i, err
 }
@@ -100,7 +103,7 @@ func (q *Queries) GetNote(ctx context.Context, arg GetNoteParams) (AgentNote, er
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, plan_json, waves_json, hashes_json, current_wave, status, created_at, updated_at FROM agent_sessions WHERE id = ?
+SELECT id, plan_json, waves_json, hashes_json, current_wave, status, created_at, updated_at, apply_id FROM agent_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (AgentSession, error) {
@@ -115,6 +118,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (AgentSession, erro
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApplyID,
 	)
 	return i, err
 }

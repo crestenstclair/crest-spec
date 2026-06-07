@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"os"
 	"testing"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
@@ -62,6 +63,67 @@ func TestCheckAssertions_FileExists(t *testing.T) {
 	results = CheckAssertions(assertions, "", "", 0)
 	require.Len(t, results, 1)
 	assert.False(t, results[0].Passed)
+}
+
+func TestCheckAssertions_FileMatches(t *testing.T) {
+	// Create a temp file with known content
+	tmpFile, err := os.CreateTemp("", "file_matches_test_*.txt")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.WriteString("hello world 123\nfoo bar baz\n")
+	require.NoError(t, err)
+	tmpFile.Close()
+
+	// Pattern matches
+	assertions := []cuepkg.Assertion{
+		{Kind: "file_matches", Path: tmpFile.Name(), Pattern: `hello.*123`},
+	}
+	results := CheckAssertions(assertions, "", "", 0)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].Passed)
+
+	// Pattern does not match
+	assertions = []cuepkg.Assertion{
+		{Kind: "file_matches", Path: tmpFile.Name(), Pattern: `^no_match$`},
+	}
+	results = CheckAssertions(assertions, "", "", 0)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].Passed)
+	assert.Contains(t, results[0].Message, "does not match pattern")
+
+	// Using regex field instead of pattern
+	assertions = []cuepkg.Assertion{
+		{Kind: "file_matches", Path: tmpFile.Name(), Regex: `foo\s+bar`},
+	}
+	results = CheckAssertions(assertions, "", "", 0)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].Passed)
+}
+
+func TestCheckAssertions_FileMatches_FileNotFound(t *testing.T) {
+	assertions := []cuepkg.Assertion{
+		{Kind: "file_matches", Path: "/nonexistent/path/file.txt", Pattern: `anything`},
+	}
+	results := CheckAssertions(assertions, "", "", 0)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].Passed)
+	assert.Contains(t, results[0].Message, "cannot read file")
+}
+
+func TestCheckAssertions_FileMatches_InvalidRegex(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "file_matches_test_*.txt")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	tmpFile.WriteString("content")
+	tmpFile.Close()
+
+	assertions := []cuepkg.Assertion{
+		{Kind: "file_matches", Path: tmpFile.Name(), Pattern: `[invalid`},
+	}
+	results := CheckAssertions(assertions, "", "", 0)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].Passed)
+	assert.Contains(t, results[0].Message, "invalid regex")
 }
 
 func TestRunValidations_NoValidations(t *testing.T) {

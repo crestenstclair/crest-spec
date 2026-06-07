@@ -619,3 +619,83 @@ func TestFailApply(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", a.Status)
 }
+
+// ---------------------------------------------------------------------------
+// InvariantCheck CRUD Tests
+// ---------------------------------------------------------------------------
+
+func TestRecordInvariantCheck(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("apply-1", "hash"))
+
+	ic := InvariantCheck{
+		ID:         "ic-1",
+		ApplyID:    "apply-1",
+		ResourceID: "aggregate.Synth.Voice",
+		CheckType:  "no-god-objects",
+		Passed:     true,
+		Output:     "",
+		CreatedAt:  time.Now().UTC(),
+	}
+	err := s.RecordInvariantCheck(ic)
+	require.NoError(t, err)
+
+	checks, err := s.ListInvariantChecks("apply-1")
+	require.NoError(t, err)
+	require.Len(t, checks, 1)
+	assert.Equal(t, "ic-1", checks[0].ID)
+	assert.Equal(t, "no-god-objects", checks[0].CheckType)
+	assert.True(t, checks[0].Passed)
+	assert.Equal(t, "", checks[0].Output)
+}
+
+func TestRecordInvariantCheck_Failed(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("apply-1", "hash"))
+
+	ic := InvariantCheck{
+		ID:         "ic-1",
+		ApplyID:    "apply-1",
+		ResourceID: "aggregate.Synth.Voice",
+		CheckType:  "single-responsibility",
+		Passed:     false,
+		Output:     "class handles too many concerns",
+		CreatedAt:  time.Now().UTC(),
+	}
+	err := s.RecordInvariantCheck(ic)
+	require.NoError(t, err)
+
+	checks, err := s.ListInvariantChecks("apply-1")
+	require.NoError(t, err)
+	require.Len(t, checks, 1)
+	assert.False(t, checks[0].Passed)
+	assert.Equal(t, "class handles too many concerns", checks[0].Output)
+}
+
+func TestListInvariantChecks_Empty(t *testing.T) {
+	s := testStore(t)
+	checks, err := s.ListInvariantChecks("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, checks)
+}
+
+func TestRecordInvariantCheck_Multiple(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.CreateApply("apply-1", "hash"))
+
+	for i, name := range []string{"invariant-a", "invariant-b", "invariant-c"} {
+		ic := InvariantCheck{
+			ID:         fmt.Sprintf("ic-%d", i),
+			ApplyID:    "apply-1",
+			ResourceID: "aggregate.Synth.Voice",
+			CheckType:  name,
+			Passed:     true,
+			CreatedAt:  time.Now().UTC(),
+		}
+		require.NoError(t, s.RecordInvariantCheck(ic))
+	}
+
+	checks, err := s.ListInvariantChecks("apply-1")
+	require.NoError(t, err)
+	assert.Len(t, checks, 3)
+}

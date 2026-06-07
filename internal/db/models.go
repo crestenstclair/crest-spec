@@ -20,6 +20,7 @@ type AgentSession struct {
 	Status      string
 	CreatedAt   string
 	UpdatedAt   string
+	ApplyID     string
 }
 
 type Apply struct {
@@ -110,4 +111,17 @@ type Resource struct {
 	EffectiveHash   string
 	Model           *string
 	SettledAt       string
+}
+
+type SessionResource struct {
+	SessionID  string
+	ResourceID string
+	State      string
+	WaveIndex  int64
+	Attempts   int64
+	MaxRetries int64
+	LastError  *string
+	LastOutput *string
+	JobID      *string
+	UpdatedAt  string
 }
