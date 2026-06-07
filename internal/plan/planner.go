@@ -46,122 +46,29 @@ func (p *Planner) Plan(
 ) ([]PlannedAction, error) {
 	effectiveHashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model, mode)
 
-	storedResources, err := p.store.ListResources()
+	storedMap, err := p.loadStoredMap()
 	if err != nil {
-		return nil, fmt.Errorf("list resources: %w", err)
+		return nil, err
 	}
 
-	storedMap := make(map[string]store.Resource, len(storedResources))
-	for _, sr := range storedResources {
-		storedMap[sr.ID] = sr
-	}
-
-	var destroys []PlannedAction
-	var createModify []PlannedAction
-
-	topoOrder, err := g.TopologicalSort()
+	topoIndex, err := buildTopoIndex(g)
 	if err != nil {
-		return nil, fmt.Errorf("topo sort: %w", err)
-	}
-	topoIndex := make(map[string]int, len(topoOrder))
-	for i, id := range topoOrder {
-		topoIndex[id] = i
+		return nil, err
 	}
 
-	for id, r := range registry.Resources {
-		if structuralKinds[r.Kind] {
-			continue
-		}
-
-		stored, exists := storedMap[id]
-		if !exists {
-			createModify = append(createModify, PlannedAction{
-				ResourceID: id,
-				Kind:       ActionCreate,
-				Reason:     "new resource",
-			})
-			continue
-		}
-
-		newDeclHash := declHash(r.Declaration)
-		if stored.DeclarationHash != newDeclHash {
-			createModify = append(createModify, PlannedAction{
-				ResourceID: id,
-				Kind:       ActionModify,
-				Reason:     "declaration changed",
-			})
-			continue
-		}
-
-		if stored.EffectiveHash != effectiveHashes[id] {
-			cascadedFrom := findChangedAncestor(id, g, effectiveHashes, storedMap)
-			createModify = append(createModify, PlannedAction{
-				ResourceID:   id,
-				Kind:         ActionModify,
-				Reason:       fmt.Sprintf("dependency changed (%s)", cascadedFrom),
-				CascadedFrom: cascadedFrom,
-			})
-			continue
-		}
-
-		// Effective hash matches — check for drift
-		files, err := p.store.GetGeneratedFiles(id)
-		if err != nil {
-			return nil, fmt.Errorf("get generated files for %s: %w", id, err)
-		}
-
-		drifted := false
-		for _, f := range files {
-			data, err := p.fs.ReadFile(f.Path)
-			if err != nil {
-				drifted = true
-				break
-			}
-			diskHash := fmt.Sprintf("%x", sha256.Sum256(data))
-			if diskHash != f.ContentHash {
-				drifted = true
-				break
-			}
-		}
-
-		if drifted {
-			var filePaths []string
-			for _, f := range files {
-				filePaths = append(filePaths, f.Path)
-			}
-			createModify = append(createModify, PlannedAction{
-				ResourceID: id,
-				Kind:       ActionDrift,
-				Reason:     "file modified on disk",
-				Files:      filePaths,
-			})
-		}
+	createModify, err := p.planCreateModify(registry, g, effectiveHashes, storedMap)
+	if err != nil {
+		return nil, err
 	}
 
-	// Destroys: resources in store but not in registry
-	for id, sr := range storedMap {
-		if structuralKinds[sr.Kind] {
-			continue
-		}
-		if _, exists := registry.Resources[id]; !exists {
-			files, _ := p.store.GetGeneratedFiles(id)
-			var filePaths []string
-			for _, f := range files {
-				filePaths = append(filePaths, f.Path)
-			}
-			destroys = append(destroys, PlannedAction{
-				ResourceID: id,
-				Kind:       ActionDestroy,
-				Reason:     "removed from spec",
-				Files:      filePaths,
-			})
-		}
+	destroys, err := p.planDestroys(registry, storedMap)
+	if err != nil {
+		return nil, err
 	}
 
 	sort.Slice(destroys, func(i, j int) bool {
 		return destroys[i].ResourceID < destroys[j].ResourceID
 	})
-
 	sort.Slice(createModify, func(i, j int) bool {
 		ii, iOK := topoIndex[createModify[i].ResourceID]
 		jj, jOK := topoIndex[createModify[j].ResourceID]
@@ -176,6 +83,140 @@ func (p *Planner) Plan(
 	result = append(result, createModify...)
 
 	return result, nil
+}
+
+func (p *Planner) loadStoredMap() (map[string]store.Resource, error) {
+	storedResources, err := p.store.ListResources()
+	if err != nil {
+		return nil, fmt.Errorf("list resources: %w", err)
+	}
+	storedMap := make(map[string]store.Resource, len(storedResources))
+	for _, sr := range storedResources {
+		storedMap[sr.ID] = sr
+	}
+	return storedMap, nil
+}
+
+func buildTopoIndex(g *graphpkg.Graph) (map[string]int, error) {
+	topoOrder, err := g.TopologicalSort()
+	if err != nil {
+		return nil, fmt.Errorf("topo sort: %w", err)
+	}
+	topoIndex := make(map[string]int, len(topoOrder))
+	for i, id := range topoOrder {
+		topoIndex[id] = i
+	}
+	return topoIndex, nil
+}
+
+func (p *Planner) planCreateModify(
+	registry *cuepkg.Registry,
+	g *graphpkg.Graph,
+	effectiveHashes map[string]string,
+	storedMap map[string]store.Resource,
+) ([]PlannedAction, error) {
+	var actions []PlannedAction
+
+	for id, r := range registry.Resources {
+		if structuralKinds[r.Kind] {
+			continue
+		}
+
+		action, err := p.classifyResource(id, r, g, effectiveHashes, storedMap)
+		if err != nil {
+			return nil, err
+		}
+		if action != nil {
+			actions = append(actions, *action)
+		}
+	}
+
+	return actions, nil
+}
+
+func (p *Planner) classifyResource(
+	id string,
+	r cuepkg.Resource,
+	g *graphpkg.Graph,
+	effectiveHashes map[string]string,
+	storedMap map[string]store.Resource,
+) (*PlannedAction, error) {
+	stored, exists := storedMap[id]
+	if !exists {
+		return &PlannedAction{ResourceID: id, Kind: ActionCreate, Reason: "new resource"}, nil
+	}
+
+	if stored.DeclarationHash != declHash(r.Declaration) {
+		return &PlannedAction{ResourceID: id, Kind: ActionModify, Reason: "declaration changed"}, nil
+	}
+
+	if stored.EffectiveHash != effectiveHashes[id] {
+		cascadedFrom := findChangedAncestor(id, g, effectiveHashes, storedMap)
+		return &PlannedAction{
+			ResourceID:   id,
+			Kind:         ActionModify,
+			Reason:       fmt.Sprintf("dependency changed (%s)", cascadedFrom),
+			CascadedFrom: cascadedFrom,
+		}, nil
+	}
+
+	return p.checkDrift(id)
+}
+
+func (p *Planner) checkDrift(id string) (*PlannedAction, error) {
+	files, err := p.store.GetGeneratedFiles(id)
+	if err != nil {
+		return nil, fmt.Errorf("get generated files for %s: %w", id, err)
+	}
+
+	for _, f := range files {
+		data, err := p.fs.ReadFile(f.Path)
+		if err != nil {
+			return &PlannedAction{
+				ResourceID: id, Kind: ActionDrift,
+				Reason: "file modified on disk", Files: filePaths(files),
+			}, nil
+		}
+		diskHash := fmt.Sprintf("%x", sha256.Sum256(data))
+		if diskHash != f.ContentHash {
+			return &PlannedAction{
+				ResourceID: id, Kind: ActionDrift,
+				Reason: "file modified on disk", Files: filePaths(files),
+			}, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func (p *Planner) planDestroys(
+	registry *cuepkg.Registry,
+	storedMap map[string]store.Resource,
+) ([]PlannedAction, error) {
+	var destroys []PlannedAction
+	for id, sr := range storedMap {
+		if structuralKinds[sr.Kind] {
+			continue
+		}
+		if _, exists := registry.Resources[id]; !exists {
+			files, _ := p.store.GetGeneratedFiles(id)
+			destroys = append(destroys, PlannedAction{
+				ResourceID: id,
+				Kind:       ActionDestroy,
+				Reason:     "removed from spec",
+				Files:      filePaths(files),
+			})
+		}
+	}
+	return destroys, nil
+}
+
+func filePaths(files []store.GeneratedFile) []string {
+	var paths []string
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	return paths
 }
 
 func declHash(declaration any) string {

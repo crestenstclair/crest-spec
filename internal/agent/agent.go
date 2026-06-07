@@ -97,42 +97,13 @@ func (a *Agent) setupConfigIsolation() (string, func(), error) {
 	for _, entry := range entries {
 		src := filepath.Join(a.configDir, entry.Name())
 		dst := filepath.Join(tmpDir, entry.Name())
-
 		if entry.Name() == ".claude.json" {
-			data, err := os.ReadFile(src)
-			if err != nil {
-				continue
+			if copyConfigFile(src, dst) {
+				copiedConfig = true
 			}
-			os.WriteFile(dst, data, 0o600)
-			copiedConfig = true
-			continue
+		} else {
+			mirrorEntry(entry, src, dst)
 		}
-
-		// Don't symlink backups — stale backups from the source dir
-		// confuse Claude CLI into thinking the config was corrupted.
-		if entry.Name() == "backups" {
-			os.MkdirAll(dst, 0o700)
-			continue
-		}
-
-		if entry.IsDir() {
-			os.Symlink(src, dst)
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			target, err := os.Readlink(src)
-			if err == nil {
-				os.Symlink(target, dst)
-			}
-			continue
-		}
-
-		os.Link(src, dst)
 	}
 
 	if !copiedConfig {
@@ -140,6 +111,41 @@ func (a *Agent) setupConfigIsolation() (string, func(), error) {
 	}
 
 	return tmpDir, cleanup, nil
+}
+
+// copyConfigFile copies the Claude config JSON file. Returns true on success.
+func copyConfigFile(src, dst string) bool {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false
+	}
+	os.WriteFile(dst, data, 0o600)
+	return true
+}
+
+// mirrorEntry mirrors a single config directory entry into the temp dir.
+// Backups get an empty dir (stale backups confuse Claude CLI), directories
+// get symlinked, symlinks are re-created, and regular files are hard-linked.
+func mirrorEntry(entry os.DirEntry, src, dst string) {
+	if entry.Name() == "backups" {
+		os.MkdirAll(dst, 0o700)
+		return
+	}
+	if entry.IsDir() {
+		os.Symlink(src, dst)
+		return
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		if target, err := os.Readlink(src); err == nil {
+			os.Symlink(target, dst)
+		}
+		return
+	}
+	os.Link(src, dst)
 }
 
 func parseResult(stdout, stderr []byte) *RunResult {
@@ -252,6 +258,8 @@ func (a *Agent) buildArgs(opts RunOpts) ([]string, bool) {
 	return args, useStdin
 }
 
+// buildEnv constructs a filtered environment, adding API key isolation when
+// configured. Returns the env slice and an optional cleanup function.
 func (a *Agent) buildEnv() ([]string, func(), error) {
 	var env []string
 	for _, e := range os.Environ() {

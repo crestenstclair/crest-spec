@@ -12,6 +12,10 @@ Decisions encountered while fixing drift issues that need your input.
 
 **Needs review?** Low risk, but check if you want a confirmation gate before auto-deleting files.
 
+**Your response:**
+
+Yes please gate deleting files.
+
 ---
 
 ## Decision 2: Apply() uses "light" review level by default
@@ -21,6 +25,10 @@ Decisions encountered while fixing drift issues that need your input.
 **Decision:** Defaulted to `"light"` (bugbot scan). Full code review on every resource in automated mode would be very slow and expensive. The manual pipeline still allows agents to choose their own review level.
 
 **Needs review?** May want to make this configurable via env var (e.g., `CREST_SPEC_APPLY_REVIEW_LEVEL`).
+
+**Your response:**
+
+I want a new command I can run after a full sync that will do a complex review ( clean code/DI/refactoring code smell review ).
 
 ---
 
@@ -38,6 +46,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** The error attribution is simple string matching. May want more sophisticated parsing for specific build tools.
 
+**Your response:**
+
+Approved.
+
 ---
 
 ## Decision 4: spec/note and spec/resolve are now separate methods
@@ -50,6 +62,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** No — this matches the spec's intent.
 
+**Your response:**
+
+Approved.
+
 ---
 
 ## Decision 5: Amend cascades by invalidating effective hashes
@@ -60,15 +76,9 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** No — clean approach that uses existing planner logic.
 
----
+**Your response:**
 
-## Decision 6: SPEC.md change proposals written separately
-
-**Context:** Found 16 cases where SPEC.md should be updated to match intended behavior (not bugs — documentation gaps, naming differences, undocumented features).
-
-**Decision:** Written to `docs/spec-change-proposals.md` for your review. SPEC.md was NOT modified per your directive.
-
-**Needs review?** Yes — review the 16 proposals in that document.
+Approved.
 
 ---
 
@@ -80,6 +90,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** No — straightforward spec alignment.
 
+**Your response:**
+
+Approved
+
 ---
 
 ## Decision 8: Structured review output with fallback
@@ -89,6 +103,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 **Decision:** Added `ReviewOutput` and `ReviewFinding` structs. Review prompts now request JSON output. Response parsing tries JSON unmarshal first, falls back to string matching if the LLM doesn't comply. This means existing behavior is preserved while enabling structured output when available.
 
 **Needs review?** No — backward compatible, strictly better.
+
+**Your response:**
+
+Approved
 
 ---
 
@@ -100,6 +118,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** No — additive improvement with fallback.
 
+**Your response:**
+
+Approved
+
 ---
 
 ## Decision 10: Mode/environment support via CREST_SPEC_MODE
@@ -109,6 +131,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 **Decision:** Added `CREST_SPEC_MODE` env var (default: "default") and `project.meta.mode` CUE field. Mode is included in effective hash computation, so changing mode cascades regeneration correctly. CUE mode takes precedence over env var when set. Added `spec/mode` tool to query current mode.
 
 **Needs review?** Low risk. Users can set `CREST_SPEC_MODE=debug` to regenerate everything with debug-specific rules.
+
+**Your response:**
+
+Approved
 
 ---
 
@@ -120,6 +146,9 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** No — intentionally conservative. "Good enough to hand-correct" is the right bar for MVP.
 
+**Your response:**
+
+Approved.
 ---
 
 ## Decision 12: spec/prompt tool for debugging
@@ -129,6 +158,10 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 **Decision:** Added `spec/prompt` tool that builds and returns the full system prompt + resource prompt without dispatching to an LLM. Users can review exactly what the model would see.
 
 **Needs review?** No — read-only debugging aid.
+
+**Your response:**
+
+Approved.
 
 ---
 
@@ -140,18 +173,47 @@ Error attribution is best-effort — if stderr doesn't contain a recognizable fi
 
 **Needs review?** Low risk. These are historical data that grows indefinitely without cleanup.
 
+**Your response:**
+
+Approved.
+
 ---
 
-## Summary of what was NOT implemented
+## Not Yet Implemented
 
-These items from the audit are logged but not addressable without design decisions:
+These items are logged but not addressable without design decisions:
 
-1. **Poll-based orchestrator loop (Critical #4):** The spec describes an internal polling orchestrator, but the current architecture correctly delegates orchestration to the external agent. This is arguably better design — the spec should be updated. See proposal doc.
+### 1. Poll-based orchestrator loop (Critical #4)
 
-2. **SSE streaming in HTTP transport:** Would require significant transport layer changes. Added to spec change proposals as "planned" feature.
+The spec describes an internal polling orchestrator, but the current architecture correctly delegates orchestration to the external agent. This is the right design — the main Claude session IS the orchestrator. See the three-tier architecture implemented in `spec/dispatch` and `spec/run_wave`.
 
-3. **Drift revert:** `DriftAction("revert")` still returns "not yet implemented" — reversing generated files requires storing original content, which isn't in the current schema.
+**Status:** RESOLVED — spec/dispatch and spec/run_wave implemented. SPEC.md section 8.4 should be updated to describe the external orchestrator model.
 
-4. **`consumes`/`publishes` edge kinds:** Declared in spec but unclear use case. Not implemented. Proposed removing from spec or marking as planned.
+**Your response:**
 
-5. **`bootstrap` MCP tool:** Spec lists 11 engine tools but only 10 exist. The `bootstrap` tool's purpose is unclear from spec alone.
+Approved.
+
+
+### 2. SSE streaming in HTTP transport
+
+Would require significant transport layer changes. Added to spec change proposals as "planned" feature.
+
+**Your response:**
+
+Approved.
+
+### 3. Drift revert
+
+`DriftAction("revert")` still returns "not yet implemented" — reversing generated files requires storing original content, which isn't in the current schema.
+
+**Your response:**
+
+Approved.
+
+### 5. `bootstrap` MCP tool
+
+Spec lists 11 engine tools but only 10 exist. The `bootstrap` tool's purpose is unclear from spec alone.
+
+**Your response:**
+
+Bootstrap installs dependencies for crest-spec, sets up claude mcp stuff, etc...

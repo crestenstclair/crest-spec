@@ -22,6 +22,10 @@ declared in the spec but not implemented anywhere and have no clear use case yet
 they are planned for future work, mark them as "planned" rather than listing them
 as current features.
 
+**Your response:**
+- yes add targets
+- no, consumes and publishes are important aspects of DDD. If they aren't implemented anywhere, they should be. they should be used for planning / diffing. They should also be passed around as context for sub-agents while developing
+
 ---
 
 ## Proposal 2: Document actual meta merge semantics (dedup vs concatenate)
@@ -33,6 +37,11 @@ as current features.
 **Proposal:** Update to reflect actual behavior: meta merge uses dedup (duplicate
 values are removed). This is the correct behavior — concatenation would produce
 duplicates when the same rule appears at project and context level.
+
+**Your response:**
+
+Approved.
+
 
 ---
 
@@ -49,6 +58,11 @@ duplicates when the same rule appears at project and context level.
 - Remove `internal/app/` reference if present — it is dead code (never imported)
 - Note that `StdioTransport`/`HTTPTransport` are not separate types; `Server` handles both
 
+**Your response:**
+
+This is fine, i dont really care about code layout that much and it makes sense it would evolve organically.
+
+
 ---
 
 ## Proposal 4: Update engine method signatures
@@ -62,6 +76,10 @@ duplicates when the same rule appears at project and context level.
 implemented via `GenerateOpts`, `CodeReviewOpts`, `BugbotOpts` — update the spec to
 show these actual type names.
 
+**Your response:**
+
+Approved. Makes sense this would evolve organically.
+
 ---
 
 ## Proposal 5: Document SSE streaming as not-yet-implemented
@@ -74,6 +92,10 @@ show these actual type names.
 transport currently uses plain JSON-RPC only. SSE streaming for progress notifications
 is a future enhancement.
 
+**Your response:**
+
+Approved. We can defer until later.
+
 ---
 
 ## Proposal 6: Document additional resources table columns
@@ -84,6 +106,10 @@ is a future enhancement.
 
 **Proposal:** Add these columns to the schema documentation. They exist, are functional,
 and are needed by the system.
+
+**Your response:**
+
+Add them, makes sense this would evolve organically.
 
 ---
 
@@ -96,6 +122,10 @@ and are needed by the system.
 **Proposal:** Update to reflect that migration 006 removed this constraint. The action
 column is now free-text. Document the current valid values used in practice.
 
+**Your response:**
+
+Approved.
+
 ---
 
 ## Proposal 8: Document `foreign_keys=ON` PRAGMA
@@ -104,6 +134,10 @@ column is now free-text. Document the current valid values used in practice.
 
 **Proposal:** Add documentation that the database opens with `foreign_keys=ON` PRAGMA.
 This is important for understanding cascade behavior.
+
+**Your response:**
+
+Approved.
 
 ---
 
@@ -115,6 +149,10 @@ This is important for understanding cascade behavior.
 
 **Proposal:** Update to `Instructions` to match actual implementation.
 
+**Your response:**
+
+Approved.
+
 ---
 
 ## Proposal 10: Document `--strict-mcp-config` flag
@@ -123,6 +161,10 @@ This is important for understanding cascade behavior.
 
 **Proposal:** Document the `--strict-mcp-config` flag and env var filtering for
 recursion prevention. These are implemented and functional but not in the spec.
+
+**Your response:**
+
+Approved.
 
 ---
 
@@ -134,6 +176,11 @@ recursion prevention. These are implemented and functional but not in the spec.
 - `framework` field in meta (functional but undocumented)
 - `reviewLevel` values and validation behavior
 
+**Your response:**
+
+Approved.
+
+
 ---
 
 ## Proposal 12: Document dashboard running mode
@@ -142,6 +189,10 @@ recursion prevention. These are implemented and functional but not in the spec.
 
 **Proposal:** Add dashboard mode to the running modes list. The dashboard is implemented
 with API endpoints and serves as a monitoring interface.
+
+**Your response:**
+
+Approved.
 
 ---
 
@@ -152,6 +203,10 @@ with API endpoints and serves as a monitoring interface.
 **Proposal:** Document `scripts/run-phased-agent.sh` as a multi-phase agent runner
 that drives crest-spec through all 10 crest-synth phases with state carry-over.
 
+**Your response:**
+
+Approved.
+
 ---
 
 ## Proposal 14: Update Go version
@@ -161,6 +216,10 @@ that drives crest-spec through all 10 crest-synth phases with state carry-over.
 **Current spec:** Says Go 1.26.3.
 
 **Proposal:** Check actual go.mod and update to match (likely 1.26.4 or similar).
+
+**Your response:**
+
+Approved.
 
 ---
 
@@ -174,6 +233,14 @@ that drives crest-spec through all 10 crest-synth phases with state carry-over.
 are part of the user's meta rules, not hardcoded in the review prompt template.
 This is arguably better design — the spec should match the implementation.
 
+**Your response:**
+
+Approved.
+
+I do want to make sure we are doing those checks though. I care about SOLID/DI/Clean code a lot.
+
+Refer to the writing-clean-code and refactoring reviewer skills I have added to the "docs" folder in this repo to build those prompts.
+
 ---
 
 ## Proposal 16: Config isolation behavior
@@ -184,6 +251,10 @@ This is arguably better design — the spec should match the implementation.
 
 **Proposal:** Document that config isolation only activates when an API key is set.
 This is intentional — when no API key is configured, there's nothing to isolate.
+
+**Your response:**
+
+Approved.
 
 ---
 

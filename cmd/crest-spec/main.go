@@ -32,7 +32,16 @@ func main() {
 		checkJob(os.Args[3])
 		return
 	}
+	if showHelp() {
+		return
+	}
+	if runSubcommand() {
+		return
+	}
+	runServer()
+}
 
+func showHelp() bool {
 	for _, arg := range os.Args[1:] {
 		if arg == "-h" || arg == "--help" {
 			fmt.Fprintln(os.Stderr, "crest-spec — declarative code generation MCP server")
@@ -56,50 +65,55 @@ func main() {
 			os.Exit(0)
 		}
 	}
+	return false
+}
 
-	if len(os.Args) >= 2 {
-		switch os.Args[1] {
-		case "dashboard":
-			flags := parseFlags(os.Args[2:])
-			cmdDashboard(flags)
-			return
-		case "state":
-			if len(os.Args) >= 3 {
-				switch os.Args[2] {
-				case "list":
-					cmdStateList()
-					return
-				case "rm":
-					if len(os.Args) < 4 {
-						fmt.Fprintf(os.Stderr, "usage: crest-spec state rm <resourceId>\n")
-						os.Exit(1)
-					}
-					cmdStateRm(os.Args[3])
-					return
-				}
-			}
-			fmt.Fprintf(os.Stderr, "usage: crest-spec state [list|rm <resourceId>]\n")
-			os.Exit(1)
-		case "diff":
-			if len(os.Args) < 4 {
-				fmt.Fprintf(os.Stderr, "usage: crest-spec diff <apply_a> <apply_b>\n")
-				os.Exit(1)
-			}
-			cmdDiff(os.Args[2], os.Args[3])
-			return
-		case "vacuum":
-			cmdVacuum(os.Args[2:])
-			return
-		case "sql":
-			if len(os.Args) < 3 {
-				fmt.Fprintf(os.Stderr, "usage: crest-spec sql <query>\n")
-				os.Exit(1)
-			}
-			cmdSQL(strings.Join(os.Args[2:], " "))
-			return
-		}
+func runSubcommand() bool {
+	if len(os.Args) < 2 {
+		return false
 	}
+	switch os.Args[1] {
+	case "dashboard":
+		flags := parseFlags(os.Args[2:])
+		cmdDashboard(flags)
+	case "state":
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "list":
+				cmdStateList()
+				return true
+			case "rm":
+				if len(os.Args) < 4 {
+					fmt.Fprintf(os.Stderr, "usage: crest-spec state rm <resourceId>\n")
+					os.Exit(1)
+				}
+				cmdStateRm(os.Args[3])
+				return true
+			}
+		}
+		fmt.Fprintf(os.Stderr, "usage: crest-spec state [list|rm <resourceId>]\n")
+		os.Exit(1)
+	case "diff":
+		if len(os.Args) < 4 {
+			fmt.Fprintf(os.Stderr, "usage: crest-spec diff <apply_a> <apply_b>\n")
+			os.Exit(1)
+		}
+		cmdDiff(os.Args[2], os.Args[3])
+	case "vacuum":
+		cmdVacuum(os.Args[2:])
+	case "sql":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "usage: crest-spec sql <query>\n")
+			os.Exit(1)
+		}
+		cmdSQL(strings.Join(os.Args[2:], " "))
+	default:
+		return false
+	}
+	return true
+}
 
+func runServer() {
 	cfg, err := config.New()
 	if err != nil {
 		config.Help()
@@ -123,36 +137,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ag := agent.New(
-		cfg.AgentPath,
-		cfg.APIKey,
-		cfg.DefaultModel,
-		cfg.PermissionMode,
-		cfg.Timeout,
-	)
-
+	ag := agent.New(cfg.AgentPath, cfg.APIKey, cfg.DefaultModel, cfg.PermissionMode, cfg.Timeout)
 	eng := engine.New(ag, cfg)
-
 	sp := specmod.New(eng, s, specmod.OSFileSystem{}, cfg)
-
 	srv := mcp.New(sp, eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)
 
 	if cfg.HTTPAddr != "" {
-		httpMux := http.NewServeMux()
-		httpMux.HandleFunc("POST /mcp", srv.ServeHTTP)
-		httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
-		go func() {
-			log.Info().Str("addr", cfg.HTTPAddr).Msg("HTTP transport started")
-			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Error().Err(err).Msg("HTTP server error")
-			}
-		}()
-		go func() {
-			<-ctx.Done()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			httpSrv.Shutdown(shutdownCtx)
-		}()
+		startHTTPTransport(cfg.HTTPAddr, srv, ctx)
 	}
 
 	log.Info().Str("db", dbPath).Msg("crest-spec ready")
@@ -160,6 +151,24 @@ func main() {
 		log.Error().Err(err).Msg("server error")
 	}
 	log.Info().Msg("shutting down")
+}
+
+func startHTTPTransport(addr string, srv *mcp.Server, ctx context.Context) {
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("POST /mcp", srv.ServeHTTP)
+	httpSrv := &http.Server{Addr: addr, Handler: httpMux}
+	go func() {
+		log.Info().Str("addr", addr).Msg("HTTP transport started")
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("HTTP server error")
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		httpSrv.Shutdown(shutdownCtx)
+	}()
 }
 
 func checkJob(id string) {

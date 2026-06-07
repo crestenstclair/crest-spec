@@ -152,56 +152,11 @@ var defaultCodeReviewModels = []string{
 // and aggregates the results into a single output with "## Model: X" section
 // headers. Defaults to opus, sonnet, and haiku when opts.Models is empty.
 func (e *Engine) CodeReview(ctx context.Context, opts CodeReviewOpts) (*agent.RunResult, error) {
-	if err := e.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer e.release()
-
 	models := opts.Models
 	if len(models) == 0 {
 		models = defaultCodeReviewModels
 	}
-
-	type modelResult struct {
-		model  string
-		output string
-	}
-
-	var mu sync.Mutex
-	results := make([]modelResult, 0, len(models))
-
-	g, gctx := errgroup.WithContext(ctx)
-	for _, m := range models {
-		m := m
-		g.Go(func() error {
-			runOpts := agent.RunOpts{
-				Prompt:               opts.Prompt,
-				Model:                m,
-				Cwd:                  opts.Cwd,
-				DisallowedTools:      disallowedTools,
-				NoSessionPersistence: true,
-			}
-			res, err := e.r.RunPrompt(gctx, runOpts)
-			if err != nil {
-				return fmt.Errorf("model %s: %w", m, err)
-			}
-			mu.Lock()
-			results = append(results, modelResult{model: m, output: res.Output})
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	var sb strings.Builder
-	for _, r := range results {
-		fmt.Fprintf(&sb, "## Model: %s\n\n%s\n\n", r.model, r.output)
-	}
-
-	return &agent.RunResult{Output: sb.String()}, nil
+	return e.fanOut(ctx, opts.Prompt, models, opts.Cwd)
 }
 
 // BugbotOpts holds the parameters for a multi-model bug analysis.
@@ -219,11 +174,6 @@ var defaultBugbotModels = []string{
 // as CodeReview. The prompt is wrapped in a severity-ranking template.
 // Defaults to haiku when opts.Models is empty.
 func (e *Engine) Bugbot(ctx context.Context, opts BugbotOpts) (*agent.RunResult, error) {
-	if err := e.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer e.release()
-
 	models := opts.Models
 	if len(models) == 0 {
 		models = defaultBugbotModels
@@ -236,6 +186,17 @@ func (e *Engine) Bugbot(ctx context.Context, opts BugbotOpts) (*agent.RunResult,
 4. Suggested fix
 
 %s`, opts.Prompt)
+
+	return e.fanOut(ctx, wrappedPrompt, models, opts.Cwd)
+}
+
+// fanOut dispatches a prompt across multiple models concurrently and aggregates
+// the results into a single output with "## Model: X" section headers.
+func (e *Engine) fanOut(ctx context.Context, prompt string, models []string, cwd string) (*agent.RunResult, error) {
+	if err := e.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer e.release()
 
 	type modelResult struct {
 		model  string
@@ -250,9 +211,9 @@ func (e *Engine) Bugbot(ctx context.Context, opts BugbotOpts) (*agent.RunResult,
 		m := m
 		g.Go(func() error {
 			runOpts := agent.RunOpts{
-				Prompt:               wrappedPrompt,
+				Prompt:               prompt,
 				Model:                m,
-				Cwd:                  opts.Cwd,
+				Cwd:                  cwd,
 				DisallowedTools:      disallowedTools,
 				NoSessionPersistence: true,
 			}
