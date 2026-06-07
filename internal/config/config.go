@@ -25,6 +25,7 @@ type Config struct {
 	SpecDir          string `envconfig:"SPEC_DIR" default:"./spec"`
 	TypeCheckCommand string `envconfig:"TYPE_CHECK_CMD"`
 	TestCommand      string `envconfig:"TEST_CMD"`
+	Mode             string `envconfig:"MODE" default:"default"`
 }
 
 func New() (*Config, error) {

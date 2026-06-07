@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,21 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/engine"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 )
+
+// ReviewOutput represents structured JSON output from an LLM review.
+type ReviewOutput struct {
+	Passed   bool            `json:"passed"`
+	Findings []ReviewFinding `json:"findings,omitempty"`
+	Summary  string          `json:"summary,omitempty"`
+}
+
+// ReviewFinding represents a single issue found during review.
+type ReviewFinding struct {
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	File        string `json:"file,omitempty"`
+	Line        int    `json:"line,omitempty"`
+}
 
 type LoopResult struct {
 	Files           []CodeBlock
@@ -195,38 +211,111 @@ func runReviewStep(ctx context.Context, eng specEngine, output string, opts Loop
 	return nil
 }
 
+const reviewJSONInstruction = `
+
+Respond in JSON format: {"passed": true/false, "findings": [{"severity": "critical|major|minor", "description": "...", "file": "...", "line": 0}], "summary": "..."}`
+
+// parseReviewOutput attempts to parse the LLM output as structured JSON.
+// It returns nil if parsing fails, signaling the caller to fall back to
+// string matching.
+func parseReviewOutput(output string) *ReviewOutput {
+	// Try direct unmarshal first.
+	var ro ReviewOutput
+	if err := json.Unmarshal([]byte(output), &ro); err == nil {
+		return &ro
+	}
+
+	// The LLM may wrap JSON in markdown fences or surrounding prose.
+	// Extract the first JSON object from the output.
+	start := strings.Index(output, "{")
+	end := strings.LastIndex(output, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(output[start:end+1]), &ro); err == nil {
+			return &ro
+		}
+	}
+
+	return nil
+}
+
+// buildReviewMessage produces the Message string for a ValidationResult.
+// When structured findings are available it marshals them as JSON;
+// otherwise the raw LLM output is returned as-is.
+func buildReviewMessage(ro *ReviewOutput, rawOutput string) string {
+	if ro == nil || len(ro.Findings) == 0 {
+		if ro != nil && ro.Summary != "" {
+			return ro.Summary
+		}
+		return rawOutput
+	}
+
+	data, err := json.Marshal(ro.Findings)
+	if err != nil {
+		return rawOutput
+	}
+
+	if ro.Summary != "" {
+		return fmt.Sprintf("%s\nfindings: %s", ro.Summary, string(data))
+	}
+	return fmt.Sprintf("findings: %s", string(data))
+}
+
 func runReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*ValidationResult, error) {
 	switch opts.ReviewLevel {
 	case "full":
 		res, err := eng.CodeReview(ctx, engine.CodeReviewOpts{
-			Prompt: fmt.Sprintf("Review this generated code:\n\n%s", code),
+			Prompt: fmt.Sprintf("Review this generated code:\n\n%s%s", code, reviewJSONInstruction),
 			Cwd:    opts.Cwd,
 		})
 		if err != nil {
 			return nil, err
 		}
+		if ro := parseReviewOutput(res.Output); ro != nil {
+			return &ValidationResult{
+				Passed:  ro.Passed,
+				Kind:    "review",
+				Message: buildReviewMessage(ro, res.Output),
+			}, nil
+		}
+		// Fallback: string matching.
 		passed := !strings.Contains(strings.ToUpper(res.Output), "FAIL")
 		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
 
 	case "light":
 		res, err := eng.Bugbot(ctx, engine.BugbotOpts{
-			Prompt: code,
+			Prompt: code + reviewJSONInstruction,
 			Cwd:    opts.Cwd,
 		})
 		if err != nil {
 			return nil, err
 		}
+		if ro := parseReviewOutput(res.Output); ro != nil {
+			return &ValidationResult{
+				Passed:  ro.Passed,
+				Kind:    "review",
+				Message: buildReviewMessage(ro, res.Output),
+			}, nil
+		}
+		// Fallback: string matching.
 		passed := !strings.Contains(strings.ToLower(res.Output), "critical")
 		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
 
 	case "solid":
 		res, err := eng.Review(ctx, engine.ReviewOpts{
 			Code:         code,
-			Requirements: opts.Prompt,
+			Requirements: opts.Prompt + reviewJSONInstruction,
 		})
 		if err != nil {
 			return nil, err
 		}
+		if ro := parseReviewOutput(res.Output); ro != nil {
+			return &ValidationResult{
+				Passed:  ro.Passed,
+				Kind:    "review",
+				Message: buildReviewMessage(ro, res.Output),
+			}, nil
+		}
+		// Fallback: string matching.
 		passed := strings.Contains(strings.ToUpper(res.Output), "PASS")
 		return &ValidationResult{Passed: passed, Kind: "review", Message: res.Output}, nil
 

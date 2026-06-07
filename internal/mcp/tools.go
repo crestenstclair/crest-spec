@@ -327,6 +327,7 @@ Do NOT use spec_apply — it runs unattended with no agent control.`, about, sta
 			{Name: "spec/vacuum", Description: "Compact old history", InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`)},
 			{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
 			{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+			{Name: "spec/mode", Description: "Show the current mode (environment)", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		}
 
 		for _, def := range specStubs {
@@ -740,6 +741,20 @@ func (s *Server) registerSpecTools() {
 		return jsonResult(rows)
 	})
 
+	// spec/inspect
+	s.addTool(toolDef{
+		Name: "spec/inspect", Description: "Full debug view of a resource: effective prompt, hash breakdown, dependency chain, generated files, wave assignment.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct{ ResourceID string `json:"resource_id"` }
+		json.Unmarshal(args, &p)
+		result, err := s.spec.Inspect(ctx, p.ResourceID)
+		if err != nil {
+			return errorResult(fmt.Sprintf("inspect: %v", err))
+		}
+		return jsonResult(result)
+	})
+
 	// spec/unlock
 	s.addTool(toolDef{
 		Name: "spec/unlock", Description: "Force-clear stale lock",
@@ -749,6 +764,40 @@ func (s *Server) registerSpecTools() {
 			return errorResult(fmt.Sprintf("unlock: %v", err))
 		}
 		return jsonResult(map[string]bool{"unlocked": true})
+	})
+
+	// spec/mode
+	s.addTool(toolDef{
+		Name: "spec/mode", Description: "Show the current mode (environment). Different modes produce different hashes, triggering regeneration.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		return jsonResult(map[string]string{"mode": s.cfg.Mode})
+	})
+
+	// spec/import
+	s.addTool(toolDef{
+		Name: "spec/import", Description: "Scan a directory of source files and generate a skeleton CUE spec. Heuristic-based classification by filename — no LLM calls.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"directory":{"type":"string","description":"Directory to scan for source files"},"language":{"type":"string","description":"Language hint (go, rust, typescript, python)"},"output":{"type":"string","description":"Output file path (default: spec/imported.cue)"},"dry_run":{"type":"boolean","description":"If true, return CUE output without writing to disk"}},"required":["directory"]}`),
+	}, func(ctx context.Context, args json.RawMessage, progressToken string) toolResult {
+		var p struct {
+			Directory string `json:"directory"`
+			Language  string `json:"language"`
+			Output    string `json:"output"`
+			DryRun    bool   `json:"dry_run"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return errorResult("invalid arguments: " + err.Error())
+		}
+		result, err := s.spec.Import(ctx, specmod.ImportOpts{
+			Directory:  p.Directory,
+			Language:   p.Language,
+			OutputFile: p.Output,
+			DryRun:     p.DryRun,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("import: %v", err))
+		}
+		return jsonResult(result)
 	})
 }
 

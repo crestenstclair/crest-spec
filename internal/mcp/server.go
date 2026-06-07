@@ -139,6 +139,7 @@ type specHandler interface {
 	Vacuum(ctx context.Context, before time.Time) (int, error)
 	ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error)
 	RemoveResource(ctx context.Context, resourceID string) error
+	Import(ctx context.Context, opts specmod.ImportOpts) (*specmod.ImportResult, error)
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ func ComputeEffectiveHashes(
 	resources map[string]cuepkg.Resource,
 	g *Graph,
 	model string,
+	mode string,
 ) map[string]string {
 	order, err := g.TopologicalSort()
 	if err != nil {
@@ -47,6 +48,7 @@ func ComputeEffectiveHashes(
 			h.Write([]byte(dh))
 		}
 		h.Write([]byte(model))
+		h.Write([]byte(mode))
 
 		hashes[id] = fmt.Sprintf("%x", h.Sum(nil))
 	}

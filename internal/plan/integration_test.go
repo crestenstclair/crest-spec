@@ -42,7 +42,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 	assert.NotEmpty(t, waves)
 
 	// Step 6: Compute hashes
-	hashes := graph.ComputeEffectiveHashes(reg.Resources, g, "opus")
+	hashes := graph.ComputeEffectiveHashes(reg.Resources, g, "opus", "default")
 	assert.NotEmpty(t, hashes)
 
 	// Step 7: Plan against empty store → all creates
@@ -50,7 +50,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 	fs := newFakeFS()
 	p := New(st, fs)
 
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 
 	// Should only have actions for non-structural resources

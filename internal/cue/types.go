@@ -111,6 +111,7 @@ type Meta struct {
 	Rationale   string   `json:"rationale,omitempty"`
 	ReviewLevel string   `json:"reviewLevel,omitempty"`
 	Framework   string   `json:"framework,omitempty"`
+	Mode        string   `json:"mode,omitempty"`
 }
 
 type Context struct {

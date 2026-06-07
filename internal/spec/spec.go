@@ -82,6 +82,7 @@ type PlanResult struct {
 	Graph    *graphpkg.Graph
 	Waves    [][]string
 	Hashes   map[string]string
+	Mode     string
 }
 
 func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
@@ -101,10 +102,14 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 	}
 
 	model := s.cfg.GenerateModel
-	hashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model)
+	mode := s.cfg.Mode
+	if project.Meta.Mode != "" {
+		mode = project.Meta.Mode
+	}
+	hashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model, mode)
 
 	planner := planpkg.New(s.store, s.fs)
-	actions, err := planner.Plan(ctx, registry, g, model)
+	actions, err := planner.Plan(ctx, registry, g, model, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -125,5 +130,6 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		Graph:    g,
 		Waves:    waveStrings,
 		Hashes:   hashes,
+		Mode:     mode,
 	}, nil
 }

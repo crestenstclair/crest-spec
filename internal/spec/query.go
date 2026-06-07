@@ -15,6 +15,7 @@ type StatusResult struct {
 	Resources  []store.Resource
 	ActiveLock *store.Lock
 	Session    *store.Session
+	Mode       string
 }
 
 func (s *Spec) Status(ctx context.Context) (*StatusResult, error) {
@@ -26,10 +27,13 @@ func (s *Spec) Status(ctx context.Context) (*StatusResult, error) {
 	lock, _ := s.store.GetLock()
 	session, _ := s.store.GetActiveSession()
 
+	mode := s.cfg.Mode
+
 	return &StatusResult{
 		Resources:  resources,
 		ActiveLock: lock,
 		Session:    session,
+		Mode:       mode,
 	}, nil
 }
 

@@ -78,7 +78,7 @@ func TestPlan_AllCreates(t *testing.T) {
 	}
 	reg, g := buildPlanInputs(resources)
 	p := New(newFakeStore(), newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	assert.Len(t, actions, 2)
 	for _, a := range actions {
@@ -92,7 +92,7 @@ func TestPlan_NoChanges(t *testing.T) {
 		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate", Declaration: map[string]string{"purpose": "test"}},
 	}
 	reg, g := buildPlanInputs(resources)
-	hashes := graph.ComputeEffectiveHashes(resources, g, "opus")
+	hashes := graph.ComputeEffectiveHashes(resources, g, "opus", "default")
 	st := newFakeStore()
 	st.resources["aggregate.Synth.Voice"] = store.Resource{
 		ID: "aggregate.Synth.Voice", Kind: "aggregate",
@@ -100,7 +100,7 @@ func TestPlan_NoChanges(t *testing.T) {
 		EffectiveHash: hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
 	}
 	p := New(st, newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	assert.Empty(t, actions)
 }
@@ -116,7 +116,7 @@ func TestPlan_DeclarationChanged(t *testing.T) {
 		DeclarationHash: "old-hash", EffectiveHash: "old-effective", Model: "opus", SettledAt: time.Now(),
 	}
 	p := New(st, newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	require.Len(t, actions, 1)
 	assert.Equal(t, ActionModify, actions[0].Kind)
@@ -143,7 +143,7 @@ func TestPlan_DependencyCascade(t *testing.T) {
 		DeclarationHash: "old-osc-decl", EffectiveHash: "old-osc-effective", Model: "opus", SettledAt: time.Now(),
 	}
 	p := New(st, newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	assert.Len(t, actions, 2)
 	actionMap := make(map[string]PlannedAction)
@@ -171,7 +171,7 @@ func TestPlan_Destroy(t *testing.T) {
 		{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "c"},
 	}
 	p := New(st, newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	require.Len(t, actions, 1)
 	assert.Equal(t, ActionDestroy, actions[0].Kind)
@@ -184,7 +184,7 @@ func TestPlan_DriftDetection(t *testing.T) {
 		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate", Declaration: map[string]string{"purpose": "test"}},
 	}
 	reg, g := buildPlanInputs(resources)
-	hashes := graph.ComputeEffectiveHashes(resources, g, "opus")
+	hashes := graph.ComputeEffectiveHashes(resources, g, "opus", "default")
 	st := newFakeStore()
 	st.resources["aggregate.Synth.Voice"] = store.Resource{
 		ID: "aggregate.Synth.Voice", Kind: "aggregate",
@@ -197,7 +197,7 @@ func TestPlan_DriftDetection(t *testing.T) {
 	fs := newFakeFS()
 	fs.files["src/voice.go"] = []byte("modified content on disk")
 	p := New(st, fs)
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	require.Len(t, actions, 1)
 	assert.Equal(t, ActionDrift, actions[0].Kind)
@@ -213,7 +213,7 @@ func TestPlan_StructuralKindsExcluded(t *testing.T) {
 	}
 	reg, g := buildPlanInputs(resources)
 	p := New(newFakeStore(), newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	require.Len(t, actions, 1)
 	assert.Equal(t, "aggregate.Synth.Voice", actions[0].ResourceID)
@@ -230,7 +230,7 @@ func TestPlan_DestroysFirst(t *testing.T) {
 		DeclarationHash: "h", EffectiveHash: "e", Model: "opus", SettledAt: time.Now(),
 	}
 	p := New(st, newFakeFS())
-	actions, err := p.Plan(context.Background(), reg, g, "opus")
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
 	require.Len(t, actions, 2)
 	assert.Equal(t, ActionDestroy, actions[0].Kind)

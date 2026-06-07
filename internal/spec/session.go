@@ -345,6 +345,16 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		return nil, err
 	}
 
+	// Transition to "completed" — files are written, validation pending.
+	// This matches the Terraform model: apply writes, then verifies, then marks done.
+	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
+	currentAttempts := 0
+	if sr != nil {
+		currentAttempts = sr.Attempts
+	}
+	currentAttempts++
+	s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateCompleted), "", "", currentAttempts, "")
+
 	planResult, err := s.Plan(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("plan for commit: %w", err)
@@ -354,13 +364,6 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 	if !ok {
 		return nil, fmt.Errorf("resource not found: %s", resourceID)
 	}
-
-	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
-	currentAttempts := 0
-	if sr != nil {
-		currentAttempts = sr.Attempts
-	}
-	currentAttempts++
 
 	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, files, planResult, currentAttempts)
 	if rejected != nil {
@@ -646,9 +649,16 @@ func (s *Spec) runVerificationCommand(ctx context.Context, command, kind string,
 }
 
 func (s *Spec) attributeErrorToResource(errorOutput string, resources []store.SessionResource) string {
+	filePaths := parseErrorFilePaths(errorOutput)
+
 	for _, r := range resources {
 		genFiles, _ := s.store.GetGeneratedFiles(r.ResourceID)
 		for _, f := range genFiles {
+			for _, errPath := range filePaths {
+				if errPath == f.Path || strings.HasSuffix(errPath, "/"+f.Path) || strings.HasSuffix(f.Path, "/"+errPath) {
+					return r.ResourceID
+				}
+			}
 			if strings.Contains(errorOutput, f.Path) {
 				return r.ResourceID
 			}

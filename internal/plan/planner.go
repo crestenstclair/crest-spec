@@ -42,8 +42,9 @@ func (p *Planner) Plan(
 	registry *cuepkg.Registry,
 	g *graphpkg.Graph,
 	model string,
+	mode string,
 ) ([]PlannedAction, error) {
-	effectiveHashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model)
+	effectiveHashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model, mode)
 
 	storedResources, err := p.store.ListResources()
 	if err != nil {
