@@ -23,16 +23,14 @@ func (s ResourceState) NeedsResolution() bool {
 }
 
 type ResourceStatus struct {
-	ResourceID   string
-	State        ResourceState
-	WaveIndex    int
-	Error        *ErrorContext
-	Blocked      *BlockedContext
-	Attempts     int
-	MaxRetries   int
-	Files        []CodeBlock
-	Notes        string
-	UserGuidance string
+	ResourceID string
+	State      ResourceState
+	WaveIndex  int
+	Error      *ErrorContext
+	Blocked    *BlockedContext
+	Attempts   int
+	MaxRetries int
+	Notes      string
 }
 
 type ErrorContext struct {

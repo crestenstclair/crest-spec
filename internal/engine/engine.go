@@ -19,26 +19,22 @@ type runner interface {
 	Status(ctx context.Context) (string, error)
 }
 
-type engineStore interface{}
-
 // Engine orchestrates constrained code generation, review, and analysis
 // operations using a runner (typically a Claude CLI agent) with concurrency
 // limits enforced via a semaphore.
 type Engine struct {
-	r     runner
-	store engineStore
-	cfg   *config.Config
-	sem   chan struct{}
+	r   runner
+	cfg *config.Config
+	sem chan struct{}
 }
 
 // New creates an Engine with a concurrency-limiting semaphore sized to
 // cfg.MaxConcurrency.
-func New(r runner, s engineStore, cfg *config.Config) *Engine {
+func New(r runner, cfg *config.Config) *Engine {
 	return &Engine{
-		r:     r,
-		store: s,
-		cfg:   cfg,
-		sem:   make(chan struct{}, cfg.MaxConcurrency),
+		r:   r,
+		cfg: cfg,
+		sem: make(chan struct{}, cfg.MaxConcurrency),
 	}
 }
 

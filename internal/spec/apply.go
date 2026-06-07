@@ -86,14 +86,26 @@ func (s *Spec) applyResource(ctx context.Context, sessionID, applyID, resourceID
 		return ResourceApplyResult{ResourceID: resourceID, Outcome: "errored", Error: err.Error()}
 	}
 
-	loopResult, err := runConstraintLoop(ctx, s.engine, LoopOpts{
-		SystemPrompt: ctxResult.SystemPrompt,
-		Prompt:       ctxResult.Prompt,
-		Model:        s.cfg.GenerateModel,
-		MaxRetries:   s.cfg.MaxRetries,
-		ReviewLevel:  "light",
-		Cwd:          s.cfg.SpecDir,
-	})
+	startTime := time.Now()
+	planResult, _ := s.Plan(ctx)
+	loopOpts := LoopOpts{
+		SystemPrompt:     ctxResult.SystemPrompt,
+		Prompt:           ctxResult.Prompt,
+		Model:            s.cfg.GenerateModel,
+		MaxRetries:       s.cfg.MaxRetries,
+		ReviewLevel:      "light",
+		Cwd:              s.cfg.SpecDir,
+		TypeCheckCommand: s.cfg.TypeCheckCommand,
+		TestCommand:      s.cfg.TestCommand,
+	}
+	if planResult != nil {
+		if r, ok := planResult.Registry.Resources[resourceID]; ok {
+			loopOpts.Validations = r.Validations
+		}
+		loopOpts.Invariants = planResult.Registry.Project.Invariants
+	}
+
+	loopResult, err := runConstraintLoop(ctx, s.engine, loopOpts)
 	if err != nil {
 		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateErrored), err.Error(), "", 1, "")
 		return ResourceApplyResult{ResourceID: resourceID, Outcome: "errored", Attempts: 1, Error: err.Error()}
@@ -118,7 +130,7 @@ func (s *Spec) applyResource(ctx context.Context, sessionID, applyID, resourceID
 		ApplyID:    applyID,
 		ResourceID: resourceID,
 		Model:      s.cfg.GenerateModel,
-		DurationMS: time.Since(time.Now()).Milliseconds(),
+		DurationMS: time.Since(startTime).Milliseconds(),
 	})
 
 	commitResult, err := s.Commit(ctx, sessionID, resourceID, files, "")

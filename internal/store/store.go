@@ -246,32 +246,44 @@ func (s *Store) Close() error {
 // Job CRUD
 // ---------------------------------------------------------------------------
 
+func mapNotFound(err error) error {
+	if err == sql.ErrNoRows {
+		return cserrors.ErrNotFound
+	}
+	return err
+}
+
 func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
+}
+
+func parseOptionalTime(s *string) *time.Time {
+	if s == nil {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, *s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 func dbJobToJob(j db.Job) Job {
-	out := Job{
-		ID:     j.ID,
-		Tool:   j.Tool,
-		Status: j.Status,
-		PID:    int(j.Pid),
+	return Job{
+		ID:        j.ID,
+		Tool:      j.Tool,
+		Status:    j.Status,
+		Result:    stringVal(j.Result),
+		Error:     stringVal(j.Error),
+		PID:       int(j.Pid),
+		StartedAt: parseTime(j.StartedAt),
+		DoneAt:    parseOptionalTime(j.DoneAt),
 	}
-	if j.Result != nil {
-		out.Result = *j.Result
-	}
-	if j.Error != nil {
-		out.Error = *j.Error
-	}
-	if t, err := time.Parse(time.RFC3339Nano, j.StartedAt); err == nil {
-		out.StartedAt = t
-	}
-	if j.DoneAt != nil {
-		if t, err := time.Parse(time.RFC3339Nano, *j.DoneAt); err == nil {
-			out.DoneAt = &t
-		}
-	}
-	return out
 }
 
 // CreateJob inserts a new running job.
@@ -288,27 +300,13 @@ func (s *Store) CreateJob(id, tool string, pid int) error {
 func (s *Store) GetJob(id string) (*Job, error) {
 	j, err := s.queries.GetJob(context.Background(), id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbJobToJob(j)
 	return &out, nil
 }
 
-// CompleteJob marks a running job as completed with the given result.
-// Returns ErrAlreadyDone if the job is not in running state.
-func (s *Store) CompleteJob(id, result string) error {
-	ts := now()
-	res, err := s.queries.CompleteJob(context.Background(), db.CompleteJobParams{
-		Result: &result,
-		DoneAt: &ts,
-		ID:     id,
-	})
-	if err != nil {
-		return err
-	}
+func requireRowAffected(res sql.Result) error {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return err
@@ -319,48 +317,38 @@ func (s *Store) CompleteJob(id, result string) error {
 	return nil
 }
 
-// FailJob marks a running job as failed with the given error.
-// Returns ErrAlreadyDone if the job is not in running state.
+func (s *Store) CompleteJob(id, result string) error {
+	ts := now()
+	res, err := s.queries.CompleteJob(context.Background(), db.CompleteJobParams{
+		Result: &result, DoneAt: &ts, ID: id,
+	})
+	if err != nil {
+		return err
+	}
+	return requireRowAffected(res)
+}
+
 func (s *Store) FailJob(id string, jobErr error) error {
 	ts := now()
 	errStr := jobErr.Error()
 	res, err := s.queries.FailJob(context.Background(), db.FailJobParams{
-		Error:  &errStr,
-		DoneAt: &ts,
-		ID:     id,
+		Error: &errStr, DoneAt: &ts, ID: id,
 	})
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return cserrors.ErrAlreadyDone
-	}
-	return nil
+	return requireRowAffected(res)
 }
 
-// CancelJob marks a running job as cancelled.
-// Returns ErrAlreadyDone if the job is not in running state.
 func (s *Store) CancelJob(id string) error {
 	ts := now()
 	res, err := s.queries.CancelJob(context.Background(), db.CancelJobParams{
-		DoneAt: &ts,
-		ID:     id,
+		DoneAt: &ts, ID: id,
 	})
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return cserrors.ErrAlreadyDone
-	}
-	return nil
+	return requireRowAffected(res)
 }
 
 // DeleteJob soft-deletes a job by setting its status to 'deleted'.
@@ -473,17 +461,12 @@ func (s *Store) ReleaseLock() error {
 func (s *Store) GetLock() (*Lock, error) {
 	l, err := s.queries.GetLock(context.Background())
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := Lock{
-		Holder: l.Holder,
-		PID:    int(l.Pid),
-	}
-	if t, err := time.Parse(time.RFC3339Nano, l.AcquiredAt); err == nil {
-		out.AcquiredAt = t
+		Holder:     l.Holder,
+		PID:        int(l.Pid),
+		AcquiredAt: parseTime(l.AcquiredAt),
 	}
 	return &out, nil
 }
@@ -493,36 +476,26 @@ func (s *Store) GetLock() (*Lock, error) {
 // ---------------------------------------------------------------------------
 
 func dbResourceToResource(r db.Resource) Resource {
-	out := Resource{
+	return Resource{
 		ID:              r.ID,
 		Kind:            r.Kind,
+		ContextName:     stringVal(r.ContextName),
 		DeclarationHash: r.DeclarationHash,
 		EffectiveHash:   r.EffectiveHash,
+		Model:           stringVal(r.Model),
+		SettledAt:       parseTime(r.SettledAt),
 	}
-	if r.ContextName != nil {
-		out.ContextName = *r.ContextName
-	}
-	if r.Model != nil {
-		out.Model = *r.Model
-	}
-	if t, err := time.Parse(time.RFC3339Nano, r.SettledAt); err == nil {
-		out.SettledAt = t
-	}
-	return out
 }
 
 func dbGeneratedFileToGeneratedFile(f db.GeneratedFile) GeneratedFile {
-	out := GeneratedFile{
+	return GeneratedFile{
 		Path:        f.Path,
 		ResourceID:  f.ResourceID,
 		ContentHash: f.ContentHash,
 		PromptHash:  f.PromptHash,
 		Model:       f.Model,
+		CreatedAt:   parseTime(f.CreatedAt),
 	}
-	if t, err := time.Parse(time.RFC3339Nano, f.CreatedAt); err == nil {
-		out.CreatedAt = t
-	}
-	return out
 }
 
 func dbDependencyToDependency(d db.Dependency) Dependency {
@@ -540,10 +513,7 @@ func dbDependencyToDependency(d db.Dependency) Dependency {
 func (s *Store) GetResource(id string) (*Resource, error) {
 	r, err := s.queries.GetResource(context.Background(), id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbResourceToResource(r)
 	return &out, nil
@@ -649,44 +619,26 @@ func (s *Store) DeleteDependencies(sourceID string) error {
 // ---------------------------------------------------------------------------
 
 func dbApplyToApply(a db.Apply) Apply {
-	out := Apply{
-		ID:       a.ID,
-		Status:   a.Status,
-		SpecHash: a.SpecHash,
+	return Apply{
+		ID:        a.ID,
+		Status:    a.Status,
+		SpecHash:  a.SpecHash,
+		StartedAt: parseTime(a.StartedAt),
+		DoneAt:    parseOptionalTime(a.DoneAt),
 	}
-	if t, err := time.Parse(time.RFC3339Nano, a.StartedAt); err == nil {
-		out.StartedAt = t
-	}
-	if a.DoneAt != nil {
-		if t, err := time.Parse(time.RFC3339Nano, *a.DoneAt); err == nil {
-			out.DoneAt = &t
-		}
-	}
-	return out
 }
 
 func dbApplyActionToApplyAction(a db.ApplyAction) ApplyAction {
-	out := ApplyAction{
+	return ApplyAction{
 		ID:         a.ID,
 		ApplyID:    a.ApplyID,
 		ResourceID: a.ResourceID,
 		Action:     a.Action,
+		Outcome:    stringVal(a.Outcome),
+		Error:      stringVal(a.Error),
+		StartedAt:  parseTime(a.StartedAt),
+		DoneAt:     parseOptionalTime(a.DoneAt),
 	}
-	if a.Outcome != nil {
-		out.Outcome = *a.Outcome
-	}
-	if a.Error != nil {
-		out.Error = *a.Error
-	}
-	if t, err := time.Parse(time.RFC3339Nano, a.StartedAt); err == nil {
-		out.StartedAt = t
-	}
-	if a.DoneAt != nil {
-		if t, err := time.Parse(time.RFC3339Nano, *a.DoneAt); err == nil {
-			out.DoneAt = &t
-		}
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -706,55 +658,32 @@ func (s *Store) CreateApply(id, specHash string) error {
 func (s *Store) GetApply(id string) (*Apply, error) {
 	a, err := s.queries.GetApply(context.Background(), id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbApplyToApply(a)
 	return &out, nil
 }
 
-// CompleteApply marks a running apply as completed.
-// Returns ErrAlreadyDone if the apply is not in running state.
 func (s *Store) CompleteApply(id string) error {
 	ts := now()
 	res, err := s.queries.CompleteApply(context.Background(), db.CompleteApplyParams{
-		DoneAt: &ts,
-		ID:     id,
+		DoneAt: &ts, ID: id,
 	})
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return cserrors.ErrAlreadyDone
-	}
-	return nil
+	return requireRowAffected(res)
 }
 
-// FailApply marks a running apply as failed.
-// Returns ErrAlreadyDone if the apply is not in running state.
 func (s *Store) FailApply(id string) error {
 	ts := now()
 	res, err := s.queries.FailApply(context.Background(), db.FailApplyParams{
-		DoneAt: &ts,
-		ID:     id,
+		DoneAt: &ts, ID: id,
 	})
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return cserrors.ErrAlreadyDone
-	}
-	return nil
+	return requireRowAffected(res)
 }
 
 // ListApplies returns up to limit applies ordered by started_at DESC.
@@ -818,42 +747,23 @@ func (s *Store) ListApplyActions(applyID string) ([]ApplyAction, error) {
 // ---------------------------------------------------------------------------
 
 func dbGenerationToGeneration(g db.Generation) Generation {
-	out := Generation{
-		ID:         g.ID,
-		ResourceID: g.ResourceID,
-		PromptText: g.PromptText,
-		PromptHash: g.PromptHash,
-		Model:      g.Model,
-		RetryCount: int(g.RetryCount),
+	return Generation{
+		ID:              g.ID,
+		ApplyID:         stringVal(g.ApplyID),
+		ResourceID:      g.ResourceID,
+		PromptText:      g.PromptText,
+		PromptHash:      g.PromptHash,
+		OutputText:      stringVal(g.OutputText),
+		Model:           g.Model,
+		Outcome:         stringVal(g.Outcome),
+		RejectionReason: stringVal(g.RejectionReason),
+		RetryCount:      int(g.RetryCount),
+		DurationMS:      int64Val(g.DurationMs),
+		InputTokens:     int64Val(g.InputTokens),
+		OutputTokens:    int64Val(g.OutputTokens),
+		CostUSD:         float64Val(g.CostUsd),
+		CreatedAt:       parseTime(g.CreatedAt),
 	}
-	if g.ApplyID != nil {
-		out.ApplyID = *g.ApplyID
-	}
-	if g.OutputText != nil {
-		out.OutputText = *g.OutputText
-	}
-	if g.Outcome != nil {
-		out.Outcome = *g.Outcome
-	}
-	if g.RejectionReason != nil {
-		out.RejectionReason = *g.RejectionReason
-	}
-	if g.DurationMs != nil {
-		out.DurationMS = *g.DurationMs
-	}
-	if g.InputTokens != nil {
-		out.InputTokens = *g.InputTokens
-	}
-	if g.OutputTokens != nil {
-		out.OutputTokens = *g.OutputTokens
-	}
-	if g.CostUsd != nil {
-		out.CostUSD = *g.CostUsd
-	}
-	if t, err := time.Parse(time.RFC3339Nano, g.CreatedAt); err == nil {
-		out.CreatedAt = t
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -925,7 +835,7 @@ func (s *Store) ListGenerations(resourceID string, limit int) ([]Generation, err
 // ---------------------------------------------------------------------------
 
 func dbSessionToSession(s db.AgentSession) Session {
-	out := Session{
+	return Session{
 		ID:          s.ID,
 		ApplyID:     s.ApplyID,
 		PlanJSON:    s.PlanJson,
@@ -933,14 +843,9 @@ func dbSessionToSession(s db.AgentSession) Session {
 		HashesJSON:  s.HashesJson,
 		CurrentWave: int(s.CurrentWave),
 		Status:      s.Status,
+		CreatedAt:   parseTime(s.CreatedAt),
+		UpdatedAt:   parseTime(s.UpdatedAt),
 	}
-	if t, err := time.Parse(time.RFC3339Nano, s.CreatedAt); err == nil {
-		out.CreatedAt = t
-	}
-	if t, err := time.Parse(time.RFC3339Nano, s.UpdatedAt); err == nil {
-		out.UpdatedAt = t
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -965,23 +870,16 @@ func (s *Store) CreateSession(sess Session) error {
 func (s *Store) GetSession(id string) (*Session, error) {
 	sess, err := s.queries.GetSession(context.Background(), id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbSessionToSession(sess)
 	return &out, nil
 }
 
-// GetActiveSession returns the current active session. Returns ErrNotFound if none.
 func (s *Store) GetActiveSession() (*Session, error) {
 	sess, err := s.queries.GetActiveSession(context.Background())
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbSessionToSession(sess)
 	return &out, nil
@@ -1002,15 +900,12 @@ func (s *Store) UpdateSession(id, status string, currentWave int) error {
 // ---------------------------------------------------------------------------
 
 func dbNoteToAgentNote(n db.AgentNote) AgentNote {
-	out := AgentNote{
+	return AgentNote{
 		ResourceID: n.ResourceID,
 		ApplyID:    n.ApplyID,
 		Content:    n.Content,
+		CreatedAt:  parseTime(n.CreatedAt),
 	}
-	if t, err := time.Parse(time.RFC3339Nano, n.CreatedAt); err == nil {
-		out.CreatedAt = t
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,20 +989,15 @@ func (s *Store) ListInvariantChecks(applyID string) ([]InvariantCheck, error) {
 }
 
 func dbInvariantCheckToInvariantCheck(ic db.InvariantCheck) InvariantCheck {
-	out := InvariantCheck{
+	return InvariantCheck{
 		ID:         ic.ID,
 		ApplyID:    ic.ApplyID,
 		ResourceID: ic.ResourceID,
 		CheckType:  ic.Invariant,
 		Passed:     ic.Passed != 0,
+		Output:     stringVal(ic.Details),
+		CreatedAt:  parseTime(ic.CheckedAt),
 	}
-	if ic.Details != nil {
-		out.Output = *ic.Details
-	}
-	if t, err := time.Parse(time.RFC3339Nano, ic.CheckedAt); err == nil {
-		out.CreatedAt = t
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,7 +1019,7 @@ type SessionResource struct {
 }
 
 func dbSessionResourceToSessionResource(r db.SessionResource) SessionResource {
-	out := SessionResource{
+	return SessionResource{
 		SessionID:  r.SessionID,
 		ResourceID: r.ResourceID,
 		State:      r.State,
@@ -1139,11 +1029,8 @@ func dbSessionResourceToSessionResource(r db.SessionResource) SessionResource {
 		LastError:  stringVal(r.LastError),
 		LastOutput: stringVal(r.LastOutput),
 		JobID:      stringVal(r.JobID),
+		UpdatedAt:  parseTime(r.UpdatedAt),
 	}
-	if t, err := time.Parse(time.RFC3339Nano, r.UpdatedAt); err == nil {
-		out.UpdatedAt = t
-	}
-	return out
 }
 
 func stringVal(s *string) string {
@@ -1151,6 +1038,20 @@ func stringVal(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func int64Val(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func float64Val(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func stringPtr(s string) *string {
@@ -1183,10 +1084,7 @@ func (s *Store) GetSessionResource(sessionID, resourceID string) (*SessionResour
 		ResourceID: resourceID,
 	})
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, cserrors.ErrNotFound
-		}
-		return nil, err
+		return nil, mapNotFound(err)
 	}
 	out := dbSessionResourceToSessionResource(r)
 	return &out, nil

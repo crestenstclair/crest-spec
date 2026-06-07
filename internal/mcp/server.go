@@ -132,6 +132,7 @@ type specHandler interface {
 	GraphInfo(ctx context.Context) (*specmod.GraphResult, error)
 	Validate(ctx context.Context) (*specmod.ValidateResult, error)
 	ValidateResource(ctx context.Context, resourceID string) (*specmod.ValidateResourceResult, error)
+	Inspect(ctx context.Context, resourceID string) (*specmod.InspectResult, error)
 	DriftAction(ctx context.Context, action, resourceID string) error
 	Unlock(ctx context.Context) error
 	DiffApplies(ctx context.Context, applyIDA, applyIDB string) (*specmod.DiffResult, error)

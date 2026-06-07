@@ -34,9 +34,7 @@ type specStore interface {
 	ReleaseLock() error
 	GetLock() (*store.Lock, error)
 	CreateApply(id, specHash string) error
-	GetApply(id string) (*store.Apply, error)
 	CompleteApply(id string) error
-	FailApply(id string) error
 	ListApplies(limit int) ([]store.Apply, error)
 	CreateApplyAction(id, applyID, resourceID, action string) error
 	UpdateApplyAction(id, outcome, errMsg string) error
@@ -55,9 +53,7 @@ type specStore interface {
 	GetSessionResource(sessionID, resourceID string) (*store.SessionResource, error)
 	ListSessionResources(sessionID string) ([]store.SessionResource, error)
 	ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error)
-	ListSessionResourcesByState(sessionID, state string) ([]store.SessionResource, error)
 	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
-	DeleteSessionResources(sessionID string) error
 	RecordInvariantCheck(ic store.InvariantCheck) error
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)

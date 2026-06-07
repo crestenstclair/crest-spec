@@ -3,9 +3,11 @@ package spec
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -151,6 +153,91 @@ func (s *Spec) ValidateResource(ctx context.Context, resourceID string) (*Valida
 type ValidateResourceResult struct {
 	ResourceID  string
 	Validations []ValidationResult
+}
+
+// ---------------------------------------------------------------------------
+// Inspect — full debug view of a resource
+// ---------------------------------------------------------------------------
+
+type InspectResult struct {
+	ResourceID      string              `json:"resource_id"`
+	Kind            string              `json:"kind"`
+	ContextName     string              `json:"context_name"`
+	DeclarationHash string              `json:"declaration_hash"`
+	EffectiveHash   string              `json:"effective_hash"`
+	StoredHash      string              `json:"stored_hash,omitempty"`
+	HashChanged     bool                `json:"hash_changed"`
+	Dependencies    []InspectDep        `json:"dependencies,omitempty"`
+	GeneratedFiles  []store.GeneratedFile `json:"generated_files,omitempty"`
+	SystemPrompt    string              `json:"system_prompt"`
+	ResourcePrompt  string              `json:"resource_prompt"`
+	Wave            int                 `json:"wave"`
+}
+
+type InspectDep struct {
+	TargetID string `json:"target_id"`
+	Kind     string `json:"kind"`
+}
+
+func (s *Spec) Inspect(ctx context.Context, resourceID string) (*InspectResult, error) {
+	planResult, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+
+	resource, ok := planResult.Registry.Resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource not found: %s", resourceID)
+	}
+
+	declBytes, _ := json.Marshal(resource.Declaration)
+	declHash := fmt.Sprintf("%x", sha256.Sum256(declBytes))
+	effHash := planResult.Hashes[resourceID]
+
+	var storedHash string
+	var hashChanged bool
+	stored, err := s.store.GetResource(resourceID)
+	if err == nil && stored != nil {
+		storedHash = stored.EffectiveHash
+		hashChanged = storedHash != effHash
+	} else {
+		hashChanged = true
+	}
+
+	var deps []InspectDep
+	for _, d := range resource.Dependencies {
+		deps = append(deps, InspectDep{TargetID: d.TargetID, Kind: d.Kind})
+	}
+
+	files, _ := s.store.GetGeneratedFiles(resourceID)
+
+	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
+	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
+
+	wave := -1
+	for i, w := range planResult.Waves {
+		for _, id := range w {
+			if id == resourceID {
+				wave = i
+				break
+			}
+		}
+	}
+
+	return &InspectResult{
+		ResourceID:      resourceID,
+		Kind:            resource.Kind,
+		ContextName:     resource.ContextName,
+		DeclarationHash: declHash,
+		EffectiveHash:   effHash,
+		StoredHash:      storedHash,
+		HashChanged:     hashChanged,
+		Dependencies:    deps,
+		GeneratedFiles:  files,
+		SystemPrompt:    systemPrompt,
+		ResourcePrompt:  resourcePrompt,
+		Wave:            wave,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

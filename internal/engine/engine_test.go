@@ -75,7 +75,7 @@ func defaultCfg() *config.Config {
 }
 
 func newEngine(r *fakeRunner) *Engine {
-	return New(r, nil, defaultCfg())
+	return New(r, defaultCfg())
 }
 
 // ---------- Generate tests ----------
@@ -157,7 +157,7 @@ func TestGenerate_ContextCancellation(t *testing.T) {
 			return &agent.RunResult{Output: "cancelled"}, ctx.Err()
 		},
 	}
-	e := New(r, nil, cfg)
+	e := New(r, cfg)
 
 	// Fill the semaphore with a blocking call.
 	go func() {
@@ -449,7 +449,7 @@ func TestSemaphore_LimitsConcurrency(t *testing.T) {
 			return &agent.RunResult{Output: "ok"}, nil
 		},
 	}
-	e := New(r, nil, cfg)
+	e := New(r, cfg)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {

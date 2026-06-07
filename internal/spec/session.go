@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
-
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -129,21 +128,38 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 
-	var driftActions []planpkg.PlannedAction
-	var destroyActions []planpkg.PlannedAction
-	var otherActions []planpkg.PlannedAction
+	driftActions, destroyActions, otherActions := partitionActions(actions)
+
+	destroyed := s.executeDestroys(destroyActions, applyID)
+
+	s.seedSessionResources(sessionID, waves, otherActions, driftActions)
+
+	return &BeginResult{
+		SessionID:          sessionID,
+		ApplyID:            applyID,
+		Plan:               otherActions,
+		Waves:              waves,
+		Instructions:       orchestratorInstructions(),
+		DriftActions:       driftActions,
+		DestroyedResources: destroyed,
+	}, nil
+}
+
+func partitionActions(actions []planpkg.PlannedAction) (drift, destroy, other []planpkg.PlannedAction) {
 	for _, a := range actions {
 		switch a.Kind {
 		case planpkg.ActionDrift:
-			driftActions = append(driftActions, a)
+			drift = append(drift, a)
 		case planpkg.ActionDestroy:
-			destroyActions = append(destroyActions, a)
+			destroy = append(destroy, a)
 		default:
-			otherActions = append(otherActions, a)
+			other = append(other, a)
 		}
 	}
+	return
+}
 
-	// Execute destroys immediately — no LLM dispatch needed.
+func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID string) []DestroyedResource {
 	var destroyed []DestroyedResource
 	for _, a := range destroyActions {
 		actionID := uuid.NewString()
@@ -166,42 +182,27 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 			DeletedFiles: deletedFiles,
 		})
 	}
+	return destroyed
+}
 
-	// Seed session_resources for non-destroy actions as "pending"
+func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSets ...[]planpkg.PlannedAction) {
 	waveMap := make(map[string]int)
 	for i, wave := range waves {
 		for _, id := range wave {
 			waveMap[id] = i
 		}
 	}
-	for _, a := range otherActions {
-		s.store.UpsertSessionResource(store.SessionResource{
-			SessionID:  sessionID,
-			ResourceID: a.ResourceID,
-			State:      string(StatePending),
-			WaveIndex:  waveMap[a.ResourceID],
-			MaxRetries: s.cfg.MaxRetries,
-		})
+	for _, actions := range actionSets {
+		for _, a := range actions {
+			s.store.UpsertSessionResource(store.SessionResource{
+				SessionID:  sessionID,
+				ResourceID: a.ResourceID,
+				State:      string(StatePending),
+				WaveIndex:  waveMap[a.ResourceID],
+				MaxRetries: s.cfg.MaxRetries,
+			})
+		}
 	}
-	for _, a := range driftActions {
-		s.store.UpsertSessionResource(store.SessionResource{
-			SessionID:  sessionID,
-			ResourceID: a.ResourceID,
-			State:      string(StatePending),
-			WaveIndex:  waveMap[a.ResourceID],
-			MaxRetries: s.cfg.MaxRetries,
-		})
-	}
-
-	return &BeginResult{
-		SessionID:          sessionID,
-		ApplyID:            applyID,
-		Plan:               otherActions,
-		Waves:              waves,
-		Instructions:       orchestratorInstructions(),
-		DriftActions:       driftActions,
-		DestroyedResources: destroyed,
-	}, nil
 }
 
 func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) {
@@ -237,46 +238,7 @@ func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) 
 	}
 
 	for w := sess.CurrentWave; w < len(waves); w++ {
-		var resources []ResourceStatus
-		for _, id := range waves[w] {
-			action, inPlan := planSet[id]
-			if !inPlan {
-				continue
-			}
-
-			sr, tracked := stateMap[id]
-			if tracked {
-				state := ResourceState(sr.State)
-				if state.IsTerminal() {
-					continue
-				}
-			}
-
-			state := StatePending
-			if tracked {
-				state = ResourceState(sr.State)
-			}
-
-			rs := ResourceStatus{
-				ResourceID: id,
-				State:      state,
-				WaveIndex:  w,
-				MaxRetries: s.cfg.MaxRetries,
-				Notes:      action.Reason,
-			}
-			if tracked {
-				rs.Attempts = sr.Attempts
-				if sr.LastError != "" {
-					rs.Error = &ErrorContext{
-						Message:    sr.LastError,
-						RetryCount: sr.Attempts,
-						MaxRetries: sr.MaxRetries,
-					}
-				}
-			}
-			resources = append(resources, rs)
-		}
-
+		resources := s.pendingResourcesInWave(waves[w], planSet, stateMap, w)
 		if len(resources) > 0 {
 			if w != sess.CurrentWave {
 				s.store.UpdateSession(sessionID, sess.Status, w)
@@ -290,6 +252,47 @@ func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) 
 	}
 
 	return &NextResult{Done: true, WaveIndex: len(waves)}, nil
+}
+
+func (s *Spec) pendingResourcesInWave(
+	waveIDs []string,
+	planSet map[string]planpkg.PlannedAction,
+	stateMap map[string]store.SessionResource,
+	waveIndex int,
+) []ResourceStatus {
+	var resources []ResourceStatus
+	for _, id := range waveIDs {
+		action, inPlan := planSet[id]
+		if !inPlan {
+			continue
+		}
+
+		sr, tracked := stateMap[id]
+		if tracked && ResourceState(sr.State).IsTerminal() {
+			continue
+		}
+
+		rs := ResourceStatus{
+			ResourceID: id,
+			State:      StatePending,
+			WaveIndex:  waveIndex,
+			MaxRetries: s.cfg.MaxRetries,
+			Notes:      action.Reason,
+		}
+		if tracked {
+			rs.State = ResourceState(sr.State)
+			rs.Attempts = sr.Attempts
+			if sr.LastError != "" {
+				rs.Error = &ErrorContext{
+					Message:    sr.LastError,
+					RetryCount: sr.Attempts,
+					MaxRetries: sr.MaxRetries,
+				}
+			}
+		}
+		resources = append(resources, rs)
+	}
+	return resources
 }
 
 func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*ContextResult, error) {
@@ -338,13 +341,48 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
+	if err := s.writeChangedFiles(files); err != nil {
+		return nil, err
+	}
+
+	planResult, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plan for commit: %w", err)
+	}
+
+	resource, ok := planResult.Registry.Resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource not found: %s", resourceID)
+	}
+
+	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
+	currentAttempts := 0
+	if sr != nil {
+		currentAttempts = sr.Attempts
+	}
+	currentAttempts++
+
+	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, files, planResult, currentAttempts)
+	if rejected != nil {
+		return rejected, nil
+	}
+
+	s.persistCommittedResource(sess, sessionID, resourceID, resource, files, planResult, notes, currentAttempts)
+
+	return &CommitResult{
+		Committed:   true,
+		Validations: validationResults,
+	}, nil
+}
+
+func (s *Spec) writeChangedFiles(files []CommitFile) error {
 	for _, f := range files {
 		if f.Path == "" || f.Content == "" {
 			continue
 		}
 		dir := filepath.Dir(f.Path)
 		if err := s.fs.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 
 		contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content)))
@@ -358,84 +396,81 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		}
 
 		if err := s.fs.WriteFile(f.Path, []byte(f.Content), 0o644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", f.Path, err)
+			return fmt.Errorf("write %s: %w", f.Path, err)
 		}
 	}
+	return nil
+}
 
-	planResult, err := s.Plan(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("plan for commit: %w", err)
-	}
-
-	resource, ok := planResult.Registry.Resources[resourceID]
-	if !ok {
-		return nil, fmt.Errorf("resource not found: %s", resourceID)
-	}
-
-	// Get current resource state from SQLite
-	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
-	currentAttempts := 0
-	if sr != nil {
-		currentAttempts = sr.Attempts
-	}
-	currentAttempts++
-
-	// Run resource-level validations if declared
+func (s *Spec) runCommitValidations(
+	ctx context.Context,
+	sess *store.Session,
+	sessionID, resourceID string,
+	resource cuepkg.Resource,
+	files []CommitFile,
+	planResult *PlanResult,
+	attempts int,
+) ([]ValidationResult, *CommitResult) {
 	var validationResults []ValidationResult
+
 	if len(resource.Validations) > 0 {
 		cwd := filepath.Dir(s.cfg.SpecDir)
-		validationResults, err = RunValidations(ctx, resource.Validations, cwd)
-		if err != nil {
-			return nil, fmt.Errorf("run validations: %w", err)
-		}
-
-		for _, v := range validationResults {
-			if !v.Passed {
-				actionID := uuid.NewString()
-				s.store.CreateApplyAction(actionID, sess.ApplyID, resourceID, "validate")
-				s.store.UpdateApplyAction(actionID, "failed", v.Message)
-
-				// Update session_resources: rejected with validation error
-				s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), v.Message, "", currentAttempts, "")
-
-				return &CommitResult{
-					Committed:   false,
-					Validations: validationResults,
-				}, nil
+		results, err := RunValidations(ctx, resource.Validations, cwd)
+		if err == nil {
+			validationResults = results
+			if rejection := s.checkForFailure(validationResults, sess.ApplyID, sessionID, resourceID, "validate", attempts); rejection != nil {
+				return nil, rejection
 			}
 		}
 	}
 
-	// Run invariant checks if the engine is available
 	if s.engine != nil && len(planResult.Registry.Project.Invariants) > 0 {
 		invariantResults, err := s.checkInvariants(ctx, files, planResult.Registry.Project.Invariants)
 		if err == nil {
-			for _, v := range invariantResults {
-				if !v.Passed {
-					actionID := uuid.NewString()
-					s.store.CreateApplyAction(actionID, sess.ApplyID, resourceID, "invariant")
-					s.store.UpdateApplyAction(actionID, "failed", v.Message)
-
-					// Update session_resources: rejected with invariant error
-					s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), v.Message, "", currentAttempts, "")
-
-					return &CommitResult{
-						Committed:   false,
-						Validations: append(validationResults, invariantResults...),
-					}, nil
-				}
+			if rejection := s.checkForFailure(invariantResults, sess.ApplyID, sessionID, resourceID, "invariant", attempts); rejection != nil {
+				rejection.Validations = append(validationResults, invariantResults...)
+				return nil, rejection
 			}
 			validationResults = append(validationResults, invariantResults...)
 		}
 	}
 
-	// All validations passed — commit the resource
+	return validationResults, nil
+}
+
+func (s *Spec) checkForFailure(results []ValidationResult, applyID, sessionID, resourceID, actionKind string, attempts int) *CommitResult {
+	for _, v := range results {
+		if !v.Passed {
+			actionID := uuid.NewString()
+			s.store.CreateApplyAction(actionID, applyID, resourceID, actionKind)
+			s.store.UpdateApplyAction(actionID, "failed", v.Message)
+			s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), v.Message, "", attempts, "")
+
+			return &CommitResult{
+				Committed:   false,
+				Validations: results,
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Spec) persistCommittedResource(
+	sess *store.Session,
+	sessionID, resourceID string,
+	resource cuepkg.Resource,
+	files []CommitFile,
+	planResult *PlanResult,
+	notes string,
+	attempts int,
+) {
 	var hashes map[string]string
 	json.Unmarshal([]byte(sess.HashesJSON), &hashes)
 
-	declHash := fmt.Sprintf("%x", sha256.Sum256(func() []byte { b, _ := json.Marshal(resource.Declaration); return b }()))
+	declData, _ := json.Marshal(resource.Declaration)
+	declHash := fmt.Sprintf("%x", sha256.Sum256(declData))
 
-	if err := s.store.SetResource(store.Resource{
+	s.store.SetResource(store.Resource{
 		ID:              resourceID,
 		Kind:            resource.Kind,
 		ContextName:     resource.ContextName,
@@ -443,9 +478,7 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		EffectiveHash:   hashes[resourceID],
 		Model:           s.cfg.GenerateModel,
 		SettledAt:       time.Now().UTC(),
-	}); err != nil {
-		return nil, fmt.Errorf("set resource: %w", err)
-	}
+	})
 
 	s.store.DeleteGeneratedFiles(resourceID)
 	for _, f := range files {
@@ -471,18 +504,11 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		s.store.SetNote(resourceID, sess.ApplyID, notes)
 	}
 
-	// Record successful commit in apply_actions
 	actionID := uuid.NewString()
 	s.store.CreateApplyAction(actionID, sess.ApplyID, resourceID, "commit")
 	s.store.UpdateApplyAction(actionID, "success", "")
 
-	// Update session_resources: committed
-	s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateCommitted), "", "", currentAttempts, "")
-
-	return &CommitResult{
-		Committed:   true,
-		Validations: validationResults,
-	}, nil
+	s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateCommitted), "", "", attempts, "")
 }
 
 func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*FinishResult, error) {
@@ -596,37 +622,27 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 		result.Errors = errors
 	}
 
-	// Run type check command if configured
-	if s.cfg.TypeCheckCommand != "" {
-		cwd := filepath.Dir(s.cfg.SpecDir)
-		_, stderr, exitCode, err := RunCommand(ctx, []string{"sh", "-c", s.cfg.TypeCheckCommand}, cwd)
-		if err == nil && exitCode != 0 {
-			result.Passed = false
-			we := WaveError{
-				Kind:    "type_check",
-				Message: fmt.Sprintf("type check failed (exit %d): %s", exitCode, stderr),
-			}
-			we.ResourceID = s.attributeErrorToResource(stderr, resources)
-			result.Errors = append(result.Errors, we)
-		}
-	}
-
-	// Run test command if configured
-	if s.cfg.TestCommand != "" {
-		cwd := filepath.Dir(s.cfg.SpecDir)
-		_, stderr, exitCode, err := RunCommand(ctx, []string{"sh", "-c", s.cfg.TestCommand}, cwd)
-		if err == nil && exitCode != 0 {
-			result.Passed = false
-			we := WaveError{
-				Kind:    "test",
-				Message: fmt.Sprintf("test failed (exit %d): %s", exitCode, stderr),
-			}
-			we.ResourceID = s.attributeErrorToResource(stderr, resources)
-			result.Errors = append(result.Errors, we)
-		}
-	}
+	s.runVerificationCommand(ctx, s.cfg.TypeCheckCommand, "type_check", resources, result)
+	s.runVerificationCommand(ctx, s.cfg.TestCommand, "test", resources, result)
 
 	return result
+}
+
+func (s *Spec) runVerificationCommand(ctx context.Context, command, kind string, resources []store.SessionResource, result *WaveVerifyResult) {
+	if command == "" {
+		return
+	}
+	cwd := filepath.Dir(s.cfg.SpecDir)
+	_, stderr, exitCode, err := RunCommand(ctx, []string{"sh", "-c", command}, cwd)
+	if err != nil || exitCode == 0 {
+		return
+	}
+	result.Passed = false
+	result.Errors = append(result.Errors, WaveError{
+		ResourceID: s.attributeErrorToResource(stderr, resources),
+		Kind:       kind,
+		Message:    fmt.Sprintf("%s failed (exit %d): %s", kind, exitCode, stderr),
+	})
 }
 
 func (s *Spec) attributeErrorToResource(errorOutput string, resources []store.SessionResource) string {
@@ -640,7 +656,6 @@ func (s *Spec) attributeErrorToResource(errorOutput string, resources []store.Se
 	}
 	return ""
 }
-
 
 func (s *Spec) checkInvariants(ctx context.Context, files []CommitFile, invariants []cuepkg.Invariant) ([]ValidationResult, error) {
 	if len(files) == 0 || len(invariants) == 0 {

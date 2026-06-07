@@ -131,7 +131,7 @@ func main() {
 		cfg.Timeout,
 	)
 
-	eng := engine.New(ag, nil, cfg)
+	eng := engine.New(ag, cfg)
 
 	sp := specmod.New(eng, s, specmod.OSFileSystem{}, cfg)
 
