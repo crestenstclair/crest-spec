@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
@@ -89,6 +90,23 @@ func (s *Spec) ReconcileAmendments(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// pendingAmendmentChanges renders the prompts of all PENDING/FAILED amendments
+// for a resource into a single "changes to make" block. Empty when none.
+func (s *Spec) pendingAmendmentChanges(resourceID string) string {
+	ams, err := s.store.ListAmendmentsByResource(resourceID)
+	if err != nil || len(ams) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, a := range ams {
+		if a.State != "PENDING" && a.State != "FAILED" {
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s**: %s\n", a.Name, a.Prompt)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func parseAmendmentCreatedAt(s string) time.Time {
