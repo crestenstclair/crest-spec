@@ -1345,6 +1345,8 @@ An amendment is a **resource-scoped, spec-resident correction**: a targeted chan
 
 Amendments are authored on the shared `meta.amendments` list, available on any resource (via the `Meta` struct). They are **not inherited by child resources** — an amendment on an aggregate does not flow down to its entities.
 
+> **Authoring constraint — tool-managed, not hand-edited in base files.** Amendments are intended to be managed through `spec/apply_amendments` and `spec/graduate_amendment`, which write them into a per-resource **override file** (`override-<Name>.cue`). Do **not** also hand-author `meta.amendments` for the same resource in a base spec file. This is the same limitation as every other override field: at load time all `.cue` files in the spec dir are unified, and CUE unifies lists **positionally** — a base list and an override list of differing lengths conflict (`incompatible list lengths`) and the whole spec stops loading. Keeping a resource's amendments in exactly one file (the override the tools manage) avoids this. The `meta.amendments` shape shown below is the schema the tools emit; author by hand only when no tool-written override exists for that resource.
+
 ```cue
 project: contexts: Synth: aggregates: Voice: meta: {
     amendments: [
