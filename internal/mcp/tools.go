@@ -466,6 +466,14 @@ type specFinishArgs struct {
 	Force     bool   `json:"force"`
 }
 
+type specEvolveArgs struct {
+	SessionID string `json:"session_id"`
+}
+
+type specLearningsArgs struct {
+	Status string `json:"status"`
+}
+
 type specDiffArgs struct {
 	ApplyIDA string `json:"apply_id_a"`
 	ApplyIDB string `json:"apply_id_b"`
@@ -599,6 +607,39 @@ func (s *Server) registerSpecLifecycleTools() {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`),
 	}, specTool("finish", func(ctx context.Context, a specFinishArgs) (any, error) {
 		return s.spec.Finish(ctx, a.SessionID, a.Force)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/evolve", Description: "On-demand reflection: distill craft-level learnings from a session's failure history (rejected generations, failed invariants, last errors). Returns the count of learnings added. Never blocks or fails a session.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to reflect over"}},"required":["session_id"]}`),
+	}, specTool("evolve", func(ctx context.Context, a specEvolveArgs) (any, error) {
+		added, err := s.spec.Evolve(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int{"learnings_added": added}, nil
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/learnings", Description: "List craft-level learnings extracted by reflection. Filter by status (active, retired, promoted); defaults to active. Returns id, scope, text, confidence, status, and times_applied.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","description":"Learning status filter (default: active)"}}}`),
+	}, specTool("learnings", func(ctx context.Context, a specLearningsArgs) (any, error) {
+		learnings, err := s.spec.ListLearnings(a.Status)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]map[string]any, len(learnings))
+		for i, l := range learnings {
+			out[i] = map[string]any{
+				"id":            l.ID,
+				"scope":         map[string]string{"lang": l.ScopeLang, "kind": l.ScopeKind},
+				"text":          l.Text,
+				"confidence":    l.Confidence,
+				"status":        l.Status,
+				"times_applied": l.TimesApplied,
+			}
+		}
+		return out, nil
 	}))
 }
 

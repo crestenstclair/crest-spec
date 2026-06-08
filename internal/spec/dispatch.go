@@ -3,6 +3,7 @@ package spec
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -228,7 +229,7 @@ func (s *Spec) buildLoopOpts(
 		Model:            model,
 		MaxRetries:       s.cfg.MaxRetries,
 		ReviewLevel:      "light",
-		Cwd:              s.cfg.SpecDir,
+		Cwd:              filepath.Dir(s.cfg.SpecDir),
 		TypeCheckCommand: s.cfg.TypeCheckCommand,
 		TestCommand:      s.cfg.TestCommand,
 		SessionID:        sessionID,
@@ -291,6 +292,18 @@ func (s *Spec) RunWave(ctx context.Context, opts RunWaveOpts) (*RunWaveResult, e
 	}
 
 	s.AdvanceWave(ctx, opts.SessionID)
+
+	// Every-wave reflection (Component 6, trigger 1). Non-blocking: it must
+	// never affect the returned RunWaveResult or delay the wave response. A
+	// detached context keeps the goroutine alive after RunWave returns.
+	if s.reflector != nil && (s.cfg.Evolve == "wave" || s.cfg.Evolve == "all") {
+		waveIndex := nextResult.WaveIndex
+		applyID := sess.ApplyID
+		sessionID := opts.SessionID
+		go func() {
+			_, _ = s.reflector.ReflectWave(context.Background(), sessionID, applyID, waveIndex)
+		}()
+	}
 
 	return result, nil
 }

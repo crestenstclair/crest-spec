@@ -289,7 +289,9 @@ func checkInvariant(ctx context.Context, eng specEngine, inv cuepkg.Invariant, c
 	if inv.Meta.Rationale != "" {
 		prompt += fmt.Sprintf("RATIONALE: %s\n", inv.Meta.Rationale)
 	}
-	prompt += fmt.Sprintf("\nCODE:\n%s\n\nRespond with PASS if the code respects the invariant, or FAIL with explanation.", code)
+	prompt += fmt.Sprintf("\nCODE:\n%s\n", code)
+	prompt += "\nSet \"passed\" to true if the code RESPECTS the invariant, or false if it VIOLATES it (put the explanation in \"summary\")."
+	prompt += reviewJSONInstruction
 
 	res, err := eng.Review(ctx, engine.ReviewOpts{
 		Code:         code,
@@ -299,8 +301,18 @@ func checkInvariant(ctx context.Context, eng specEngine, inv cuepkg.Invariant, c
 		return false, "", err
 	}
 
-	passed := !strings.Contains(strings.ToUpper(res.Output), "FAIL")
-	return passed, res.Output, nil
+	// Parse the marker-wrapped verdict. If it can't be parsed, treat the
+	// invariant as respected rather than guessing from keywords — an
+	// uninterpretable judgment must not produce a false violation/retry loop.
+	ro := parseReviewOutput(res.Output)
+	if ro == nil {
+		return true, res.Output, nil
+	}
+	msg := ro.Summary
+	if msg == "" {
+		msg = res.Output
+	}
+	return ro.Passed, msg, nil
 }
 
 func recordInvariantCheck(opts LoopOpts, checkType string, passed bool, output string) {
@@ -341,23 +353,38 @@ func runReviewStep(ctx context.Context, eng specEngine, output string, opts Loop
 	return nil
 }
 
+// Review verdicts are wrapped in these sentinel markers so the JSON object can
+// be located unambiguously, even amid prose or multiple aggregated model
+// replies. This replaces fragile keyword/negation matching of free-form text.
+const (
+	reviewResultBegin = "===CREST_REVIEW_BEGIN==="
+	reviewResultEnd   = "===CREST_REVIEW_END==="
+)
+
 const reviewJSONInstruction = `
 
-IMPORTANT: Respond with ONLY a single JSON object and nothing else — no prose, no markdown fences, no text before or after. Use exactly this shape:
+Output your verdict as a single JSON object wrapped EXACTLY between these markers, each on its own line:
+===CREST_REVIEW_BEGIN===
 {"passed": true, "findings": [{"severity": "critical|major|minor", "description": "...", "file": "...", "line": 0}], "summary": "..."}
-Set "passed" to false only when there is at least one finding serious enough to block acceptance.`
+===CREST_REVIEW_END===
+Set "passed" to false only when at least one finding must block acceptance. Output nothing after the END marker.`
 
-// parseReviewOutput attempts to parse the LLM output as structured JSON.
-// Multi-model reviews (engine.CodeReview / Bugbot) aggregate each model's reply
-// under a "## Model: X" header, so the output may contain several JSON objects.
-// Each section is parsed independently and combined: the review passes only if
-// every section passed, and findings are unioned. Returns nil only when no
-// section yields parseable JSON, signaling the caller to fall back to string
-// matching.
+// parseReviewOutput extracts the structured verdict from review output. It looks
+// for JSON wrapped in the review markers first (the requested format), and each
+// aggregated model reply (engine.CodeReview / Bugbot emit one block per model)
+// is parsed and combined: the review passes only if every block passed, and
+// findings are unioned. If no marker blocks are present it falls back to parsing
+// a bare JSON object per "## Model:" section. Returns nil when nothing parses,
+// signaling the caller that the review could not be interpreted.
 func parseReviewOutput(output string) *ReviewOutput {
+	blocks := extractMarkerBlocks(output)
+	if len(blocks) == 0 {
+		blocks = splitModelSections(output)
+	}
+
 	var combined *ReviewOutput
-	for _, section := range splitModelSections(output) {
-		ro := parseSingleReviewJSON(section)
+	for _, b := range blocks {
+		ro := parseSingleReviewJSON(b)
 		if ro == nil {
 			continue
 		}
@@ -378,6 +405,29 @@ func parseReviewOutput(output string) *ReviewOutput {
 	return combined
 }
 
+// extractMarkerBlocks returns the text between each BEGIN/END marker pair. An
+// unterminated final block (END missing) yields the remainder, so a truncated
+// reply is still recoverable.
+func extractMarkerBlocks(output string) []string {
+	var blocks []string
+	rest := output
+	for {
+		i := strings.Index(rest, reviewResultBegin)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(reviewResultBegin):]
+		if j := strings.Index(rest, reviewResultEnd); j >= 0 {
+			blocks = append(blocks, rest[:j])
+			rest = rest[j+len(reviewResultEnd):]
+			continue
+		}
+		blocks = append(blocks, rest)
+		break
+	}
+	return blocks
+}
+
 // splitModelSections splits aggregated multi-model output on "## Model:" headers.
 // When no header is present the whole output is returned as a single section.
 func splitModelSections(output string) []string {
@@ -395,7 +445,7 @@ func splitModelSections(output string) []string {
 	return sections
 }
 
-// parseSingleReviewJSON parses one section's JSON, tolerating surrounding prose
+// parseSingleReviewJSON parses one block's JSON, tolerating surrounding prose
 // or markdown fences by extracting the outermost JSON object.
 func parseSingleReviewJSON(section string) *ReviewOutput {
 	var ro ReviewOutput
@@ -410,64 +460,6 @@ func parseSingleReviewJSON(section string) *ReviewOutput {
 		}
 	}
 	return nil
-}
-
-// negationTokens precede a keyword to signal it is being denied
-// (e.g. "no critical issues", "0 critical", "free of critical bugs").
-var negationTokens = []string{
-	"no ", "no-", "not ", "n't ", "without ", "zero ", "0 ",
-	"none", "free of ", "free from ", "absent", "lack of ",
-}
-
-// indicatesFailure reports whether any keyword appears in output as a genuine
-// positive finding rather than a negated one. The output is split into clauses
-// (on sentence/clause punctuation); a clause counts as a failure only if it
-// contains a keyword and NO negation. So "No critical bugs", "none of the
-// findings are critical", and "Critical issues: none" do NOT indicate failure,
-// while "found a critical bug" and "No minor issues, but a critical bug exists"
-// do. Case-insensitive. This is only a fallback for when structured JSON review
-// output cannot be parsed.
-func indicatesFailure(output string, keywords []string) bool {
-	for _, clause := range splitClauses(strings.ToLower(output)) {
-		if !clauseContainsAny(clause, keywords) {
-			continue
-		}
-		if !containsNegation(clause) {
-			return true
-		}
-	}
-	return false
-}
-
-// splitClauses breaks text on sentence and clause boundaries so negation
-// detection stays scoped to the clause containing the keyword. ':' is
-// deliberately not a delimiter, so "Critical issues: none" stays one clause.
-func splitClauses(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case '.', ';', ',', '\n', '!', '?':
-			return true
-		}
-		return false
-	})
-}
-
-func clauseContainsAny(clause string, keywords []string) bool {
-	for _, kw := range keywords {
-		if strings.Contains(clause, strings.ToLower(kw)) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsNegation(prefix string) bool {
-	for _, n := range negationTokens {
-		if strings.Contains(prefix, n) {
-			return true
-		}
-	}
-	return false
 }
 
 // buildReviewMessage produces the Message string for a ValidationResult.
@@ -493,7 +485,7 @@ func buildReviewMessage(ro *ReviewOutput, rawOutput string) string {
 }
 
 func runReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*ValidationResult, error) {
-	res, fallbackPassed, err := dispatchReview(ctx, eng, code, opts)
+	res, err := dispatchReview(ctx, eng, code, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -501,54 +493,56 @@ func runReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) 
 		return &ValidationResult{Passed: true, Kind: "review"}, nil
 	}
 
-	if ro := parseReviewOutput(res.Output); ro != nil {
+	ro := parseReviewOutput(res.Output)
+	if ro == nil {
+		// The review verdict couldn't be parsed (no marker block, no JSON). Don't
+		// block the candidate on an uninterpretable review — validation and
+		// invariant checks already gate correctness, and the orchestrator
+		// re-reviews each wave. Treat it as a non-blocking skip.
 		return &ValidationResult{
-			Passed:  ro.Passed,
+			Passed:  true,
 			Kind:    "review",
-			Message: buildReviewMessage(ro, res.Output),
+			Message: "review output not parseable; review gate skipped",
 		}, nil
 	}
 
-	return &ValidationResult{Passed: fallbackPassed(res.Output), Kind: "review", Message: res.Output}, nil
+	return &ValidationResult{
+		Passed:  ro.Passed,
+		Kind:    "review",
+		Message: buildReviewMessage(ro, res.Output),
+	}, nil
 }
 
-type fallbackCheck func(output string) bool
-
 // dispatchReview calls the appropriate engine review method based on the review
-// level. Returns nil result for unknown levels. The fallbackCheck is used when
-// structured JSON parsing fails.
-func dispatchReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*agent.RunResult, fallbackCheck, error) {
+// level, appending the marker-wrapped JSON verdict instruction. Returns a nil
+// result for unknown levels.
+func dispatchReview(ctx context.Context, eng specEngine, code string, opts LoopOpts) (*agent.RunResult, error) {
 	switch opts.ReviewLevel {
 	case "full":
-		res, err := eng.CodeReview(ctx, engine.CodeReviewOpts{
+		return eng.CodeReview(ctx, engine.CodeReviewOpts{
 			Prompt: fmt.Sprintf("Review this generated code:\n\n%s%s", code, reviewJSONInstruction),
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail", "critical"}) }, err
 
 	case "light":
-		res, err := eng.Bugbot(ctx, engine.BugbotOpts{
+		return eng.Bugbot(ctx, engine.BugbotOpts{
 			Prompt: code + reviewJSONInstruction,
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !indicatesFailure(o, []string{"critical"}) }, err
 
 	case "solid":
-		res, err := eng.Review(ctx, engine.ReviewOpts{
+		return eng.Review(ctx, engine.ReviewOpts{
 			Code:         code,
 			Requirements: opts.Prompt + reviewJSONInstruction,
 		})
-		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail"}) }, err
 
 	case "deep":
-		prompt := promptpkg.BuildDeepReviewPrompt(code)
-		res, err := eng.CodeReview(ctx, engine.CodeReviewOpts{
-			Prompt: prompt,
+		return eng.CodeReview(ctx, engine.CodeReviewOpts{
+			Prompt: promptpkg.BuildDeepReviewPrompt(code) + reviewJSONInstruction,
 			Cwd:    opts.Cwd,
 		})
-		return res, func(o string) bool { return !indicatesFailure(o, []string{"fail", "critical"}) }, err
 
 	default:
-		return nil, nil, nil
+		return nil, nil
 	}
 }

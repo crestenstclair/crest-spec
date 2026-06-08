@@ -25,6 +25,7 @@ type Config struct {
 	TypeCheckCommand string `envconfig:"TYPE_CHECK_CMD"`
 	TestCommand      string `envconfig:"TEST_CMD"`
 	Mode             string `envconfig:"MODE" default:"default"`
+	Evolve           string `envconfig:"EVOLVE" default:"all"`
 }
 
 func New() (*Config, error) {

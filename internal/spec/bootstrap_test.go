@@ -145,6 +145,10 @@ func (s *stubStore) ListActiveLearnings(lang, kind string, limit int) ([]store.L
 	return nil, nil
 }
 func (s *stubStore) IncrementLearningApplied(id string) error { return nil }
+func (s *stubStore) ListLearnings(status string) ([]store.Learning, error) {
+	return nil, nil
+}
+func (s *stubStore) CreateLearning(l store.Learning) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Tests

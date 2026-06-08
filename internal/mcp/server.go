@@ -152,6 +152,8 @@ type specHandler interface {
 	DeepReview(ctx context.Context, opts specmod.DeepReviewOpts) (*specmod.DeepReviewResult, error)
 	SessionStatus(ctx context.Context, sessionID string) (*specmod.SessionStatusResult, error)
 	WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error)
+	Evolve(ctx context.Context, sessionID string) (int, error)
+	ListLearnings(status string) ([]storemod.Learning, error)
 }
 
 // ---------------------------------------------------------------------------

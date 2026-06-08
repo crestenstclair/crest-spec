@@ -566,6 +566,13 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 		status = "failed"
 	}
 
+	// Session-scoped reflection at finish (Component 6, trigger 3). Synchronous
+	// — this is the end of the run, so latency is acceptable. Errors are ignored;
+	// reflection must never be able to fail a session.
+	if s.reflector != nil && (s.cfg.Evolve == "finish" || s.cfg.Evolve == "all") {
+		_, _ = s.reflector.ReflectSession(ctx, sessionID, sess.ApplyID)
+	}
+
 	s.store.UpdateSession(sessionID, status, sess.CurrentWave)
 	s.store.CompleteApply(sess.ApplyID)
 	s.store.ReleaseLock()

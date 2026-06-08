@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
+	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/engine"
 )
 
@@ -159,31 +160,75 @@ func TestParseReviewOutput_MultiModelOneFails(t *testing.T) {
 	assert.Equal(t, "data race", ro.Findings[0].Description)
 }
 
-func TestIndicatesFailure_NegatedKeywordsDoNotFail(t *testing.T) {
-	// These are the false-positive cases that previously failed reviews even
-	// though the model reported no blocking issues.
-	for _, s := range []string{
-		"No critical or high-severity bugs. The sharpest finding is minor.",
-		"0 critical issues found.",
-		"The code is free of critical defects.",
-		"No failures detected; all assertions pass.",
-		"none of the findings are critical",
-		"Critical issues: none found",
-		"no findings are critical",
-	} {
-		assert.False(t, indicatesFailure(s, []string{"critical", "fail"}), "should not fail on %q", s)
-	}
+func TestParseReviewOutput_MarkerWrapped(t *testing.T) {
+	// The model wraps its verdict in sentinel markers, with prose around it.
+	input := "Here's my analysis. No critical bugs found.\n" +
+		reviewResultBegin + "\n" +
+		`{"passed": true, "summary": "looks good"}` + "\n" +
+		reviewResultEnd + "\nLet me know if you need more."
+	ro := parseReviewOutput(input)
+	require.NotNil(t, ro)
+	assert.True(t, ro.Passed)
+	assert.Equal(t, "looks good", ro.Summary)
 }
 
-func TestIndicatesFailure_GenuineFindingsFail(t *testing.T) {
-	for _, s := range []string{
-		"Found a critical bug: nil deref on line 12.",
-		"severity: critical — unbounded allocation",
-		"This test will fail because the buffer overflows.",
-		"No major issues, but 1 critical finding remains.",
-	} {
-		assert.True(t, indicatesFailure(s, []string{"critical", "fail"}), "should fail on %q", s)
-	}
+func TestParseReviewOutput_MarkerWrappedMultiModelOneFails(t *testing.T) {
+	input := "## Model: opus\n\nprose about no critical issues\n" +
+		reviewResultBegin + `{"passed": true, "findings": []}` + reviewResultEnd + "\n\n" +
+		"## Model: sonnet\n\nfound something\n" +
+		reviewResultBegin + `{"passed": false, "findings": [{"severity": "critical", "description": "data race"}]}` + reviewResultEnd + "\n"
+	ro := parseReviewOutput(input)
+	require.NotNil(t, ro)
+	assert.False(t, ro.Passed)
+	require.Len(t, ro.Findings, 1)
+	assert.Equal(t, "data race", ro.Findings[0].Description)
+}
+
+func TestParseReviewOutput_UnterminatedMarker(t *testing.T) {
+	// A truncated reply (END marker missing) is still recovered from the remainder.
+	input := reviewResultBegin + "\n" + `{"passed": true, "summary": "ok"}`
+	ro := parseReviewOutput(input)
+	require.NotNil(t, ro)
+	assert.True(t, ro.Passed)
+}
+
+func TestParseReviewOutput_ProseOnlyUnparseable(t *testing.T) {
+	// No markers and no JSON: the verdict cannot be interpreted.
+	assert.Nil(t, parseReviewOutput("No critical bugs. Everything looks good to me."))
+}
+
+func TestCheckInvariant_MarkerVerdict(t *testing.T) {
+	inv := cuepkg.Invariant{Text: "audio thread must not allocate"}
+
+	t.Run("violation", func(t *testing.T) {
+		eng := &mockEngine{reviewFn: func(ctx context.Context, opts engine.ReviewOpts) (*agent.RunResult, error) {
+			out := reviewResultBegin + `{"passed": false, "summary": "allocates in render loop"}` + reviewResultEnd
+			return &agent.RunResult{Output: out}, nil
+		}}
+		passed, msg, err := checkInvariant(context.Background(), eng, inv, "code")
+		require.NoError(t, err)
+		assert.False(t, passed)
+		assert.Equal(t, "allocates in render loop", msg)
+	})
+
+	t.Run("respected", func(t *testing.T) {
+		eng := &mockEngine{reviewFn: func(ctx context.Context, opts engine.ReviewOpts) (*agent.RunResult, error) {
+			out := reviewResultBegin + `{"passed": true, "summary": "no allocation"}` + reviewResultEnd
+			return &agent.RunResult{Output: out}, nil
+		}}
+		passed, _, err := checkInvariant(context.Background(), eng, inv, "code")
+		require.NoError(t, err)
+		assert.True(t, passed)
+	})
+
+	t.Run("unparseable does not block", func(t *testing.T) {
+		eng := &mockEngine{reviewFn: func(ctx context.Context, opts engine.ReviewOpts) (*agent.RunResult, error) {
+			return &agent.RunResult{Output: "I think this FAILs to respect the rule, maybe."}, nil
+		}}
+		passed, _, err := checkInvariant(context.Background(), eng, inv, "code")
+		require.NoError(t, err)
+		assert.True(t, passed)
+	})
 }
 
 func TestBuildReviewMessage_WithFindings(t *testing.T) {
@@ -222,24 +267,30 @@ func TestRunReview_FullWithJSON(t *testing.T) {
 	assert.Equal(t, "No issues", result.Message)
 }
 
-func TestRunReview_FullFallbackStringMatch(t *testing.T) {
-	eng := &mockEngine{}
-	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
-		return &agent.RunResult{Output: "PASS: no issues found"}, nil
-	}
-	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "full"})
-	require.NoError(t, err)
-	assert.True(t, result.Passed)
-}
-
-func TestRunReview_FullFallbackFail(t *testing.T) {
+func TestRunReview_UnparseableSkipsGate(t *testing.T) {
+	// Free-form prose with no marker block and no JSON cannot be interpreted.
+	// Rather than guess from keywords, the review gate is skipped (non-blocking)
+	// so a malformed review never produces a false rejection.
 	eng := &mockEngine{}
 	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
 		return &agent.RunResult{Output: "FAIL: missing error handling"}, nil
 	}
 	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "full"})
 	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Contains(t, result.Message, "not parseable")
+}
+
+func TestRunReview_FullMarkerFail(t *testing.T) {
+	eng := &mockEngine{}
+	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
+		out := reviewResultBegin + `{"passed": false, "findings": [{"severity": "critical", "description": "missing error handling"}]}` + reviewResultEnd
+		return &agent.RunResult{Output: out}, nil
+	}
+	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "full"})
+	require.NoError(t, err)
 	assert.False(t, result.Passed)
+	assert.Contains(t, result.Message, "missing error handling")
 }
 
 func TestRunReview_LightWithJSON(t *testing.T) {
@@ -278,10 +329,11 @@ func TestRunReview_DeepWithJSON(t *testing.T) {
 	assert.Equal(t, "Clean code, no issues", result.Message)
 }
 
-func TestRunReview_DeepFallbackFail(t *testing.T) {
+func TestRunReview_DeepMarkerFail(t *testing.T) {
 	eng := &mockEngine{}
 	eng.codeReviewFn = func(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
-		return &agent.RunResult{Output: "FAIL: multiple SOLID violations found"}, nil
+		out := reviewResultBegin + `{"passed": false, "summary": "multiple SOLID violations found"}` + reviewResultEnd
+		return &agent.RunResult{Output: out}, nil
 	}
 	result, err := runReview(context.Background(), eng, "code", LoopOpts{ReviewLevel: "deep"})
 	require.NoError(t, err)

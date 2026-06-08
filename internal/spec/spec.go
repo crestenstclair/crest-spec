@@ -2,12 +2,14 @@ package spec
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/engine"
+	"github.com/crestenstclair/crest-spec/internal/evolve"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/crestenstclair/crest-spec/internal/store"
@@ -65,22 +67,116 @@ type specStore interface {
 	ReadOnlyQuery(query string) ([]map[string]interface{}, error)
 	ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error)
 	IncrementLearningApplied(id string) error
+	ListLearnings(status string) ([]store.Learning, error)
+	CreateLearning(l store.Learning) error
 }
 
 type Spec struct {
-	engine specEngine
-	store  specStore
-	fs     fileSystem
-	cfg    *config.Config
+	engine    specEngine
+	store     specStore
+	fs        fileSystem
+	cfg       *config.Config
+	reflector *evolve.Reflector
 }
 
 func New(eng specEngine, st specStore, fs fileSystem, cfg *config.Config) *Spec {
-	return &Spec{
-		engine: eng,
-		store:  st,
-		fs:     fs,
-		cfg:    cfg,
+	model := ""
+	if cfg != nil {
+		model = cfg.GenerateModel
 	}
+	reflector := evolve.New(
+		&engineGenerator{eng: eng},
+		&storeReflectorAdapter{st: st},
+		model,
+	)
+	return &Spec{
+		engine:    eng,
+		store:     st,
+		fs:        fs,
+		cfg:       cfg,
+		reflector: reflector,
+	}
+}
+
+// engineGenerator adapts a specEngine to evolve.Generator, narrowing the rich
+// engine.Generate signature down to the plain (prompt, model) → text contract
+// the reflector depends on. A nil engine yields an error, which the reflector
+// swallows — reflection must never be able to fail a run.
+type engineGenerator struct {
+	eng specEngine
+}
+
+func (g *engineGenerator) Generate(ctx context.Context, prompt, model string) (string, error) {
+	if g.eng == nil {
+		return "", fmt.Errorf("evolve: no engine available")
+	}
+	res, err := g.eng.Generate(ctx, engine.GenerateOpts{Prompt: prompt, Model: model})
+	if err != nil {
+		return "", err
+	}
+	if res == nil {
+		return "", nil
+	}
+	return res.Output, nil
+}
+
+// storeReflectorAdapter exposes only the read+write methods evolve.Store needs,
+// delegating to the broader specStore. It keeps the reflector decoupled from the
+// full store surface (Interface Segregation / Dependency Inversion).
+type storeReflectorAdapter struct {
+	st specStore
+}
+
+func (a *storeReflectorAdapter) ListSessionResources(sessionID string) ([]store.SessionResource, error) {
+	return a.st.ListSessionResources(sessionID)
+}
+
+func (a *storeReflectorAdapter) ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error) {
+	return a.st.ListSessionResourcesByWave(sessionID, wave)
+}
+
+func (a *storeReflectorAdapter) GetResource(id string) (*store.Resource, error) {
+	return a.st.GetResource(id)
+}
+
+func (a *storeReflectorAdapter) ListGenerations(resourceID string, limit int) ([]store.Generation, error) {
+	return a.st.ListGenerations(resourceID, limit)
+}
+
+func (a *storeReflectorAdapter) ListInvariantChecks(applyID string) ([]store.InvariantCheck, error) {
+	return a.st.ListInvariantChecks(applyID)
+}
+
+func (a *storeReflectorAdapter) ListLearnings(status string) ([]store.Learning, error) {
+	return a.st.ListLearnings(status)
+}
+
+func (a *storeReflectorAdapter) CreateLearning(l store.Learning) error {
+	return a.st.CreateLearning(l)
+}
+
+// Evolve runs an on-demand session-scoped reflection (Component 6, trigger 2)
+// and returns the number of learnings added. It resolves the session's apply ID
+// so reflection can read failed invariant checks. Reflection never fails a run,
+// so a missing session simply yields zero learnings.
+func (s *Spec) Evolve(ctx context.Context, sessionID string) (int, error) {
+	if s.reflector == nil {
+		return 0, nil
+	}
+	applyID := ""
+	if sess, err := s.store.GetSession(sessionID); err == nil && sess != nil {
+		applyID = sess.ApplyID
+	}
+	return s.reflector.ReflectSession(ctx, sessionID, applyID)
+}
+
+// ListLearnings returns learnings with the given status, delegating to the
+// store. An empty status defaults to "active".
+func (s *Spec) ListLearnings(status string) ([]store.Learning, error) {
+	if status == "" {
+		status = "active"
+	}
+	return s.store.ListLearnings(status)
 }
 
 type PlanResult struct {
