@@ -233,6 +233,27 @@ type Assertion struct {
 	Regex    string `json:"regex,omitempty"`
 }
 
+// Amendment is a resource-scoped, spec-resident correction (e.g. distilled from
+// a deep_review finding). Adding one to a resource's declaration changes its
+// hash, which makes the planner re-generate that resource in UPDATE mode.
+type Amendment struct {
+	Name       string      `json:"name"`              // stable kebab-case id within the resource
+	Prompt     string      `json:"prompt"`            // the targeted change instruction (data)
+	Origin     string      `json:"origin,omitempty"`  // "deep_review" | "manual" | "bugbot" | ...
+	Finding    *Finding    `json:"finding,omitempty"` // provenance
+	Validation *Validation `json:"validation,omitempty"`
+	Graduated  bool        `json:"graduated,omitempty"`
+	CreatedAt  string      `json:"createdAt,omitempty"`
+}
+
+// Finding is the provenance of an amendment drawn from a review.
+type Finding struct {
+	Severity string `json:"severity,omitempty"`
+	File     string `json:"file,omitempty"`
+	Line     int    `json:"line,omitempty"`
+	Text     string `json:"text,omitempty"`
+}
+
 type Invariant struct {
 	Text string `json:"text"`
 	Meta Meta   `json:"meta,omitempty"`
