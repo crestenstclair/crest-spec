@@ -93,6 +93,89 @@ func (s *Spec) ApplyAmendments(ctx context.Context, resourceID string, proposals
 	return result, nil
 }
 
+// ListAmendments returns materialized amendments, optionally filtered by
+// resource and/or state (empty string = no filter on that dimension).
+func (s *Spec) ListAmendments(ctx context.Context, resourceID, state string) ([]store.Amendment, error) {
+	var rows []store.Amendment
+	var err error
+	switch {
+	case resourceID != "":
+		rows, err = s.store.ListAmendmentsByResource(resourceID)
+	case state != "":
+		return s.store.ListAmendmentsByState(state)
+	default:
+		rows, err = s.store.ListAllAmendments()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if state == "" {
+		return rows, nil
+	}
+	out := make([]store.Amendment, 0, len(rows))
+	for _, r := range rows {
+		if r.State == state {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// GraduationResult is the outcome of a (preview or applied) graduation.
+type GraduationResult struct {
+	OverridePath string `json:"override_path"`
+	Diff         string `json:"diff"`
+	Applied      bool   `json:"applied"`
+}
+
+// GraduateAmendment folds a VERIFIED amendment's intent into the resource's
+// canonical invariants and removes the amendment. Human-gated: apply=false
+// previews the CUE diff; apply=true writes it and deletes the amendment row.
+func (s *Spec) GraduateAmendment(ctx context.Context, resourceID, name string, apply bool) (*GraduationResult, error) {
+	planResult, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plan for graduate: %w", err)
+	}
+	r, ok := planResult.Registry.Resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource not found: %s", resourceID)
+	}
+	target, err := s.store.GetAmendment(resourceID, name)
+	if err != nil || target == nil {
+		return nil, fmt.Errorf("amendment not found: %s/%s", resourceID, name)
+	}
+	if target.State != "VERIFIED" {
+		return nil, fmt.Errorf("amendment %s is %s, not VERIFIED; cannot graduate", name, target.State)
+	}
+	// Rebuild amendments WITHOUT the graduated one; fold its prompt into invariants.
+	var remaining []amendmentEntry
+	for _, a := range cuepkg.ResourceAmendments(r) {
+		if a.Name == name {
+			continue
+		}
+		remaining = append(remaining, toEntry(a))
+	}
+	sortEntriesByName(remaining)
+	invariants := append(existingInvariants(r), "graduated: "+target.Prompt)
+	pkg := s.cuePackageName()
+	shortName := resourceShortName(resourceID)
+	overridePath := s.amendmentOverridePath(shortName)
+	body := renderGraduationOverride(pkg, shortName, r.Kind, r.ContextName, invariants, remaining)
+
+	result := &GraduationResult{OverridePath: overridePath, Diff: body}
+	if !apply {
+		return result, nil
+	}
+	if err := s.fs.WriteFile(overridePath, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("write graduation override: %w", err)
+	}
+	if err := s.store.DeleteAmendment(resourceID, name); err != nil {
+		return nil, fmt.Errorf("delete graduated amendment: %w", err)
+	}
+	result.Applied = true
+	return result, nil
+}
+
 // ProposeAmendments runs deep_review over the target and asks the LLM to draft
 // amendments from the findings. Writes nothing — the result is a proposal for
 // human review, fed to ApplyAmendments on approval. Drafting is per-finding

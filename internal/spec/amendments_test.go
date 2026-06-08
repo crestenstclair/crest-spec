@@ -282,3 +282,148 @@ func TestApplyAmendments_PreviewVsApply(t *testing.T) {
 	assert.Equal(t, "validate-reference-pitch", rows[0].Name)
 	assert.Equal(t, "PENDING", rows[0].State)
 }
+
+// TestListAmendments_FilterByState exercises the three filter dimensions of
+// ListAmendments: by state only, by resource only, and unfiltered.
+func TestListAmendments_FilterByState(t *testing.T) {
+	ctx := context.Background()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { st.Close() })
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
+	s := New(nil, st, OSFileSystem{}, cfg)
+
+	const resA = "valueObject.Audio.EqualTemperament"
+	const resB = "valueObject.Audio.Other"
+
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:         resA + "::pending-one",
+		ResourceID: resA,
+		Name:       "pending-one",
+		Prompt:     "pending change",
+		State:      "PENDING",
+		CreatedAt:  time.Now().UTC(),
+	}))
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:         resB + "::applied-one",
+		ResourceID: resB,
+		Name:       "applied-one",
+		Prompt:     "applied change",
+		State:      "APPLIED",
+		CreatedAt:  time.Now().UTC(),
+	}))
+
+	// Filter by state only.
+	pending, err := s.ListAmendments(ctx, "", "PENDING")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "pending-one", pending[0].Name)
+
+	// Filter by resource only.
+	byResource, err := s.ListAmendments(ctx, resA, "")
+	require.NoError(t, err)
+	require.Len(t, byResource, 1)
+	assert.Equal(t, "pending-one", byResource[0].Name)
+
+	// No filter — all amendments.
+	all, err := s.ListAmendments(ctx, "", "")
+	require.NoError(t, err)
+	assert.Len(t, all, 2)
+}
+
+// TestGraduateAmendment_PreviewVsApply exercises the human-gated graduation:
+// apply=false previews the CUE diff (folding the prompt into invariants) and
+// mutates nothing; apply=true writes the override file, deletes the amendment
+// row, and the resulting override is valid CUE (Plan reloads it). A non-VERIFIED
+// amendment is rejected.
+func TestGraduateAmendment_PreviewVsApply(t *testing.T) {
+	ctx := context.Background()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { st.Close() })
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
+	s := New(nil, st, OSFileSystem{}, cfg)
+
+	const resourceID = "valueObject.Audio.EqualTemperament"
+	const name = "validate-reference-pitch"
+	expectedOverridePath := filepath.Join(dir, "override-EqualTemperament.cue")
+
+	// Author the resource so it carries the amendment in meta.amendments.
+	proposals := []ProposedAmendment{{
+		ResourceID: resourceID,
+		Name:       name,
+		Prompt:     "reject NaN",
+		Origin:     "deep_review",
+	}}
+	_, err = s.ApplyAmendments(ctx, resourceID, proposals, true)
+	require.NoError(t, err)
+
+	// Put the amendment row in the store in VERIFIED state.
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:         resourceID + "::" + name,
+		ResourceID: resourceID,
+		Name:       name,
+		Prompt:     "reject NaN",
+		State:      "VERIFIED",
+		CreatedAt:  time.Now().UTC(),
+	}))
+
+	// Remove the override file ApplyAmendments wrote, so we can assert preview
+	// writes nothing and apply writes it back.
+	require.NoError(t, os.Remove(expectedOverridePath))
+
+	// Preview: apply=false returns the folded invariant diff, writes nothing,
+	// does not delete the row.
+	preview, err := s.GraduateAmendment(ctx, resourceID, name, false)
+	require.NoError(t, err)
+	assert.False(t, preview.Applied)
+	assert.Equal(t, expectedOverridePath, preview.OverridePath)
+	assert.Contains(t, preview.Diff, "invariants:")
+	assert.Contains(t, preview.Diff, "reject NaN")
+
+	_, statErr := os.Stat(expectedOverridePath)
+	assert.True(t, os.IsNotExist(statErr), "preview must not write the override file")
+
+	stillThere, err := st.GetAmendment(resourceID, name)
+	require.NoError(t, err)
+	require.NotNil(t, stillThere, "preview must not delete the amendment row")
+
+	// Apply: writes the override, deletes the row, marks Applied.
+	applied, err := s.GraduateAmendment(ctx, resourceID, name, true)
+	require.NoError(t, err)
+	assert.True(t, applied.Applied)
+	assert.Equal(t, expectedOverridePath, applied.OverridePath)
+
+	onDisk, err := os.ReadFile(expectedOverridePath)
+	require.NoError(t, err, "apply must write the override file")
+	assert.Contains(t, string(onDisk), "invariants:")
+
+	gone, err := st.GetAmendment(resourceID, name)
+	require.NoError(t, err)
+	assert.Nil(t, gone, "apply must delete the graduated amendment row")
+
+	// The graduation override must be valid CUE — Plan reloads it without error.
+	_, err = s.Plan(ctx)
+	require.NoError(t, err, "graduation override must be valid CUE")
+
+	// Non-VERIFIED amendments cannot be graduated.
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:         resourceID + "::pending-grad",
+		ResourceID: resourceID,
+		Name:       "pending-grad",
+		Prompt:     "not ready",
+		State:      "PENDING",
+		CreatedAt:  time.Now().UTC(),
+	}))
+	_, err = s.GraduateAmendment(ctx, resourceID, "pending-grad", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "VERIFIED")
+}
