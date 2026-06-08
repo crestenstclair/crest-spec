@@ -48,3 +48,22 @@ func TestValueObject_CarriesAmendments(t *testing.T) {
 		t.Fatalf("amendments not threaded: %+v", vo.Amendments)
 	}
 }
+
+func TestResourceAmendments_TypeSwitches(t *testing.T) {
+	r := Resource{
+		ID:   "Audio.EqualTemperament",
+		Kind: "valueObject",
+		Declaration: ValueObject{
+			Amendments: []Amendment{{Name: "a1"}, {Name: "a2"}},
+		},
+	}
+	got := ResourceAmendments(r)
+	if len(got) != 2 || got[1].Name != "a2" {
+		t.Fatalf("expected 2 amendments, got %+v", got)
+	}
+
+	empty := Resource{Declaration: Aggregate{}}
+	if len(ResourceAmendments(empty)) != 0 {
+		t.Fatalf("expected no amendments for empty aggregate")
+	}
+}

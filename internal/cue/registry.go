@@ -31,6 +31,48 @@ func (r *Registry) Has(id string) bool {
 	return ok
 }
 
+// ResourceAmendments extracts the amendments list from a resource's declaration,
+// regardless of its concrete declaration type. Returns nil when the declaration
+// kind does not carry amendments or has none.
+func ResourceAmendments(r Resource) []Amendment {
+	switch d := r.Declaration.(type) {
+	case Aggregate:
+		return d.Amendments
+	case Entity:
+		return d.Amendments
+	case ValueObject:
+		return d.Amendments
+	case Adapter:
+		return d.Amendments
+	case Repository:
+		return d.Amendments
+	case DomainService:
+		return d.Amendments
+	case ApplicationService:
+		return d.Amendments
+	case Asset:
+		return d.Amendments
+	case *Aggregate:
+		return d.Amendments
+	case *Entity:
+		return d.Amendments
+	case *ValueObject:
+		return d.Amendments
+	case *Adapter:
+		return d.Amendments
+	case *Repository:
+		return d.Amendments
+	case *DomainService:
+		return d.Amendments
+	case *ApplicationService:
+		return d.Amendments
+	case *Asset:
+		return d.Amendments
+	default:
+		return nil
+	}
+}
+
 func NewRegistry(project *Project) (*Registry, error) {
 	reg := &Registry{
 		Project:   project,
