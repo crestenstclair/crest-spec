@@ -115,3 +115,38 @@ func TestReconcileAmendments_PendingThenApplied(t *testing.T) {
 	assert.Equal(t, "APPLIED", rows[0].State)
 	assert.Equal(t, currentDeclHash, rows[0].AppliedSpecHash)
 }
+
+// TestBegin_ReconcilesAmendments verifies that starting a session materializes
+// the amendments table from the spec — i.e. Begin calls ReconcileAmendments.
+func TestBegin_ReconcilesAmendments(t *testing.T) {
+	s, st := setupAmendmentsSpec(t)
+	ctx := context.Background()
+
+	// Discover the resource id carrying the amendment.
+	planResult, err := s.Plan(ctx)
+	require.NoError(t, err)
+
+	var amendID string
+	for id, r := range planResult.Registry.Resources {
+		if r.Kind != "valueObject" {
+			continue
+		}
+		amendID = id
+		break
+	}
+	require.NotEmpty(t, amendID, "should find the value object carrying the amendment")
+
+	// No reconcile has run yet — the amendments table is empty.
+	rows, err := st.ListAmendmentsByResource(amendID)
+	require.NoError(t, err)
+	require.Len(t, rows, 0)
+
+	// Begin must reconcile amendments as part of starting the session.
+	_, err = s.Begin(ctx, BeginOpts{})
+	require.NoError(t, err)
+
+	rows, err = st.ListAmendmentsByResource(amendID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "clamp-upper-bound", rows[0].Name)
+}

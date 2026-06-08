@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,12 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 	driftActions, destroyActions, otherActions := partitionActions(actions)
 
 	s.seedSessionResources(sessionID, waves, otherActions, driftActions)
+
+	// Materialize amendment lifecycle state from the spec (best-effort: a
+	// reconcile failure must not block a generation session).
+	if err := s.ReconcileAmendments(ctx); err != nil {
+		log.Printf("amendments: reconcile during begin failed (swallowed): %v", err)
+	}
 
 	return &BeginResult{
 		SessionID:       sessionID,
