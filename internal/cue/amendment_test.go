@@ -30,3 +30,21 @@ func TestAmendment_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 }
+
+func TestValueObject_CarriesAmendments(t *testing.T) {
+	raw := `{
+		"from": "f64",
+		"description": "equal temperament tuning",
+		"invariants": ["reference pitch must be finite and positive"],
+		"amendments": [
+			{"name": "validate-reference-pitch", "prompt": "reject 0.0/NaN/inf", "origin": "deep_review"}
+		]
+	}`
+	var vo ValueObject
+	if err := json.Unmarshal([]byte(raw), &vo); err != nil {
+		t.Fatalf("unmarshal value object: %v", err)
+	}
+	if len(vo.Amendments) != 1 || vo.Amendments[0].Name != "validate-reference-pitch" {
+		t.Fatalf("amendments not threaded: %+v", vo.Amendments)
+	}
+}

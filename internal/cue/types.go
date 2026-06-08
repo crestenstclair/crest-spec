@@ -83,17 +83,17 @@ func (f *FlexContextMap) UnmarshalJSON(data []byte) error {
 }
 
 type Project struct {
-	Name       string                `json:"name"`
-	Layers     []string              `json:"layers"`
-	LayerRules map[string]LayerRule  `json:"layerRules"`
-	Meta       Meta                  `json:"meta"`
-	Contexts   map[string]Context    `json:"contexts"`
-	Adapters   map[string]Adapter    `json:"adapters"`
-	AssetKinds map[string]AssetKind  `json:"assetKinds"`
-	Assets     map[string]Asset      `json:"assets"`
-	Invariants  FlexInvariants    `json:"invariants"`
-	ContextMap  FlexContextMap    `json:"contextMap"`
-	Validations []Validation      `json:"validations,omitempty"`
+	Name        string               `json:"name"`
+	Layers      []string             `json:"layers"`
+	LayerRules  map[string]LayerRule `json:"layerRules"`
+	Meta        Meta                 `json:"meta"`
+	Contexts    map[string]Context   `json:"contexts"`
+	Adapters    map[string]Adapter   `json:"adapters"`
+	AssetKinds  map[string]AssetKind `json:"assetKinds"`
+	Assets      map[string]Asset     `json:"assets"`
+	Invariants  FlexInvariants       `json:"invariants"`
+	ContextMap  FlexContextMap       `json:"contextMap"`
+	Validations []Validation         `json:"validations,omitempty"`
 }
 
 type LayerRule struct {
@@ -116,38 +116,40 @@ type Meta struct {
 }
 
 type Context struct {
-	Purpose              string                        `json:"purpose"`
-	UbiquitousLanguage   map[string]string             `json:"ubiquitousLanguage,omitempty"`
-	Meta                 Meta                          `json:"meta,omitempty"`
-	Aggregates           map[string]Aggregate          `json:"aggregates,omitempty"`
-	ValueObjects         map[string]ValueObject        `json:"valueObjects,omitempty"`
-	DomainServices       map[string]DomainService      `json:"domainServices,omitempty"`
-	ApplicationServices  map[string]ApplicationService `json:"applicationServices,omitempty"`
-	Repositories         map[string]Repository         `json:"repositories,omitempty"`
-	Ports                map[string]Port               `json:"ports,omitempty"`
-	Assets               map[string]Asset              `json:"assets,omitempty"`
+	Purpose             string                        `json:"purpose"`
+	UbiquitousLanguage  map[string]string             `json:"ubiquitousLanguage,omitempty"`
+	Meta                Meta                          `json:"meta,omitempty"`
+	Aggregates          map[string]Aggregate          `json:"aggregates,omitempty"`
+	ValueObjects        map[string]ValueObject        `json:"valueObjects,omitempty"`
+	DomainServices      map[string]DomainService      `json:"domainServices,omitempty"`
+	ApplicationServices map[string]ApplicationService `json:"applicationServices,omitempty"`
+	Repositories        map[string]Repository         `json:"repositories,omitempty"`
+	Ports               map[string]Port               `json:"ports,omitempty"`
+	Assets              map[string]Asset              `json:"assets,omitempty"`
 }
 
 type Aggregate struct {
-	Root         bool                         `json:"root,omitempty"`
-	Purpose      string                       `json:"purpose,omitempty"`
-	State        map[string]string            `json:"state,omitempty"`
-	Commands     FlexMap `json:"commands,omitempty"`
-	Events       FlexMap `json:"events,omitempty"`
-	Invariants   []string                     `json:"invariants,omitempty"`
-	Implements   string                       `json:"implements,omitempty"`
-	Publishes    []string                     `json:"publishes,omitempty"`
-	Meta         Meta                         `json:"meta,omitempty"`
-	Entities     map[string]Entity            `json:"entities,omitempty"`
-	ValueObjects map[string]ValueObject       `json:"valueObjects,omitempty"`
-	Validations  []Validation                 `json:"validations,omitempty"`
-	Assets       map[string]Asset             `json:"assets,omitempty"`
+	Root         bool                   `json:"root,omitempty"`
+	Purpose      string                 `json:"purpose,omitempty"`
+	State        map[string]string      `json:"state,omitempty"`
+	Commands     FlexMap                `json:"commands,omitempty"`
+	Events       FlexMap                `json:"events,omitempty"`
+	Invariants   []string               `json:"invariants,omitempty"`
+	Implements   string                 `json:"implements,omitempty"`
+	Publishes    []string               `json:"publishes,omitempty"`
+	Meta         Meta                   `json:"meta,omitempty"`
+	Entities     map[string]Entity      `json:"entities,omitempty"`
+	ValueObjects map[string]ValueObject `json:"valueObjects,omitempty"`
+	Validations  []Validation           `json:"validations,omitempty"`
+	Amendments   []Amendment            `json:"amendments,omitempty"`
+	Assets       map[string]Asset       `json:"assets,omitempty"`
 }
 
 type Entity struct {
 	State       map[string]string `json:"state,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
+	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type ValueObject struct {
@@ -157,6 +159,7 @@ type ValueObject struct {
 	Invariants  []string          `json:"invariants,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
+	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type Port struct {
@@ -170,6 +173,7 @@ type Adapter struct {
 	Layer       string       `json:"layer,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
+	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type Repository struct {
@@ -177,6 +181,7 @@ type Repository struct {
 	Contract    map[string]string `json:"contract,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
+	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type DomainService struct {
@@ -186,6 +191,7 @@ type DomainService struct {
 	Publishes   []string     `json:"publishes,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
+	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type ApplicationService struct {
@@ -194,6 +200,7 @@ type ApplicationService struct {
 	Operations  map[string]Operation `json:"operations,omitempty"`
 	Meta        Meta                 `json:"meta,omitempty"`
 	Validations []Validation         `json:"validations,omitempty"`
+	Amendments  []Amendment          `json:"amendments,omitempty"`
 }
 
 type Operation struct {
@@ -216,6 +223,7 @@ type Asset struct {
 	Targets     []string     `json:"targets,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
+	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type Validation struct {
