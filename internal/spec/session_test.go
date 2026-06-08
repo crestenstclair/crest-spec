@@ -58,6 +58,52 @@ func TestContextResult_HasPrompts(t *testing.T) {
 	assert.NotEmpty(t, result.Prompt)
 }
 
+// --- resourceValidations tests ---
+
+func TestCommit_IncludesAmendmentValidation(t *testing.T) {
+	resource := cuepkg.Resource{
+		ID:   "Audio.EqualTemperament",
+		Kind: "valueObject",
+		Validations: []cuepkg.Validation{
+			{Kind: "compiles", Command: []string{"echo", "resource-check"}, Description: "resource assertion"},
+		},
+		Declaration: cuepkg.ValueObject{
+			Meta: cuepkg.Meta{
+				Amendments: []cuepkg.Amendment{
+					{
+						Name:   "validate-reference-pitch",
+						Prompt: "reject invalid reference pitches",
+						Validation: &cuepkg.Validation{
+							Kind:        "test",
+							Command:     []string{"echo", "amendment-check"},
+							Description: "amendment assertion",
+						},
+					},
+					{
+						// Amendment without a validation must not contribute.
+						Name:   "no-validation",
+						Prompt: "some other change",
+					},
+				},
+			},
+		},
+	}
+
+	got := resourceValidations(resource)
+
+	require.Len(t, got, 2, "expected resource validation + amendment validation")
+	assert.Equal(t, "resource assertion", got[0].Description)
+
+	found := false
+	for _, v := range got {
+		if v.Description == "amendment assertion" {
+			found = true
+			require.Equal(t, []string{"echo", "amendment-check"}, v.Command)
+		}
+	}
+	assert.True(t, found, "amendment-declared validation should be included in the commit validation set")
+}
+
 // --- forceTargetIntoActions tests ---
 
 func TestForceTargetIntoActions_AddsWhenMissing(t *testing.T) {

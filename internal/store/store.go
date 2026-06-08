@@ -1399,6 +1399,153 @@ func (s *Store) IncrementLearningApplied(id string) error {
 }
 
 // ---------------------------------------------------------------------------
+// Amendments — proposed/applied spec amendments per resource
+// ---------------------------------------------------------------------------
+
+// Amendment is the store's domain type for a spec amendment.
+type Amendment struct {
+	ID              string
+	ResourceID      string
+	Name            string
+	ContentHash     string
+	Origin          string
+	Prompt          string
+	FindingJSON     string
+	ValidationJSON  string
+	State           string
+	AppliedSpecHash string
+	CreatedAt       time.Time
+	AppliedAt       time.Time
+	GraduatedAt     time.Time
+}
+
+// fmtTime formats a time.Time to the DB string representation, mapping the
+// zero time to the empty string.
+func fmtTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func dbAmendmentToAmendment(a db.Amendment) Amendment {
+	return Amendment{
+		ID:              a.ID,
+		ResourceID:      a.ResourceID,
+		Name:            a.Name,
+		ContentHash:     a.ContentHash,
+		Origin:          a.Origin,
+		Prompt:          a.Prompt,
+		FindingJSON:     a.FindingJson,
+		ValidationJSON:  a.ValidationJson,
+		State:           a.State,
+		AppliedSpecHash: a.AppliedSpecHash,
+		CreatedAt:       parseTime(a.CreatedAt),
+		AppliedAt:       parseTime(a.AppliedAt),
+		GraduatedAt:     parseTime(a.GraduatedAt),
+	}
+}
+
+// UpsertAmendment inserts or updates an amendment, keyed on (resource_id, name).
+func (s *Store) UpsertAmendment(a Amendment) error {
+	if a.State == "" {
+		a.State = "PENDING"
+	}
+	if a.Origin == "" {
+		a.Origin = "manual"
+	}
+	return s.queries.UpsertAmendment(context.Background(), db.UpsertAmendmentParams{
+		ID:              a.ID,
+		ResourceID:      a.ResourceID,
+		Name:            a.Name,
+		ContentHash:     a.ContentHash,
+		Origin:          a.Origin,
+		Prompt:          a.Prompt,
+		FindingJson:     a.FindingJSON,
+		ValidationJson:  a.ValidationJSON,
+		State:           a.State,
+		AppliedSpecHash: a.AppliedSpecHash,
+		CreatedAt:       fmtTime(a.CreatedAt),
+		AppliedAt:       fmtTime(a.AppliedAt),
+		GraduatedAt:     fmtTime(a.GraduatedAt),
+	})
+}
+
+// ListAmendmentsByResource returns all amendments for a resource, oldest first.
+func (s *Store) ListAmendmentsByResource(resourceID string) ([]Amendment, error) {
+	rows, err := s.queries.ListAmendmentsByResource(context.Background(), resourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Amendment, len(rows))
+	for i, r := range rows {
+		out[i] = dbAmendmentToAmendment(r)
+	}
+	return out, nil
+}
+
+// ListAmendmentsByState returns all amendments in the given state, oldest first.
+func (s *Store) ListAmendmentsByState(state string) ([]Amendment, error) {
+	rows, err := s.queries.ListAmendmentsByState(context.Background(), state)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Amendment, len(rows))
+	for i, r := range rows {
+		out[i] = dbAmendmentToAmendment(r)
+	}
+	return out, nil
+}
+
+// ListAllAmendments returns every amendment, oldest first.
+func (s *Store) ListAllAmendments() ([]Amendment, error) {
+	rows, err := s.queries.ListAllAmendments(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Amendment, len(rows))
+	for i, r := range rows {
+		out[i] = dbAmendmentToAmendment(r)
+	}
+	return out, nil
+}
+
+// GetAmendment returns the amendment for (resourceID, name), or nil if absent.
+func (s *Store) GetAmendment(resourceID, name string) (*Amendment, error) {
+	row, err := s.queries.GetAmendment(context.Background(), db.GetAmendmentParams{
+		ResourceID: resourceID,
+		Name:       name,
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	a := dbAmendmentToAmendment(row)
+	return &a, nil
+}
+
+// UpdateAmendmentState updates an amendment's state and applied/graduated metadata.
+func (s *Store) UpdateAmendmentState(id, state, appliedSpecHash string, appliedAt, graduatedAt time.Time) error {
+	return s.queries.UpdateAmendmentState(context.Background(), db.UpdateAmendmentStateParams{
+		State:           state,
+		AppliedSpecHash: appliedSpecHash,
+		AppliedAt:       fmtTime(appliedAt),
+		GraduatedAt:     fmtTime(graduatedAt),
+		ID:              id,
+	})
+}
+
+// DeleteAmendment removes the amendment for (resourceID, name).
+func (s *Store) DeleteAmendment(resourceID, name string) error {
+	return s.queries.DeleteAmendment(context.Background(), db.DeleteAmendmentParams{
+		ResourceID: resourceID,
+		Name:       name,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Vacuum — compact old history
 // ---------------------------------------------------------------------------
 

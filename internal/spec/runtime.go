@@ -75,6 +75,26 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 		}
 	}
 
+	// UPDATE mode: if this resource already has committed output, feed the
+	// existing files back and flag any PENDING amendments as the changes to make.
+	committed, _ := s.store.GetGeneratedFiles(resource.ID)
+	if len(committed) > 0 {
+		existing := make(map[string]string, len(committed))
+		for _, f := range committed {
+			data, err := s.fs.ReadFile(f.Path)
+			if err != nil {
+				continue
+			}
+			existing[f.Path] = string(data)
+		}
+		if len(existing) > 0 {
+			ctx.ExistingFiles = existing
+		}
+		if changes := s.pendingAmendmentChanges(resource.ID); changes != "" {
+			ctx.ChangesRequired = changes
+		}
+	}
+
 	return ctx, nil
 }
 

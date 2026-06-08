@@ -50,6 +50,67 @@ func TestBuildRuntimeContext_InjectsLearnings(t *testing.T) {
 	assert.Equal(t, "adapter", fake.gotKind)
 }
 
+// updateModeFakeStore satisfies the subset of specStore exercised by
+// buildRuntimeContext in UPDATE mode: it reports one committed generated file
+// for the resource and one PENDING amendment carrying a known prompt.
+type updateModeFakeStore struct {
+	specStore
+	committedPath string
+	resourceID    string
+	amendments    []store.Amendment
+}
+
+func (f *updateModeFakeStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) {
+	if resourceID == f.resourceID {
+		return []store.GeneratedFile{{Path: f.committedPath, ResourceID: resourceID}}, nil
+	}
+	return nil, nil
+}
+func (f *updateModeFakeStore) GetNote(string, string) (string, error) { return "", nil }
+func (f *updateModeFakeStore) ListActiveLearnings(string, string, int) ([]store.Learning, error) {
+	return nil, nil
+}
+func (f *updateModeFakeStore) IncrementLearningApplied(string) error { return nil }
+func (f *updateModeFakeStore) ListAmendmentsByResource(resourceID string) ([]store.Amendment, error) {
+	if resourceID == f.resourceID {
+		return f.amendments, nil
+	}
+	return nil, nil
+}
+
+func TestBuildRuntimeContext_UpdateMode(t *testing.T) {
+	root := t.TempDir()
+	fs := OSFileSystem{}
+
+	const (
+		content       = "pub struct Frequency { hz: f64 }\n"
+		amendmentText = "Clamp hz to at most 20000."
+	)
+	committedPath := filepath.Join(root, "src", "frequency.rs")
+	require.NoError(t, fs.MkdirAll(filepath.Join(root, "src"), 0o755))
+	require.NoError(t, fs.WriteFile(committedPath, []byte(content), 0o644))
+
+	resID := "valueObject.Frequency"
+	fake := &updateModeFakeStore{
+		committedPath: committedPath,
+		resourceID:    resID,
+		amendments: []store.Amendment{
+			{Name: "clamp-upper-bound", Prompt: amendmentText, State: "PENDING"},
+		},
+	}
+
+	cfg := &config.Config{SpecDir: filepath.Join(root, "spec")}
+	s := &Spec{store: fake, cfg: cfg, fs: fs}
+	reg := &cuepkg.Registry{Project: &cuepkg.Project{Meta: cuepkg.Meta{Language: "rust"}}}
+	res := cuepkg.Resource{ID: resID, Kind: "valueObject"}
+
+	rc, err := s.buildRuntimeContext(res, reg, "apply1")
+	require.NoError(t, err)
+
+	assert.Equal(t, content, rc.ExistingFiles[committedPath])
+	assert.Contains(t, rc.ChangesRequired, amendmentText)
+}
+
 func TestBuildModuleTree(t *testing.T) {
 	dir := t.TempDir()
 	fs := OSFileSystem{}

@@ -14,6 +14,12 @@ type RuntimeContext struct {
 	Learnings       []string
 	WaveErrors      string
 	UserGuidance    string
+	// ExistingFiles is the current committed implementation, keyed by path. When
+	// non-empty, the resource is regenerated in UPDATE mode (minimal diff).
+	ExistingFiles map[string]string
+	// ChangesRequired is the flagged "CHANGES TO MAKE" instruction block (e.g.
+	// the concatenated prompts of pending amendments).
+	ChangesRequired string
 }
 
 func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
@@ -63,6 +69,23 @@ func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
 		b.WriteString("Apply these craft guidelines distilled from earlier generations:\n\n")
 		for _, l := range ctx.Learnings {
 			b.WriteString("- " + l + "\n")
+		}
+		sections = append(sections, b.String())
+	}
+
+	if len(ctx.ExistingFiles) > 0 {
+		var b strings.Builder
+		b.WriteString(renderTemplate("update.md", "", ""))
+		b.WriteString("\n### Existing Generated Files\n\n")
+		for _, p := range sortedKeys(ctx.ExistingFiles) {
+			b.WriteString("`" + p + "`:\n\n```\n")
+			b.WriteString(ctx.ExistingFiles[p])
+			b.WriteString("\n```\n\n")
+		}
+		if ctx.ChangesRequired != "" {
+			b.WriteString("### CHANGES TO MAKE\n\n")
+			b.WriteString(ctx.ChangesRequired)
+			b.WriteString("\n")
 		}
 		sections = append(sections, b.String())
 	}

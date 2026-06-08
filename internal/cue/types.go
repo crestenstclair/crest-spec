@@ -83,17 +83,17 @@ func (f *FlexContextMap) UnmarshalJSON(data []byte) error {
 }
 
 type Project struct {
-	Name       string                `json:"name"`
-	Layers     []string              `json:"layers"`
-	LayerRules map[string]LayerRule  `json:"layerRules"`
-	Meta       Meta                  `json:"meta"`
-	Contexts   map[string]Context    `json:"contexts"`
-	Adapters   map[string]Adapter    `json:"adapters"`
-	AssetKinds map[string]AssetKind  `json:"assetKinds"`
-	Assets     map[string]Asset      `json:"assets"`
-	Invariants  FlexInvariants    `json:"invariants"`
-	ContextMap  FlexContextMap    `json:"contextMap"`
-	Validations []Validation      `json:"validations,omitempty"`
+	Name        string               `json:"name"`
+	Layers      []string             `json:"layers"`
+	LayerRules  map[string]LayerRule `json:"layerRules"`
+	Meta        Meta                 `json:"meta"`
+	Contexts    map[string]Context   `json:"contexts"`
+	Adapters    map[string]Adapter   `json:"adapters"`
+	AssetKinds  map[string]AssetKind `json:"assetKinds"`
+	Assets      map[string]Asset     `json:"assets"`
+	Invariants  FlexInvariants       `json:"invariants"`
+	ContextMap  FlexContextMap       `json:"contextMap"`
+	Validations []Validation         `json:"validations,omitempty"`
 }
 
 type LayerRule struct {
@@ -101,47 +101,48 @@ type LayerRule struct {
 }
 
 type Meta struct {
-	Language    string   `json:"language,omitempty"`
-	Style       string   `json:"style,omitempty"`
-	Rules       []string `json:"rules,omitempty"`
-	Prompts     []string `json:"prompts,omitempty"`
-	References  []string `json:"references,omitempty"`
-	Examples    []string `json:"examples,omitempty"`
-	Avoid       []string `json:"avoid,omitempty"`
-	Notes       string   `json:"notes,omitempty"`
-	Rationale   string   `json:"rationale,omitempty"`
-	ReviewLevel string   `json:"reviewLevel,omitempty"`
-	Framework   string   `json:"framework,omitempty"`
-	Mode        string   `json:"mode,omitempty"`
+	Language    string      `json:"language,omitempty"`
+	Style       string      `json:"style,omitempty"`
+	Rules       []string    `json:"rules,omitempty"`
+	Prompts     []string    `json:"prompts,omitempty"`
+	References  []string    `json:"references,omitempty"`
+	Examples    []string    `json:"examples,omitempty"`
+	Avoid       []string    `json:"avoid,omitempty"`
+	Notes       string      `json:"notes,omitempty"`
+	Rationale   string      `json:"rationale,omitempty"`
+	ReviewLevel string      `json:"reviewLevel,omitempty"`
+	Framework   string      `json:"framework,omitempty"`
+	Mode        string      `json:"mode,omitempty"`
+	Amendments  []Amendment `json:"amendments,omitempty"`
 }
 
 type Context struct {
-	Purpose              string                        `json:"purpose"`
-	UbiquitousLanguage   map[string]string             `json:"ubiquitousLanguage,omitempty"`
-	Meta                 Meta                          `json:"meta,omitempty"`
-	Aggregates           map[string]Aggregate          `json:"aggregates,omitempty"`
-	ValueObjects         map[string]ValueObject        `json:"valueObjects,omitempty"`
-	DomainServices       map[string]DomainService      `json:"domainServices,omitempty"`
-	ApplicationServices  map[string]ApplicationService `json:"applicationServices,omitempty"`
-	Repositories         map[string]Repository         `json:"repositories,omitempty"`
-	Ports                map[string]Port               `json:"ports,omitempty"`
-	Assets               map[string]Asset              `json:"assets,omitempty"`
+	Purpose             string                        `json:"purpose"`
+	UbiquitousLanguage  map[string]string             `json:"ubiquitousLanguage,omitempty"`
+	Meta                Meta                          `json:"meta,omitempty"`
+	Aggregates          map[string]Aggregate          `json:"aggregates,omitempty"`
+	ValueObjects        map[string]ValueObject        `json:"valueObjects,omitempty"`
+	DomainServices      map[string]DomainService      `json:"domainServices,omitempty"`
+	ApplicationServices map[string]ApplicationService `json:"applicationServices,omitempty"`
+	Repositories        map[string]Repository         `json:"repositories,omitempty"`
+	Ports               map[string]Port               `json:"ports,omitempty"`
+	Assets              map[string]Asset              `json:"assets,omitempty"`
 }
 
 type Aggregate struct {
-	Root         bool                         `json:"root,omitempty"`
-	Purpose      string                       `json:"purpose,omitempty"`
-	State        map[string]string            `json:"state,omitempty"`
-	Commands     FlexMap `json:"commands,omitempty"`
-	Events       FlexMap `json:"events,omitempty"`
-	Invariants   []string                     `json:"invariants,omitempty"`
-	Implements   string                       `json:"implements,omitempty"`
-	Publishes    []string                     `json:"publishes,omitempty"`
-	Meta         Meta                         `json:"meta,omitempty"`
-	Entities     map[string]Entity            `json:"entities,omitempty"`
-	ValueObjects map[string]ValueObject       `json:"valueObjects,omitempty"`
-	Validations  []Validation                 `json:"validations,omitempty"`
-	Assets       map[string]Asset             `json:"assets,omitempty"`
+	Root         bool                   `json:"root,omitempty"`
+	Purpose      string                 `json:"purpose,omitempty"`
+	State        map[string]string      `json:"state,omitempty"`
+	Commands     FlexMap                `json:"commands,omitempty"`
+	Events       FlexMap                `json:"events,omitempty"`
+	Invariants   []string               `json:"invariants,omitempty"`
+	Implements   string                 `json:"implements,omitempty"`
+	Publishes    []string               `json:"publishes,omitempty"`
+	Meta         Meta                   `json:"meta,omitempty"`
+	Entities     map[string]Entity      `json:"entities,omitempty"`
+	ValueObjects map[string]ValueObject `json:"valueObjects,omitempty"`
+	Validations  []Validation           `json:"validations,omitempty"`
+	Assets       map[string]Asset       `json:"assets,omitempty"`
 }
 
 type Entity struct {
@@ -231,6 +232,27 @@ type Assertion struct {
 	Path     string `json:"path,omitempty"`
 	Pattern  string `json:"pattern,omitempty"`
 	Regex    string `json:"regex,omitempty"`
+}
+
+// Amendment is a resource-scoped, spec-resident correction (e.g. distilled from
+// a deep_review finding). Adding one to a resource's declaration changes its
+// hash, which makes the planner re-generate that resource in UPDATE mode.
+type Amendment struct {
+	Name       string      `json:"name"`              // stable kebab-case id within the resource
+	Prompt     string      `json:"prompt"`            // the targeted change instruction (data)
+	Origin     string      `json:"origin,omitempty"`  // "deep_review" | "manual" | "bugbot" | ...
+	Finding    *Finding    `json:"finding,omitempty"` // provenance
+	Validation *Validation `json:"validation,omitempty"`
+	Graduated  bool        `json:"graduated,omitempty"`
+	CreatedAt  string      `json:"createdAt,omitempty"`
+}
+
+// Finding is the provenance of an amendment drawn from a review.
+type Finding struct {
+	Severity string `json:"severity,omitempty"`
+	File     string `json:"file,omitempty"`
+	Line     int    `json:"line,omitempty"`
+	Text     string `json:"text,omitempty"`
 }
 
 type Invariant struct {

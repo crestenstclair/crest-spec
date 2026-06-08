@@ -31,6 +31,33 @@ func (r *Registry) Has(id string) bool {
 	return ok
 }
 
+// ResourceAmendments extracts the amendments list from a resource's declaration's
+// own Meta, regardless of its concrete declaration type. Amendments live on Meta
+// and are intentionally NOT inherited via mergeMeta, so we read the declaration's
+// own Meta here (consistent with what declHash marshals). Returns nil when none.
+func ResourceAmendments(r Resource) []Amendment {
+	switch d := r.Declaration.(type) {
+	case Aggregate:
+		return d.Meta.Amendments
+	case Entity:
+		return d.Meta.Amendments
+	case ValueObject:
+		return d.Meta.Amendments
+	case Adapter:
+		return d.Meta.Amendments
+	case Repository:
+		return d.Meta.Amendments
+	case DomainService:
+		return d.Meta.Amendments
+	case ApplicationService:
+		return d.Meta.Amendments
+	case Asset:
+		return d.Meta.Amendments
+	default:
+		return nil
+	}
+}
+
 func NewRegistry(project *Project) (*Registry, error) {
 	reg := &Registry{
 		Project:   project,

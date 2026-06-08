@@ -236,3 +236,18 @@ func TestPlan_DestroysFirst(t *testing.T) {
 	assert.Equal(t, ActionDestroy, actions[0].Kind)
 	assert.Equal(t, ActionCreate, actions[1].Kind)
 }
+
+func TestPlan_AmendmentChangesDeclarationHash(t *testing.T) {
+	vo := cuepkg.ValueObject{From: "f64", Invariants: []string{"finite"}}
+	before := declHashForTest(vo)
+
+	voAmended := vo
+	voAmended.Meta.Amendments = []cuepkg.Amendment{{Name: "validate", Prompt: "reject NaN"}}
+	after := declHashForTest(voAmended)
+
+	if before == after {
+		t.Fatalf("adding an amendment must change the declaration hash (before==after==%s)", before)
+	}
+}
+
+func declHashForTest(decl any) string { return declHash(decl) }

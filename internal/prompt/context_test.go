@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,4 +68,20 @@ func TestInjectRuntimeContext_Learnings(t *testing.T) {
 func TestInjectRuntimeContext_NoLearnings(t *testing.T) {
 	out := InjectRuntimeContext("BASE", RuntimeContext{})
 	assert.NotContains(t, out, "## Learnings From Past Runs")
+}
+
+func TestInjectRuntimeContext_UpdateMode(t *testing.T) {
+	out := InjectRuntimeContext("BASE PROMPT", RuntimeContext{
+		ExistingFiles:   map[string]string{"src/audio/equal_temperament.rs": "pub struct EqualTemperament;"},
+		ChangesRequired: "Reject 0.0/NaN/inf reference pitches in ::new.",
+	})
+	if !strings.Contains(out, "Reject 0.0/NaN/inf") {
+		t.Fatalf("expected CHANGES TO MAKE content, got:\n%s", out)
+	}
+	if !strings.Contains(out, "equal_temperament.rs") || !strings.Contains(out, "pub struct EqualTemperament;") {
+		t.Fatalf("expected existing file content, got:\n%s", out)
+	}
+	if !strings.Contains(out, "UPDATE MODE") {
+		t.Fatalf("expected update-mode framing, got:\n%s", out)
+	}
 }

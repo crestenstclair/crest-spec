@@ -358,8 +358,8 @@ func TestToolsList_ReturnsAllTools(t *testing.T) {
 	tools, ok := result["tools"].([]toolDef)
 	require.True(t, ok)
 
-	// 10 engine tools + 33 spec stubs = 43 total
-	assert.Len(t, tools, 43)
+	// 10 engine tools + 37 spec stubs = 47 total
+	assert.Len(t, tools, 47)
 
 	// Check that key engine tools exist
 	toolNames := make(map[string]bool)
@@ -384,6 +384,31 @@ func TestToolsList_ReturnsAllTools(t *testing.T) {
 	assert.True(t, toolNames["spec/begin"])
 	assert.True(t, toolNames["spec/sql"])
 	assert.True(t, toolNames["spec/unlock"])
+}
+
+func TestTools_AmendmentToolsRegistered(t *testing.T) {
+	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)
+
+	assert.Nil(t, resp.Error)
+	result, ok := resp.Result.(map[string]any)
+	require.True(t, ok)
+	tools, ok := result["tools"].([]toolDef)
+	require.True(t, ok)
+
+	toolNames := make(map[string]bool)
+	for _, td := range tools {
+		toolNames[td.Name] = true
+	}
+
+	for _, name := range []string{
+		"spec/propose_amendments",
+		"spec/apply_amendments",
+		"spec/list_amendments",
+		"spec/graduate_amendment",
+	} {
+		assert.True(t, toolNames[name], "expected tool %q to be registered", name)
+	}
 }
 
 func TestRunPrompt_ReturnsJobID(t *testing.T) {
@@ -715,6 +740,8 @@ func TestSpecToolStubs_ReturnNotImplemented(t *testing.T) {
 		"spec/history", "spec/graph", "spec/diff", "spec/state",
 		"spec/drift", "spec/vacuum", "spec/sql", "spec/unlock",
 		"spec/bootstrap", "spec/deep_review",
+		"spec/propose_amendments", "spec/apply_amendments",
+		"spec/list_amendments", "spec/graduate_amendment",
 	}
 
 	for _, tool := range specTools {

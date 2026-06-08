@@ -340,6 +340,10 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/run_wave", Description: "Dispatch an entire wave of resources in parallel", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"model":{"type":"string","description":"Default model"},"model_overrides":{"type":"object","description":"Per-resource model overrides"}},"required":["session_id"]}`)},
 		{Name: "spec/bootstrap", Description: "Check environment and set up crest-spec", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Override spec directory location"}}}`)},
 		{Name: "spec/deep_review", Description: "Comprehensive SOLID/DI/clean code/refactoring review of generated code", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to identify project context"},"target":{"type":"string","description":"Specific resource ID to review, or omit to review all committed resources"}},"required":["session_id"]}`)},
+		{Name: "spec/propose_amendments", Description: "Draft spec amendments from deep_review findings for a resource (or whole session).", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string"},"resource_id":{"type":"string"}},"required":["session_id"]}`)},
+		{Name: "spec/apply_amendments", Description: "Human-gated write-back of approved amendments into the CUE spec.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"proposals":{"type":"array","items":{"type":"object"}},"apply":{"type":"boolean"}},"required":["resource_id","proposals"]}`)},
+		{Name: "spec/list_amendments", Description: "List materialized amendments, optionally filtered by resource_id and/or state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"state":{"type":"string"}}}`)},
+		{Name: "spec/graduate_amendment", Description: "Human-gated: fold a VERIFIED amendment's intent into the resource's canonical invariants.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"name":{"type":"string"},"apply":{"type":"boolean"}},"required":["resource_id","name"]}`)},
 	}
 
 	for _, def := range stubs {
@@ -519,6 +523,28 @@ type specBootstrapArgs struct {
 type specWaveStatusArgs struct {
 	SessionID string `json:"session_id"`
 	WaveIndex int    `json:"wave_index"`
+}
+
+type specProposeAmendmentsArgs struct {
+	SessionID  string `json:"session_id"`
+	ResourceID string `json:"resource_id"`
+}
+
+type specApplyAmendmentsArgs struct {
+	ResourceID string                      `json:"resource_id"`
+	Proposals  []specmod.ProposedAmendment `json:"proposals"`
+	Apply      bool                        `json:"apply"`
+}
+
+type specListAmendmentsArgs struct {
+	ResourceID string `json:"resource_id"`
+	State      string `json:"state"`
+}
+
+type specGraduateAmendmentArgs struct {
+	ResourceID string `json:"resource_id"`
+	Name       string `json:"name"`
+	Apply      bool   `json:"apply"`
 }
 
 // ---------------------------------------------------------------------------
@@ -900,6 +926,38 @@ func (s *Server) registerSpecQueryTools() {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Override spec directory location"}}}`),
 	}, specTool("bootstrap", func(ctx context.Context, a specBootstrapArgs) (any, error) {
 		return s.spec.Bootstrap(ctx, specmod.BootstrapOpts{SpecDir: a.SpecDir})
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/propose_amendments",
+		Description: "Draft spec amendments from deep_review findings for a resource (or whole session). Returns proposals only — writes nothing. Review, then pass approved proposals to spec/apply_amendments.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string"},"resource_id":{"type":"string"}},"required":["session_id"]}`),
+	}, specTool("propose_amendments", func(ctx context.Context, a specProposeAmendmentsArgs) (any, error) {
+		return s.spec.ProposeAmendments(ctx, a.SessionID, a.ResourceID)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/apply_amendments",
+		Description: "Human-gated write-back: writes approved amendments into the CUE spec as an override file. apply=false (default) returns the CUE diff for review and writes nothing; apply=true writes it. After approval, normal plan/begin re-renders the resource in UPDATE mode.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"proposals":{"type":"array","items":{"type":"object"}},"apply":{"type":"boolean"}},"required":["resource_id","proposals"]}`),
+	}, specTool("apply_amendments", func(ctx context.Context, a specApplyAmendmentsArgs) (any, error) {
+		return s.spec.ApplyAmendments(ctx, a.ResourceID, a.Proposals, a.Apply)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/list_amendments",
+		Description: "List materialized amendments, optionally filtered by resource_id and/or state (PENDING|APPLIED|VERIFIED|GRADUATED|FAILED).",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"state":{"type":"string"}}}`),
+	}, specTool("list_amendments", func(ctx context.Context, a specListAmendmentsArgs) (any, error) {
+		return s.spec.ListAmendments(ctx, a.ResourceID, a.State)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/graduate_amendment",
+		Description: "Human-gated: fold a VERIFIED amendment's intent into the resource's canonical invariants and remove the amendment. apply=false returns the CUE diff; apply=true writes it. Run a force clean regen afterward to confirm the intent survives without the amendment.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"name":{"type":"string"},"apply":{"type":"boolean"}},"required":["resource_id","name"]}`),
+	}, specTool("graduate_amendment", func(ctx context.Context, a specGraduateAmendmentArgs) (any, error) {
+		return s.spec.GraduateAmendment(ctx, a.ResourceID, a.Name, a.Apply)
 	}))
 }
 
