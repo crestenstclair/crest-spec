@@ -8,7 +8,9 @@ ON CONFLICT(resource_id, name) DO UPDATE SET
     finding_json      = excluded.finding_json,
     validation_json   = excluded.validation_json,
     state             = excluded.state,
-    applied_spec_hash = excluded.applied_spec_hash;
+    applied_spec_hash = excluded.applied_spec_hash,
+    applied_at        = excluded.applied_at,
+    graduated_at      = excluded.graduated_at;
 
 -- name: ListAmendmentsByResource :many
 SELECT * FROM amendments WHERE resource_id = ? ORDER BY created_at ASC;
