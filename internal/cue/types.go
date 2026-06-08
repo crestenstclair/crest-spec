@@ -91,8 +91,9 @@ type Project struct {
 	Adapters   map[string]Adapter    `json:"adapters"`
 	AssetKinds map[string]AssetKind  `json:"assetKinds"`
 	Assets     map[string]Asset      `json:"assets"`
-	Invariants FlexInvariants    `json:"invariants"`
-	ContextMap FlexContextMap   `json:"contextMap"`
+	Invariants  FlexInvariants    `json:"invariants"`
+	ContextMap  FlexContextMap    `json:"contextMap"`
+	Validations []Validation      `json:"validations,omitempty"`
 }
 
 type LayerRule struct {

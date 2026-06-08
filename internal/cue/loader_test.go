@@ -1,6 +1,7 @@
 package cue
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -108,4 +109,21 @@ func TestLoad_Invalid(t *testing.T) {
 func TestLoad_NonexistentDir(t *testing.T) {
 	_, err := Load("/nonexistent/path")
 	assert.Error(t, err)
+}
+
+func TestLoad_ProjectValidations(t *testing.T) {
+	dir := t.TempDir()
+	cue := `package p
+project: name: "v"
+project: validations: [
+	{kind: "compiles", command: ["cargo", "build"], description: "builds"},
+	{kind: "test", command: ["cargo", "test"]},
+]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.cue"), []byte(cue), 0o644))
+	p, err := Load(dir)
+	require.NoError(t, err)
+	require.Len(t, p.Validations, 2)
+	assert.Equal(t, "compiles", p.Validations[0].Kind)
+	assert.Equal(t, []string{"cargo", "build"}, p.Validations[0].Command)
 }
