@@ -155,6 +155,10 @@ type specHandler interface {
 	Evolve(ctx context.Context, sessionID string) (int, error)
 	ListLearnings(status string) ([]storemod.Learning, error)
 	PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (specmod.PromoteResult, error)
+	ProposeAmendments(ctx context.Context, sessionID, resourceID string) ([]specmod.ProposedAmendment, error)
+	ApplyAmendments(ctx context.Context, resourceID string, proposals []specmod.ProposedAmendment, apply bool) (*specmod.AmendmentApplyResult, error)
+	ListAmendments(ctx context.Context, resourceID, state string) ([]storemod.Amendment, error)
+	GraduateAmendment(ctx context.Context, resourceID, name string, apply bool) (*specmod.GraduationResult, error)
 }
 
 // ---------------------------------------------------------------------------
