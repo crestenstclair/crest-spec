@@ -64,6 +64,7 @@ func BuildSystemPrompt(project *cuepkg.Project) string {
 	}
 
 	b.WriteString(renderTemplate("output_requirements.md", lang, ext))
+	// No separator here: the rust addendum continues the same section rather than starting a new one.
 	if lang == "rust" {
 		b.WriteString(renderTemplate("output_requirements_rust.md", lang, ext))
 	}
