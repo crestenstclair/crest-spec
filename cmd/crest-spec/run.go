@@ -14,7 +14,16 @@ func cmdRun(args []string) {
 	ensureMCPConfig(specDir, flags.model)
 	prompt := buildRunPrompt()
 
-	claudeArgs := []string{"--permission-mode", "bypassPermissions", prompt}
+	claudeArgs := []string{}
+	if flags.remoteControl {
+		claudeArgs = append(claudeArgs, "--remote-control")
+		if flags.sessionName != "" {
+			// Optional name for the Remote Control session (claude treats the
+			// value following --remote-control as the session name).
+			claudeArgs = append(claudeArgs, flags.sessionName)
+		}
+	}
+	claudeArgs = append(claudeArgs, "--permission-mode", "bypassPermissions", prompt)
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claude CLI not found in PATH\n")
@@ -29,8 +38,10 @@ func cmdRun(args []string) {
 }
 
 type runFlags struct {
-	specDir string
-	model   string
+	specDir       string
+	model         string
+	remoteControl bool
+	sessionName   string
 }
 
 func parseRunFlags(args []string) runFlags {
@@ -48,6 +59,15 @@ func parseRunFlags(args []string) runFlags {
 		case "--model":
 			if i+1 < len(args) {
 				f.model = args[i+1]
+				i++
+			}
+		case "--remote-control":
+			// Launch the claude session with Remote Control enabled so it can be
+			// monitored/driven from claude.ai or the Claude mobile app.
+			f.remoteControl = true
+		case "--session-name":
+			if i+1 < len(args) {
+				f.sessionName = args[i+1]
 				i++
 			}
 		}

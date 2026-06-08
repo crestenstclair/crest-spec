@@ -71,8 +71,11 @@ for phase in $(seq "$START" "$END"); do
   echo "══════════════════════════════════════════════════════"
   echo ""
 
-  # Launch generation session via crest-spec run
-  (cd "$WORK_DIR" && "$CLI" run --spec-dir "$SPEC_DIR")
+  # Launch generation session via crest-spec run, with Remote Control enabled so
+  # the session can be monitored/driven from claude.ai or the Claude mobile app.
+  # Each phase gets its own named Remote Control session for easy identification.
+  (cd "$WORK_DIR" && "$CLI" run --spec-dir "$SPEC_DIR" \
+    --remote-control --session-name "crest-synth phase ${phase}")
 
   echo ""
   echo "Phase ${phase} complete."
