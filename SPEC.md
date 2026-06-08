@@ -1335,6 +1335,97 @@ Within a wave, resources are dispatched concurrently (up to `MaxConcurrency`). A
 
 ---
 
+## 8A. Amendments
+
+Section 8.6 covers *in-flight* resolution: a resource fails mid-apply and the orchestrator unblocks it with `spec/resolve` / `spec/amend` / `spec/skip`. **Amendments** address a different problem — correcting a resource that already generated cleanly but whose committed output is wrong in some durable way (for example, a SOLID violation surfaced by a post-hoc `spec/deep_review`).
+
+An amendment is a **resource-scoped, spec-resident correction**: a targeted change request written onto the resource's declaration so it becomes a durable, incrementally-applied modification that flows through the normal generation loop. Instead of an advisory review finding that evaporates, the finding is distilled into a small instruction that lives in the spec, re-applies deterministically, and can be verified and eventually retired.
+
+### 8A.1 Where Amendments Live
+
+Amendments are authored on the shared `meta.amendments` list, available on any resource (via the `Meta` struct). They are **not inherited by child resources** — an amendment on an aggregate does not flow down to its entities.
+
+```cue
+project: contexts: Synth: aggregates: Voice: meta: {
+    amendments: [
+        {
+            name:   "validate-reference-pitch"          // stable kebab-case id, unique within the resource
+            prompt: "Reject 0.0, NaN, and infinity for the reference pitch; return an error instead of producing a degenerate frequency."
+            origin: "deep_review"                        // "deep_review" | "manual" | "bugbot" | ...
+            finding: {                                   // optional provenance, carried from the review
+                severity: "high"
+                file:     "src/Synth/Voice/Voice.rs"
+                text:     "reference pitch is not validated; 0.0 yields a NaN frequency"
+            }
+            validation: {                                // optional — added to the resource's validation set on commit
+                kind:    "test"
+                command: ["cargo", "test", "--lib", "voice::reference_pitch"]
+            }
+        },
+    ]
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `name` | Stable kebab-case id, unique within the resource. Used to address the amendment for listing/graduation. |
+| `prompt` | The targeted change instruction — pure data appended to the resource's regeneration prompt. |
+| `origin` | Where the amendment came from (`deep_review`, `manual`, `bugbot`, …). |
+| `finding` | Optional provenance from a review (`severity`, `file`, `line`, `text`). |
+| `validation` | Optional validation (same shape as section 1.4) added to the resource's validation set on commit, so the amendment's intent is *checked*, not assumed. |
+
+### 8A.2 Mechanism — Riding the Spec-Hash Path
+
+Adding an amendment changes the resource's **declaration hash**, so the planner emits an `ActionModify` for that resource and it regenerates (see section 5.1). This rides the normal spec-hash cascade — it is **not** file-hash drift detection (`spec/drift`, section 5.1 / 9.3), which tracks hand-edits on disk and is a separate mechanism.
+
+Regeneration happens in **UPDATE mode**. Rather than regenerating from scratch, the generation sub-agent receives the existing committed files plus a flagged **"CHANGES TO MAKE"** block containing the pending amendment prompts, and produces a *minimal diff*. UPDATE mode is generic: any already-generated resource that needs re-rendering uses it — amendments are simply the most common trigger.
+
+### 8A.3 `applied` Is Derived, Not Stored
+
+There is no `applied` flag on an amendment. An amendment is **APPLIED iff the resource's committed output was generated from a spec snapshot that included it** — i.e. the stored declaration hash equals the current declaration hash. This makes "applied" a pure function of state, with no flag to drift out of sync.
+
+A SQLite `amendments` table **materializes** this status for querying (`spec/list_amendments`). The table is reconciled from the spec on session begin and is **never an independent source of truth** — the spec plus the resource's stored hash is authoritative; the table is a derived index.
+
+### 8A.4 Lifecycle
+
+```
+PENDING ──► APPLIED ──► VERIFIED ──► GRADUATED
+                │
+                └──► FAILED   (off-ramp)
+```
+
+| State | Meaning |
+|-------|---------|
+| `PENDING` | Written into the spec, not yet regenerated/committed. |
+| `APPLIED` | The resource was committed from a spec hash that contains the amendment (derived — see 8A.3). Applied does **not** mean fixed. |
+| `VERIFIED` | The amendment's `validation` passed (or a re-run `spec/deep_review` no longer reports the finding), confirming the intent was actually achieved. |
+| `GRADUATED` | Human-gated: the amendment's intent has been folded into the resource's canonical `invariants` and the amendment removed, so the spec describes the system cleanly instead of accumulating a patch log. A forced clean regeneration must still pass afterward. |
+| `FAILED` | Validation never passes. Surfaced for re-draft; a partial fix is **not** committed. |
+
+**Why graduate?** Without graduation a long-lived resource accumulates an ever-growing list of patch prompts. Graduation distills the durable intent ("reject degenerate reference pitch") into a first-class `invariant` and drops the transient amendment — the spec stays a clean description of the system, not a changelog.
+
+### 8A.5 Tools
+
+All amendment tools that write are **human-gated**: the write path takes an explicit `apply` flag, and with `apply=false` the tool returns the CUE diff for review and writes nothing.
+
+| Tool | Sync/Async | Purpose |
+|------|-----------|---------|
+| `spec/propose_amendments` | sync | Runs `spec/deep_review` over the target (a single `resource_id`, or the whole session) and asks the LLM to draft a `{name, prompt, finding}` per actionable finding. **Returns proposals only — writes nothing.** |
+| `spec/apply_amendments` | sync | Human-gated write-back of approved `proposals` into the CUE spec as an override file. `apply=false` returns the CUE diff for review (writes nothing); `apply=true` writes it. After approval, the next `spec/plan` / `spec/begin` re-renders the resource in UPDATE mode. |
+| `spec/list_amendments` | sync | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. |
+| `spec/graduate_amendment` | sync | Human-gated fold of a `VERIFIED` amendment (by `resource_id` + `name`) into the resource's canonical `invariants`, removing the amendment. `apply=false` previews the CUE diff; `apply=true` writes it. |
+
+### 8A.6 Typical Flow
+
+1. After a clean apply, run `spec/deep_review` (or `spec/propose_amendments`, which runs it) to surface durable findings.
+2. `spec/propose_amendments` drafts `{name, prompt, finding}` proposals — no writes.
+3. Review the proposals; pass the approved ones to `spec/apply_amendments` with `apply=false` to preview the CUE diff, then `apply=true` to write the override.
+4. `spec/plan` / `spec/begin` now shows the resource as `~` (declaration changed) and re-renders it in **UPDATE mode** with the amendment prompts in the "CHANGES TO MAKE" block. The amendment becomes `APPLIED` once committed.
+5. The amendment's `validation` runs on commit (or re-run `spec/deep_review`); on pass the amendment is `VERIFIED`, on persistent failure `FAILED` (re-draft, don't commit a partial fix).
+6. Once `VERIFIED` and stable, `spec/graduate_amendment` folds the intent into canonical `invariants` and removes the amendment — a forced clean regeneration must still pass.
+
+---
+
 ## 9. MCP Server Interface
 
 The Go binary exposes the plan/apply lifecycle as MCP tools. An AI agent (Claude Code, or any MCP-capable client) connects to it and drives the lifecycle through tool calls.
@@ -1402,6 +1493,11 @@ The server exposes two groups of tools: **spec tools** (the plan/apply lifecycle
 | `spec/resolve` | sync | Provide guidance for a blocked/errored/rejected/timed_out resource. Answer is injected into the prompt; resource is re-dispatched. See section 8.6. |
 | `spec/amend` | sync | Signal that the CUE spec has been updated for a resource. Re-loads spec, re-computes hashes, updates the in-flight plan, re-dispatches. See section 8.6. |
 | `spec/skip` | sync | Skip a failed resource. Transitions to `skipped` (terminal); wave proceeds without it. See section 8.6. |
+| `spec/deep_review` | **async** | Comprehensive SOLID/DI/clean-code/refactoring review of committed code (a `target` resource or all committed resources). The signal source for amendments. Returns a job ID. |
+| `spec/propose_amendments` | sync | Runs `spec/deep_review` and drafts `{name, prompt, finding}` amendment proposals per actionable finding. Returns proposals only — writes nothing. See section 8A. |
+| `spec/apply_amendments` | sync | Human-gated write-back of approved amendment proposals into the CUE spec. `apply=false` returns the CUE diff; `apply=true` writes it. See section 8A. |
+| `spec/list_amendments` | sync | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. See section 8A. |
+| `spec/graduate_amendment` | sync | Human-gated fold of a `VERIFIED` amendment into the resource's canonical `invariants` (then removes it). `apply=false` previews the diff; `apply=true` writes it. See section 8A. |
 | `spec/finish` | sync | Finalize the session: release lock, return summary. |
 | `spec/status` | sync | Show current state — resources in state, active session, lock status. |
 | `spec/log` | sync | List past applies with status. |
