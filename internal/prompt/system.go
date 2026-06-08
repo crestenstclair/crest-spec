@@ -69,5 +69,10 @@ func BuildSystemPrompt(project *cuepkg.Project) string {
 		b.WriteString(renderTemplate("output_requirements_rust.md", lang, ext))
 	}
 
+	if s := renderLearned(lang); s != "" {
+		b.WriteString("\n")
+		b.WriteString(s)
+	}
+
 	return b.String()
 }
