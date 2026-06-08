@@ -36,7 +36,7 @@ type runFlags struct {
 func parseRunFlags(args []string) runFlags {
 	f := runFlags{
 		specDir: "./spec",
-		model:   "claude-opus-4-8",
+		model:   "claude-sonnet-4-6",
 	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
