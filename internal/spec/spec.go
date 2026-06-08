@@ -73,6 +73,13 @@ type specStore interface {
 	ListLearnings(status string) ([]store.Learning, error)
 	CreateLearning(l store.Learning) error
 	UpdateLearningStatus(id, status string) error
+	UpsertAmendment(a store.Amendment) error
+	GetAmendment(resourceID, name string) (*store.Amendment, error)
+	ListAmendmentsByResource(resourceID string) ([]store.Amendment, error)
+	ListAmendmentsByState(state string) ([]store.Amendment, error)
+	ListAllAmendments() ([]store.Amendment, error)
+	UpdateAmendmentState(id, state, appliedSpecHash string, appliedAt, graduatedAt time.Time) error
+	DeleteAmendment(resourceID, name string) error
 }
 
 type Spec struct {

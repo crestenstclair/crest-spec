@@ -158,6 +158,21 @@ func (s *stubStore) ListLearnings(status string) ([]store.Learning, error) {
 }
 func (s *stubStore) CreateLearning(l store.Learning) error        { return nil }
 func (s *stubStore) UpdateLearningStatus(id, status string) error { return nil }
+func (s *stubStore) UpsertAmendment(a store.Amendment) error      { return nil }
+func (s *stubStore) GetAmendment(resourceID, name string) (*store.Amendment, error) {
+	return nil, nil
+}
+func (s *stubStore) ListAmendmentsByResource(resourceID string) ([]store.Amendment, error) {
+	return nil, nil
+}
+func (s *stubStore) ListAmendmentsByState(state string) ([]store.Amendment, error) {
+	return nil, nil
+}
+func (s *stubStore) ListAllAmendments() ([]store.Amendment, error) { return nil, nil }
+func (s *stubStore) UpdateAmendmentState(id, state, appliedSpecHash string, appliedAt, graduatedAt time.Time) error {
+	return nil
+}
+func (s *stubStore) DeleteAmendment(resourceID, name string) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Tests
