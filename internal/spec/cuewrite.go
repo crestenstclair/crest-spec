@@ -2,7 +2,12 @@ package spec
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+
+	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 )
 
 type amendmentEntry struct {
@@ -80,4 +85,71 @@ func renderAmendmentOverride(pkg, name, kind, contextName string, entries []amen
 	}
 	b.WriteString("]\n")
 	return b.String()
+}
+
+// toEntry converts a loaded cue.Amendment into the renderer's amendmentEntry.
+func toEntry(a cuepkg.Amendment) amendmentEntry {
+	return amendmentEntry{
+		Name:    a.Name,
+		Prompt:  a.Prompt,
+		Origin:  a.Origin,
+		Finding: toFindingEntry(a.Finding),
+	}
+}
+
+// toFindingEntry maps a cue.Finding to a findingEntry, nil-safe.
+func toFindingEntry(f *cuepkg.Finding) *findingEntry {
+	if f == nil {
+		return nil
+	}
+	return &findingEntry{
+		Severity: f.Severity,
+		File:     f.File,
+		Line:     f.Line,
+		Text:     f.Text,
+	}
+}
+
+// sortEntriesByName orders entries by Name for deterministic override output.
+func sortEntriesByName(entries []amendmentEntry) {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+}
+
+// resourceShortName returns the last "."-separated segment of a registry id
+// (e.g. "valueObject.Audio.EqualTemperament" → "EqualTemperament").
+func resourceShortName(id string) string {
+	if i := strings.LastIndex(id, "."); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+// cuePackageName reads the `package <name>` clause from any .cue file in the
+// spec dir, defaulting to "crestsynth" when none is found.
+func (s *Spec) cuePackageName() string {
+	entries, err := os.ReadDir(s.cfg.SpecDir)
+	if err != nil {
+		return "crestsynth"
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".cue") {
+			continue
+		}
+		data, err := s.fs.ReadFile(filepath.Join(s.cfg.SpecDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "package ") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "package "))
+			}
+		}
+	}
+	return "crestsynth"
+}
+
+// amendmentOverridePath is the spec-dir path of a resource's override file.
+func (s *Spec) amendmentOverridePath(shortName string) string {
+	return filepath.Join(s.cfg.SpecDir, "override-"+shortName+".cue")
 }

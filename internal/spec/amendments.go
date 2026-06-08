@@ -23,6 +23,76 @@ type ProposedAmendment struct {
 	Finding    *cuepkg.Finding `json:"finding,omitempty"`
 }
 
+// AmendmentApplyResult is the outcome of a (preview or applied) write-back.
+type AmendmentApplyResult struct {
+	OverridePath string `json:"override_path"`
+	Diff         string `json:"diff"`
+	Applied      bool   `json:"applied"`
+	Count        int    `json:"count"`
+}
+
+// ApplyAmendments writes approved amendments for a resource into a CUE override
+// file. Human-gated: apply=false returns the rendered override for review and
+// mutates nothing; apply=true writes the file and materializes PENDING rows.
+func (s *Spec) ApplyAmendments(ctx context.Context, resourceID string, proposals []ProposedAmendment, apply bool) (*AmendmentApplyResult, error) {
+	planResult, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plan for apply_amendments: %w", err)
+	}
+	r, ok := planResult.Registry.Resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource not found: %s", resourceID)
+	}
+	// Merge existing amendments + approved proposals, keyed by name (proposal wins).
+	merged := map[string]amendmentEntry{}
+	for _, a := range cuepkg.ResourceAmendments(r) {
+		merged[a.Name] = toEntry(a)
+	}
+	for _, p := range proposals {
+		merged[p.Name] = amendmentEntry{Name: p.Name, Prompt: p.Prompt, Origin: p.Origin, Finding: toFindingEntry(p.Finding)}
+	}
+	entries := make([]amendmentEntry, 0, len(merged))
+	for _, e := range merged {
+		entries = append(entries, e)
+	}
+	sortEntriesByName(entries)
+
+	pkg := s.cuePackageName()
+	shortName := resourceShortName(resourceID)
+	overridePath := s.amendmentOverridePath(shortName)
+	body := renderAmendmentOverride(pkg, shortName, r.Kind, r.ContextName, entries)
+
+	result := &AmendmentApplyResult{OverridePath: overridePath, Diff: body, Count: len(proposals)}
+	if !apply {
+		return result, nil
+	}
+	if err := s.fs.WriteFile(overridePath, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("write override: %w", err)
+	}
+	for _, p := range proposals {
+		findingJSON := ""
+		if p.Finding != nil {
+			b, _ := json.Marshal(p.Finding)
+			findingJSON = string(b)
+		}
+		if err := s.store.UpsertAmendment(store.Amendment{
+			ID:          resourceID + "::" + p.Name,
+			ResourceID:  resourceID,
+			Name:        p.Name,
+			ContentHash: amendmentContentHash(cuepkg.Amendment{Name: p.Name, Prompt: p.Prompt, Finding: p.Finding}),
+			Origin:      p.Origin,
+			Prompt:      p.Prompt,
+			FindingJSON: findingJSON,
+			State:       "PENDING",
+			CreatedAt:   time.Now().UTC(),
+		}); err != nil {
+			return nil, fmt.Errorf("upsert amendment %s/%s: %w", resourceID, p.Name, err)
+		}
+	}
+	result.Applied = true
+	return result, nil
+}
+
 // ProposeAmendments runs deep_review over the target and asks the LLM to draft
 // amendments from the findings. Writes nothing — the result is a proposal for
 // human review, fed to ApplyAmendments on approval. Drafting is per-finding

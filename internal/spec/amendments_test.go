@@ -213,3 +213,72 @@ func TestProposeAmendments(t *testing.T) {
 	assert.Equal(t, resourceID, result[0].ResourceID)
 	assert.Equal(t, "deep_review", result[0].Origin)
 }
+
+// applyAmendmentsBaseCUE is a minimal spec declaring a value object
+// EqualTemperament in context Audio, so Plan/registry resolves the resource
+// "valueObject.Audio.EqualTemperament" for ApplyAmendments to target.
+const applyAmendmentsBaseCUE = `package crestsynth
+
+project: name: "rt"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: EqualTemperament: {from: "f64"}
+`
+
+// TestApplyAmendments_PreviewVsApply exercises the human-gated write-back:
+// apply=false returns the override diff and mutates nothing (no file, no rows);
+// apply=true writes the override file and materializes a PENDING row.
+func TestApplyAmendments_PreviewVsApply(t *testing.T) {
+	ctx := context.Background()
+
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { st.Close() })
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+
+	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
+	s := New(nil, st, OSFileSystem{}, cfg)
+
+	const resourceID = "valueObject.Audio.EqualTemperament"
+	expectedOverridePath := filepath.Join(dir, "override-EqualTemperament.cue")
+
+	proposals := []ProposedAmendment{{
+		ResourceID: resourceID,
+		Name:       "validate-reference-pitch",
+		Prompt:     "reject 0.0/NaN/inf",
+		Origin:     "deep_review",
+	}}
+
+	// Preview: apply=false returns the diff and writes nothing.
+	preview, err := s.ApplyAmendments(ctx, resourceID, proposals, false)
+	require.NoError(t, err)
+	assert.False(t, preview.Applied)
+	assert.Equal(t, expectedOverridePath, preview.OverridePath)
+	assert.Contains(t, preview.Diff, "meta: amendments:")
+	assert.Contains(t, preview.Diff, "validate-reference-pitch")
+
+	_, statErr := os.Stat(expectedOverridePath)
+	assert.True(t, os.IsNotExist(statErr), "preview must not write the override file")
+
+	rows, err := st.ListAmendmentsByResource(resourceID)
+	require.NoError(t, err)
+	assert.Len(t, rows, 0, "preview must not materialize amendment rows")
+
+	// Apply: apply=true writes the file and upserts a PENDING row.
+	applied, err := s.ApplyAmendments(ctx, resourceID, proposals, true)
+	require.NoError(t, err)
+	assert.True(t, applied.Applied)
+	assert.Equal(t, expectedOverridePath, applied.OverridePath)
+
+	onDisk, err := os.ReadFile(expectedOverridePath)
+	require.NoError(t, err, "apply must write the override file")
+	assert.Equal(t, applied.Diff, string(onDisk))
+	assert.Contains(t, string(onDisk), "validate-reference-pitch")
+
+	rows, err = st.ListAmendmentsByResource(resourceID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "validate-reference-pitch", rows[0].Name)
+	assert.Equal(t, "PENDING", rows[0].State)
+}
