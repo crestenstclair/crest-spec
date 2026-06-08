@@ -63,6 +63,8 @@ type specStore interface {
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)
 	ReadOnlyQuery(query string) ([]map[string]interface{}, error)
+	ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error)
+	IncrementLearningApplied(id string) error
 }
 
 type Spec struct {

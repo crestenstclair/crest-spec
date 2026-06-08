@@ -60,6 +60,21 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 		}
 	}
 
+	// Inject craft-level learnings scoped to this language + resource kind.
+	const learningsInjectionCap = 10
+	lang := registry.Project.Meta.Language
+	if lang != "" {
+		learnings, err := s.store.ListActiveLearnings(lang, resource.Kind, learningsInjectionCap)
+		if err == nil && len(learnings) > 0 {
+			texts := make([]string, len(learnings))
+			for i, l := range learnings {
+				texts[i] = l.Text
+				_ = s.store.IncrementLearningApplied(l.ID)
+			}
+			ctx.Learnings = texts
+		}
+	}
+
 	return ctx, nil
 }
 

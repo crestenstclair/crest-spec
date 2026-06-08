@@ -54,3 +54,17 @@ func TestInjectRuntimeContext_PartialFields(t *testing.T) {
 	assert.NotContains(t, result, "Previous Errors")
 	assert.NotContains(t, result, "User Guidance")
 }
+
+func TestInjectRuntimeContext_Learnings(t *testing.T) {
+	out := InjectRuntimeContext("BASE", RuntimeContext{
+		Learnings: []string{"prefer blocking send", "derive PartialEq manually for NaN floats"},
+	})
+	assert.Contains(t, out, "## Learnings From Past Runs")
+	assert.Contains(t, out, "prefer blocking send")
+	assert.Contains(t, out, "derive PartialEq manually for NaN floats")
+}
+
+func TestInjectRuntimeContext_NoLearnings(t *testing.T) {
+	out := InjectRuntimeContext("BASE", RuntimeContext{})
+	assert.NotContains(t, out, "## Learnings From Past Runs")
+}

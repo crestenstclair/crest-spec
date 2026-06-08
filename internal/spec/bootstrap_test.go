@@ -141,6 +141,10 @@ func (s *stubStore) UpdateSessionResourcePhase(sessionID, resourceID, phase stri
 	return nil
 }
 func (s *stubStore) SetSessionResourceDispatched(sessionID, resourceID string) error { return nil }
+func (s *stubStore) ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error) {
+	return nil, nil
+}
+func (s *stubStore) IncrementLearningApplied(id string) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Tests

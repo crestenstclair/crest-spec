@@ -11,6 +11,7 @@ type RuntimeContext struct {
 	ModuleFiles     map[string]string // path → content of existing module declaration files (lib.rs, mod.rs, __init__.py, etc.)
 	DependencyFiles map[string]string
 	AgentNotes      map[string]string
+	Learnings       []string
 	WaveErrors      string
 	UserGuidance    string
 }
@@ -52,6 +53,16 @@ func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
 		for _, id := range keys {
 			notes := ctx.AgentNotes[id]
 			b.WriteString(fmt.Sprintf("### %s\n\n%s\n\n", id, notes))
+		}
+		sections = append(sections, b.String())
+	}
+
+	if len(ctx.Learnings) > 0 {
+		var b strings.Builder
+		b.WriteString("## Learnings From Past Runs\n\n")
+		b.WriteString("Apply these craft guidelines distilled from earlier generations:\n\n")
+		for _, l := range ctx.Learnings {
+			b.WriteString("- " + l + "\n")
 		}
 		sections = append(sections, b.String())
 	}

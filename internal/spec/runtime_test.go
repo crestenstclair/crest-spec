@@ -6,7 +6,49 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/crestenstclair/crest-spec/internal/config"
+	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	"github.com/crestenstclair/crest-spec/internal/store"
 )
+
+// learningsFakeStore satisfies specStore for tests of buildRuntimeContext.
+// Only the learnings methods are exercised; everything else delegates to the
+// embedded nil interface and will panic only if unexpectedly called.
+type learningsFakeStore struct {
+	specStore
+	learnings []store.Learning
+	gotLang   string
+	gotKind   string
+}
+
+func (f *learningsFakeStore) ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error) {
+	f.gotLang, f.gotKind = lang, kind
+	return f.learnings, nil
+}
+func (f *learningsFakeStore) IncrementLearningApplied(id string) error { return nil }
+func (f *learningsFakeStore) GetGeneratedFiles(string) ([]store.GeneratedFile, error) {
+	return nil, nil
+}
+func (f *learningsFakeStore) GetNote(string, string) (string, error) { return "", nil }
+
+func TestBuildRuntimeContext_InjectsLearnings(t *testing.T) {
+	fake := &learningsFakeStore{
+		learnings: []store.Learning{
+			{ID: "l1", Text: "prefer blocking send", ScopeLang: "rust", ScopeKind: "adapter"},
+		},
+	}
+	cfg := &config.Config{SpecDir: t.TempDir() + "/spec"}
+	s := &Spec{store: fake, cfg: cfg, fs: OSFileSystem{}}
+	reg := &cuepkg.Registry{Project: &cuepkg.Project{Meta: cuepkg.Meta{Language: "rust"}}}
+	res := cuepkg.Resource{ID: "adapter.Foo", Kind: "adapter"}
+
+	ctx, err := s.buildRuntimeContext(res, reg, "apply1")
+	require.NoError(t, err)
+	require.Contains(t, ctx.Learnings, "prefer blocking send")
+	assert.Equal(t, "rust", fake.gotLang)
+	assert.Equal(t, "adapter", fake.gotKind)
+}
 
 func TestBuildModuleTree(t *testing.T) {
 	dir := t.TempDir()
