@@ -3,6 +3,9 @@ package spec
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
@@ -69,6 +72,7 @@ type specStore interface {
 	IncrementLearningApplied(id string) error
 	ListLearnings(status string) ([]store.Learning, error)
 	CreateLearning(l store.Learning) error
+	UpdateLearningStatus(id, status string) error
 }
 
 type Spec struct {
@@ -177,6 +181,121 @@ func (s *Spec) ListLearnings(status string) ([]store.Learning, error) {
 		status = "active"
 	}
 	return s.store.ListLearnings(status)
+}
+
+// PromoteResult is the outcome of a (preview or applied) promotion run.
+type PromoteResult struct {
+	// Promotable is the set of active learnings selected for promotion.
+	Promotable []store.Learning
+	// MarkdownBlock is the rendered block that would be (or was) appended to
+	// the target learned template. Empty when nothing qualifies.
+	MarkdownBlock string
+	// TargetPath is the learned template the block targets.
+	TargetPath string
+	// Applied reports whether the block was written and the learnings marked
+	// promoted (false for a preview).
+	Applied bool
+}
+
+// PromoteLearnings selects active learnings above the given thresholds and
+// either previews (apply=false) or durably writes (apply=true) them into the
+// per-language learned template. Promotion is human-gated: with apply=false this
+// mutates nothing — it only returns the proposed block — and the caller (a human
+// reviewing the diff) opts in by re-invoking with apply=true.
+//
+//   - lang scopes the selection: a learning matches when its scope_lang is empty
+//     (applies to any language) or equals lang. An empty lang selects all
+//     learnings and defaults the template path's language segment to "rust".
+//   - minConfidence/minTimesApplied default to 0.8 / 3 when the caller passes 0.
+//   - templatePath overrides the default
+//     "internal/prompt/templates/learned/<lang>.md" target.
+//
+// On apply, the block is appended (creating parent dirs and ensuring a
+// separating newline) and each promoted learning's status is set to "promoted"
+// so it is no longer injected at runtime.
+func (s *Spec) PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (PromoteResult, error) {
+	if minConfidence == 0 {
+		minConfidence = 0.8
+	}
+	if minTimesApplied == 0 {
+		minTimesApplied = 3
+	}
+
+	targetLang := lang
+	if targetLang == "" {
+		targetLang = "rust"
+	}
+	if templatePath == "" {
+		templatePath = "internal/prompt/templates/learned/" + targetLang + ".md"
+	}
+
+	active, err := s.store.ListLearnings("active")
+	if err != nil {
+		return PromoteResult{}, fmt.Errorf("list active learnings: %w", err)
+	}
+
+	// Scope by language: keep cross-language (empty scope) and exact matches.
+	var scoped []store.Learning
+	for _, l := range active {
+		if lang == "" || l.ScopeLang == "" || l.ScopeLang == lang {
+			scoped = append(scoped, l)
+		}
+	}
+
+	promotable := evolve.SelectPromotable(scoped, minConfidence, minTimesApplied)
+	block := evolve.RenderPromotionBlock(promotable)
+
+	result := PromoteResult{
+		Promotable:    promotable,
+		MarkdownBlock: block,
+		TargetPath:    templatePath,
+		Applied:       false,
+	}
+
+	if !apply {
+		return result, nil
+	}
+
+	if block != "" {
+		if err := s.appendLearnedTemplate(templatePath, block); err != nil {
+			return result, fmt.Errorf("append learned template: %w", err)
+		}
+		for _, l := range promotable {
+			if err := s.store.UpdateLearningStatus(l.ID, "promoted"); err != nil {
+				return result, fmt.Errorf("mark learning %s promoted: %w", l.ID, err)
+			}
+		}
+	}
+	result.Applied = true
+	return result, nil
+}
+
+// appendLearnedTemplate appends block to the learned template at path, creating
+// parent directories as needed and ensuring a blank-line separation from any
+// existing content.
+func (s *Spec) appendLearnedTemplate(path, block string) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := s.fs.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+
+	existing, err := s.fs.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var b strings.Builder
+	if len(existing) > 0 {
+		b.Write(existing)
+		if !strings.HasSuffix(string(existing), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(block)
+
+	return s.fs.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 type PlanResult struct {

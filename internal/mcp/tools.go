@@ -474,6 +474,14 @@ type specLearningsArgs struct {
 	Status string `json:"status"`
 }
 
+type specPromoteLearningsArgs struct {
+	Lang            string  `json:"lang"`
+	MinConfidence   float64 `json:"min_confidence"`
+	MinTimesApplied int     `json:"min_times_applied"`
+	Apply           bool    `json:"apply"`
+	TemplatePath    string  `json:"template_path"`
+}
+
 type specDiffArgs struct {
 	ApplyIDA string `json:"apply_id_a"`
 	ApplyIDB string `json:"apply_id_b"`
@@ -640,6 +648,32 @@ func (s *Server) registerSpecLifecycleTools() {
 			}
 		}
 		return out, nil
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`),
+	}, specTool("promote_learnings", func(ctx context.Context, a specPromoteLearningsArgs) (any, error) {
+		res, err := s.spec.PromoteLearnings(ctx, a.Lang, a.MinConfidence, a.MinTimesApplied, a.Apply, a.TemplatePath)
+		if err != nil {
+			return nil, err
+		}
+		learnings := make([]map[string]any, len(res.Promotable))
+		for i, l := range res.Promotable {
+			learnings[i] = map[string]any{
+				"id":            l.ID,
+				"text":          l.Text,
+				"confidence":    l.Confidence,
+				"times_applied": l.TimesApplied,
+			}
+		}
+		return map[string]any{
+			"promotable_count": len(res.Promotable),
+			"target_path":      res.TargetPath,
+			"applied":          res.Applied,
+			"markdown_block":   res.MarkdownBlock,
+			"learnings":        learnings,
+		}, nil
 	}))
 }
 

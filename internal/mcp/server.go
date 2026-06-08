@@ -154,6 +154,7 @@ type specHandler interface {
 	WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error)
 	Evolve(ctx context.Context, sessionID string) (int, error)
 	ListLearnings(status string) ([]storemod.Learning, error)
+	PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (specmod.PromoteResult, error)
 }
 
 // ---------------------------------------------------------------------------

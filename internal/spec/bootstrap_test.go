@@ -55,8 +55,8 @@ func (f *fakeFS) MkdirAll(path string, perm fs.FileMode) error {
 	return nil
 }
 
-func (f *fakeFS) Remove(path string) error                        { return nil }
-func (f *fakeFS) ReadDir(path string) ([]os.DirEntry, error)      { return nil, nil }
+func (f *fakeFS) Remove(path string) error                   { return nil }
+func (f *fakeFS) ReadDir(path string) ([]os.DirEntry, error) { return nil, nil }
 
 func (f *fakeFS) Stat(path string) (fs.FileInfo, error) {
 	if err, ok := f.statErr[path]; ok {
@@ -76,12 +76,12 @@ type fakeFileInfo struct {
 	isDir bool
 }
 
-func (fi fakeFileInfo) Name() string        { return fi.name }
-func (fi fakeFileInfo) Size() int64         { return 0 }
-func (fi fakeFileInfo) Mode() fs.FileMode   { return 0o755 }
-func (fi fakeFileInfo) ModTime() time.Time  { return time.Time{} }
-func (fi fakeFileInfo) IsDir() bool         { return fi.isDir }
-func (fi fakeFileInfo) Sys() any            { return nil }
+func (fi fakeFileInfo) Name() string       { return fi.name }
+func (fi fakeFileInfo) Size() int64        { return 0 }
+func (fi fakeFileInfo) Mode() fs.FileMode  { return 0o755 }
+func (fi fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fi fakeFileInfo) IsDir() bool        { return fi.isDir }
+func (fi fakeFileInfo) Sys() any           { return nil }
 
 // ---------------------------------------------------------------------------
 // Fake store for bootstrap tests — only ListResources is exercised
@@ -91,52 +91,60 @@ type stubStore struct {
 	listResourcesErr error
 }
 
-func (s *stubStore) GetResource(id string) (*store.Resource, error)                   { return nil, nil }
-func (s *stubStore) ListResources() ([]store.Resource, error)                         { return nil, s.listResourcesErr }
-func (s *stubStore) SetResource(r store.Resource) error                               { return nil }
-func (s *stubStore) DeleteResource(id string) error                                   { return nil }
-func (s *stubStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) { return nil, nil }
-func (s *stubStore) SetGeneratedFile(f store.GeneratedFile) error                     { return nil }
-func (s *stubStore) DeleteGeneratedFiles(resourceID string) error                     { return nil }
-func (s *stubStore) SetDependency(sourceID, targetID, kind string) error              { return nil }
-func (s *stubStore) DeleteDependencies(sourceID string) error                         { return nil }
-func (s *stubStore) AcquireLock(holder string, pid int) error                         { return nil }
-func (s *stubStore) ReleaseLock() error                                               { return nil }
-func (s *stubStore) GetLock() (*store.Lock, error)                                    { return nil, nil }
-func (s *stubStore) CreateApply(id, specHash string) error                            { return nil }
-func (s *stubStore) CompleteApply(id string) error                                    { return nil }
-func (s *stubStore) ListApplies(limit int) ([]store.Apply, error)                     { return nil, nil }
-func (s *stubStore) CreateApplyAction(id, applyID, resourceID, action string) error   { return nil }
-func (s *stubStore) UpdateApplyAction(id, outcome, errMsg string) error               { return nil }
-func (s *stubStore) ListApplyActions(applyID string) ([]store.ApplyAction, error)     { return nil, nil }
-func (s *stubStore) CreateGeneration(g store.Generation) error                        { return nil }
+func (s *stubStore) GetResource(id string) (*store.Resource, error) { return nil, nil }
+func (s *stubStore) ListResources() ([]store.Resource, error)       { return nil, s.listResourcesErr }
+func (s *stubStore) SetResource(r store.Resource) error             { return nil }
+func (s *stubStore) DeleteResource(id string) error                 { return nil }
+func (s *stubStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) {
+	return nil, nil
+}
+func (s *stubStore) SetGeneratedFile(f store.GeneratedFile) error                   { return nil }
+func (s *stubStore) DeleteGeneratedFiles(resourceID string) error                   { return nil }
+func (s *stubStore) SetDependency(sourceID, targetID, kind string) error            { return nil }
+func (s *stubStore) DeleteDependencies(sourceID string) error                       { return nil }
+func (s *stubStore) AcquireLock(holder string, pid int) error                       { return nil }
+func (s *stubStore) ReleaseLock() error                                             { return nil }
+func (s *stubStore) GetLock() (*store.Lock, error)                                  { return nil, nil }
+func (s *stubStore) CreateApply(id, specHash string) error                          { return nil }
+func (s *stubStore) CompleteApply(id string) error                                  { return nil }
+func (s *stubStore) ListApplies(limit int) ([]store.Apply, error)                   { return nil, nil }
+func (s *stubStore) CreateApplyAction(id, applyID, resourceID, action string) error { return nil }
+func (s *stubStore) UpdateApplyAction(id, outcome, errMsg string) error             { return nil }
+func (s *stubStore) ListApplyActions(applyID string) ([]store.ApplyAction, error)   { return nil, nil }
+func (s *stubStore) CreateGeneration(g store.Generation) error                      { return nil }
 func (s *stubStore) UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error {
 	return nil
 }
-func (s *stubStore) ListGenerations(resourceID string, limit int) ([]store.Generation, error) { return nil, nil }
-func (s *stubStore) CreateSession(sess store.Session) error                           { return nil }
-func (s *stubStore) GetSession(id string) (*store.Session, error)                     { return nil, nil }
-func (s *stubStore) GetActiveSession() (*store.Session, error)                        { return nil, nil }
-func (s *stubStore) UpdateSession(id, status string, currentWave int) error           { return nil }
-func (s *stubStore) SetNote(resourceID, applyID, content string) error                { return nil }
-func (s *stubStore) GetNote(resourceID, applyID string) (string, error)               { return "", nil }
-func (s *stubStore) ListNotes(applyID string) ([]store.AgentNote, error)              { return nil, nil }
-func (s *stubStore) UpsertSessionResource(r store.SessionResource) error              { return nil }
+func (s *stubStore) ListGenerations(resourceID string, limit int) ([]store.Generation, error) {
+	return nil, nil
+}
+func (s *stubStore) CreateSession(sess store.Session) error                 { return nil }
+func (s *stubStore) GetSession(id string) (*store.Session, error)           { return nil, nil }
+func (s *stubStore) GetActiveSession() (*store.Session, error)              { return nil, nil }
+func (s *stubStore) UpdateSession(id, status string, currentWave int) error { return nil }
+func (s *stubStore) SetNote(resourceID, applyID, content string) error      { return nil }
+func (s *stubStore) GetNote(resourceID, applyID string) (string, error)     { return "", nil }
+func (s *stubStore) ListNotes(applyID string) ([]store.AgentNote, error)    { return nil, nil }
+func (s *stubStore) UpsertSessionResource(r store.SessionResource) error    { return nil }
 func (s *stubStore) GetSessionResource(sessionID, resourceID string) (*store.SessionResource, error) {
 	return nil, nil
 }
-func (s *stubStore) ListSessionResources(sessionID string) ([]store.SessionResource, error) { return nil, nil }
+func (s *stubStore) ListSessionResources(sessionID string) ([]store.SessionResource, error) {
+	return nil, nil
+}
 func (s *stubStore) ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error) {
 	return nil, nil
 }
 func (s *stubStore) UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error {
 	return nil
 }
-func (s *stubStore) GetGeneration(id string) (*store.Generation, error)               { return nil, nil }
-func (s *stubStore) RecordInvariantCheck(ic store.InvariantCheck) error                { return nil }
-func (s *stubStore) ListInvariantChecks(applyID string) ([]store.InvariantCheck, error) { return nil, nil }
-func (s *stubStore) Vacuum(before time.Time) (int, error)                             { return 0, nil }
-func (s *stubStore) ReadOnlyQuery(query string) ([]map[string]interface{}, error)     { return nil, nil }
+func (s *stubStore) GetGeneration(id string) (*store.Generation, error) { return nil, nil }
+func (s *stubStore) RecordInvariantCheck(ic store.InvariantCheck) error { return nil }
+func (s *stubStore) ListInvariantChecks(applyID string) ([]store.InvariantCheck, error) {
+	return nil, nil
+}
+func (s *stubStore) Vacuum(before time.Time) (int, error)                         { return 0, nil }
+func (s *stubStore) ReadOnlyQuery(query string) ([]map[string]interface{}, error) { return nil, nil }
 func (s *stubStore) UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error {
 	return nil
 }
@@ -148,7 +156,8 @@ func (s *stubStore) IncrementLearningApplied(id string) error { return nil }
 func (s *stubStore) ListLearnings(status string) ([]store.Learning, error) {
 	return nil, nil
 }
-func (s *stubStore) CreateLearning(l store.Learning) error { return nil }
+func (s *stubStore) CreateLearning(l store.Learning) error        { return nil }
+func (s *stubStore) UpdateLearningStatus(id, status string) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Tests
