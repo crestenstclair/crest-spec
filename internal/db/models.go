@@ -108,6 +108,21 @@ type Job struct {
 	ProgressJson *string
 }
 
+type Learning struct {
+	ID                 string
+	ScopeLang          string
+	ScopeKind          string
+	Text               string
+	Rationale          string
+	SourceGenerationID *string
+	SourceApplyID      *string
+	Confidence         float64
+	Status             string
+	TimesApplied       int64
+	CreatedAt          string
+	UpdatedAt          string
+}
+
 type Lock struct {
 	ID         int64
 	Holder     string
