@@ -68,6 +68,7 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/agent-events-recent", d.handleRecentAgentEvents)
 	mux.HandleFunc("GET /api/agent-events-stream/{resourceID}", d.handleAgentEventsStream)
 	mux.HandleFunc("GET /api/live-status", d.handleLiveStatus)
+	mux.HandleFunc("GET /api/learnings", d.handleLearnings)
 
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -435,6 +436,47 @@ func (d *dashboard) handleAgentEventsStream(w http.ResponseWriter, r *http.Reque
 			sendUpdate()
 		}
 	}
+}
+
+func (d *dashboard) handleLearnings(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "active"
+	}
+	learnings, err := d.store.ListLearnings(status)
+	if err != nil {
+		d.writeError(w, 500, err.Error())
+		return
+	}
+
+	type learningResp struct {
+		ID           string  `json:"id"`
+		ScopeLang    string  `json:"scope_lang"`
+		ScopeKind    string  `json:"scope_kind"`
+		Text         string  `json:"text"`
+		Rationale    string  `json:"rationale"`
+		Confidence   float64 `json:"confidence"`
+		Status       string  `json:"status"`
+		TimesApplied int     `json:"times_applied"`
+		CreatedAt    string  `json:"created_at"`
+	}
+
+	resp := make([]learningResp, 0, len(learnings))
+	for _, l := range learnings {
+		resp = append(resp, learningResp{
+			ID:           l.ID,
+			ScopeLang:    l.ScopeLang,
+			ScopeKind:    l.ScopeKind,
+			Text:         l.Text,
+			Rationale:    l.Rationale,
+			Confidence:   l.Confidence,
+			Status:       l.Status,
+			TimesApplied: l.TimesApplied,
+			CreatedAt:    l.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+
+	d.writeJSON(w, resp)
 }
 
 func (d *dashboard) handleLiveStatus(w http.ResponseWriter, r *http.Request) {

@@ -259,6 +259,7 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
       <div class="tab" data-tab="jobs">Jobs</div>
+      <div class="tab" data-tab="learnings">Learnings</div>
     </div>
 
     <!-- Tab: Session (Wave Progress) -->
@@ -308,6 +309,13 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
     <div class="tab-content" id="tab-jobs">
       <div class="card" style="overflow-x:auto">
         <div id="jobs-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Learnings -->
+    <div class="tab-content" id="tab-learnings">
+      <div class="card" style="overflow-x:auto">
+        <div id="learnings-table" class="empty">Loading...</div>
       </div>
     </div>
   </div>
@@ -642,7 +650,44 @@ async function loadTabData(tab) {
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'jobs': await loadJobsTab(); break;
+    case 'learnings': await loadLearningsTab(); break;
   }
+}
+
+// ─── Tab: Learnings ────────────────────────────────────────────────
+async function loadLearningsTab() {
+  const el = document.getElementById('learnings-table');
+  const learnings = await fetchJSON('/api/learnings');
+  if (!learnings) {
+    el.innerHTML = '<div class="error-msg">Error loading learnings</div>';
+    return;
+  }
+  if (learnings.length === 0) {
+    el.innerHTML = '<div class="empty">No active learnings recorded yet.</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr>' +
+    '<th>Scope</th><th>Text</th><th>Confidence</th><th>Applied</th><th>Status</th>' +
+  '</tr></thead><tbody>';
+
+  for (const l of learnings) {
+    const lang = l.scope_lang || '';
+    const kind = l.scope_kind || '';
+    const scope = (lang || kind) ? esc([lang, kind].filter(Boolean).join('/')) : '<span style="color:var(--text-muted)">any</span>';
+    const conf = (typeof l.confidence === 'number') ? l.confidence.toFixed(2) : '--';
+
+    html += '<tr>' +
+      '<td style="font-size:12px">' + scope + '</td>' +
+      '<td style="font-size:12px">' + esc(l.text || '') + '</td>' +
+      '<td class="mono">' + conf + '</td>' +
+      '<td class="mono">' + (l.times_applied || 0) + '</td>' +
+      '<td>' + badge(l.status || '', 'blue') + '</td>' +
+    '</tr>';
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
 }
 
 // ─── Tab: Agent Trace ─────────────────────────────────────────────
