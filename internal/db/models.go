@@ -34,6 +34,22 @@ type AgentSession struct {
 	ApplyID     string
 }
 
+type Amendment struct {
+	ID              string
+	ResourceID      string
+	Name            string
+	ContentHash     string
+	Origin          string
+	Prompt          string
+	FindingJson     string
+	ValidationJson  string
+	State           string
+	AppliedSpecHash string
+	CreatedAt       string
+	AppliedAt       string
+	GraduatedAt     string
+}
+
 type Apply struct {
 	ID        string
 	Status    string
