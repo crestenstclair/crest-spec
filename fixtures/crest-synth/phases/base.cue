@@ -17,6 +17,14 @@ project: meta: {
 	avoid: ["heap allocation on audio thread", "mutex locks on audio thread", "blocking I/O on audio thread"]
 }
 
+// ── Default whole-crate validations (run at wave verification) ──
+project: validations: [
+	{kind: "compiles", command: ["cargo", "fmt", "--", "--check"], description: "rustfmt clean"},
+	{kind: "compiles", command: ["cargo", "clippy", "--", "-D", "warnings"], description: "clippy clean"},
+	{kind: "compiles", command: ["cargo", "build"], description: "crate builds"},
+	{kind: "test", command: ["cargo", "test"], description: "tests pass"},
+]
+
 // ── Kernel ─────────────────────────────────────────────
 
 project: contexts: Kernel: purpose: "shared value types for MIDI addressing, audio primitives, and note identity"
@@ -73,7 +81,7 @@ project: assets: RootCargoToml: {
 project: assets: BuildMakefile: {
 	kind:        "makefile"
 	description: "Build automation for the crest-synth project"
-	prompts: ["Default target: build", "test: cargo test", "check: cargo check", "clean: cargo clean", "run: cargo run"]
+	prompts: ["Default target: build", "test: cargo test", "check: cargo check", "clean: cargo clean", "run: cargo run", "lint: cargo clippy -- -D warnings", "fmt: cargo fmt -- --check"]
 }
 project: assets: ToneTestMain: {
 	kind:        "rust-binary"

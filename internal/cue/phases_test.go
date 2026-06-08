@@ -6,8 +6,10 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,6 +128,25 @@ func TestPhasedFixture_ToneTestValidation(t *testing.T) {
 			require.True(t, found, "phase %d ToneTestMain validation should use %q; got %+v", tc.phase, tc.wantCommand, tone.Validations)
 		})
 	}
+}
+
+func TestPhasedFixture_HasDefaultValidations(t *testing.T) {
+	dir := phasesDir()
+	if _, err := os.Stat(filepath.Join(dir, "base.cue")); err != nil {
+		t.Skipf("phased fixture not present: %v", err)
+	}
+	tmp := t.TempDir()
+	assemblePhaseDir(t, dir, tmp, 1)
+	proj, err := Load(tmp)
+	require.NoError(t, err)
+	require.NotEmpty(t, proj.Validations, "base.cue should declare default project validations")
+	var cmds []string
+	for _, v := range proj.Validations {
+		cmds = append(cmds, strings.Join(v.Command, " "))
+	}
+	joined := strings.Join(cmds, " | ")
+	assert.Contains(t, joined, "clippy")
+	assert.Contains(t, joined, "fmt")
 }
 
 func containsArg(args []string, want string) bool {
