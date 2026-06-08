@@ -1,14 +1,40 @@
 package spec
 
 import (
+	"context"
 	"testing"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	"github.com/crestenstclair/crest-spec/internal/config"
 	"github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRunProjectValidations_RecordsFailures(t *testing.T) {
+	s := &Spec{cfg: &config.Config{SpecDir: t.TempDir() + "/spec"}}
+	result := &WaveVerifyResult{Passed: true}
+	vals := []cuepkg.Validation{
+		{Kind: "compiles", Command: []string{"sh", "-c", "exit 0"}},
+		{Kind: "test", Command: []string{"sh", "-c", "echo boom >&2; exit 1"}},
+	}
+	s.runProjectValidations(context.Background(), vals, nil, result)
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	assert.Equal(t, "project_validation", result.Errors[0].Kind)
+	assert.Contains(t, result.Errors[0].Message, "test")
+}
+
+func TestRunProjectValidations_AllPass(t *testing.T) {
+	s := &Spec{cfg: &config.Config{SpecDir: t.TempDir() + "/spec"}}
+	result := &WaveVerifyResult{Passed: true}
+	s.runProjectValidations(context.Background(), []cuepkg.Validation{
+		{Kind: "compiles", Command: []string{"sh", "-c", "exit 0"}},
+	}, nil, result)
+	assert.True(t, result.Passed)
+	assert.Empty(t, result.Errors)
+}
 
 func TestBeginResult_HasInstructions(t *testing.T) {
 	result := &BeginResult{
