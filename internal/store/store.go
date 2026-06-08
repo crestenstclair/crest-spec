@@ -1293,6 +1293,112 @@ func (s *Store) ListRecentAgentEvents(limit int) ([]AgentEvent, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Learnings — craft-level learnings injected into generation prompts
+// ---------------------------------------------------------------------------
+
+// Learning is the store's domain type for a craft-level learning.
+type Learning struct {
+	ID                 string
+	ScopeLang          string
+	ScopeKind          string
+	Text               string
+	Rationale          string
+	SourceGenerationID string
+	SourceApplyID      string
+	Confidence         float64
+	Status             string
+	TimesApplied       int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+func dbLearningToLearning(l db.Learning) Learning {
+	return Learning{
+		ID:                 l.ID,
+		ScopeLang:          l.ScopeLang,
+		ScopeKind:          l.ScopeKind,
+		Text:               l.Text,
+		Rationale:          l.Rationale,
+		SourceGenerationID: stringVal(l.SourceGenerationID),
+		SourceApplyID:      stringVal(l.SourceApplyID),
+		Confidence:         l.Confidence,
+		Status:             l.Status,
+		TimesApplied:       int(l.TimesApplied),
+		CreatedAt:          parseTime(l.CreatedAt),
+		UpdatedAt:          parseTime(l.UpdatedAt),
+	}
+}
+
+// CreateLearning inserts a new learning.
+func (s *Store) CreateLearning(l Learning) error {
+	if l.Status == "" {
+		l.Status = "active"
+	}
+	return s.queries.CreateLearning(context.Background(), db.CreateLearningParams{
+		ID:                 l.ID,
+		ScopeLang:          l.ScopeLang,
+		ScopeKind:          l.ScopeKind,
+		Text:               l.Text,
+		Rationale:          l.Rationale,
+		SourceGenerationID: stringPtr(l.SourceGenerationID),
+		SourceApplyID:      stringPtr(l.SourceApplyID),
+		Confidence:         l.Confidence,
+		Status:             l.Status,
+		TimesApplied:       int64(l.TimesApplied),
+		CreatedAt:          l.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:          l.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// ListActiveLearnings returns active learnings matching the language and kind
+// (empty scope = applies to any), highest confidence first, capped at limit.
+func (s *Store) ListActiveLearnings(lang, kind string, limit int) ([]Learning, error) {
+	rows, err := s.queries.ListActiveLearnings(context.Background(), db.ListActiveLearningsParams{
+		ScopeLang: lang,
+		ScopeKind: kind,
+		Limit:     int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Learning, len(rows))
+	for i, r := range rows {
+		out[i] = dbLearningToLearning(r)
+	}
+	return out, nil
+}
+
+// ListLearnings returns all learnings with the given status.
+func (s *Store) ListLearnings(status string) ([]Learning, error) {
+	rows, err := s.queries.ListLearningsByStatus(context.Background(), status)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Learning, len(rows))
+	for i, r := range rows {
+		out[i] = dbLearningToLearning(r)
+	}
+	return out, nil
+}
+
+// UpdateLearningStatus changes a learning's status (e.g. "retired", "promoted").
+func (s *Store) UpdateLearningStatus(id, status string) error {
+	return s.queries.UpdateLearningStatus(context.Background(), db.UpdateLearningStatusParams{
+		Status:    status,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		ID:        id,
+	})
+}
+
+// IncrementLearningApplied bumps times_applied for a learning.
+func (s *Store) IncrementLearningApplied(id string) error {
+	return s.queries.IncrementLearningApplied(context.Background(), db.IncrementLearningAppliedParams{
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		ID:        id,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Vacuum — compact old history
 // ---------------------------------------------------------------------------
 
