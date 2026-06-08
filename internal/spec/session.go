@@ -398,10 +398,15 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 
 	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, files, planResult, currentAttempts)
 	if rejected != nil {
+		// Validation gate failed: amendments declaring a validation are FAILED.
+		s.markAmendmentVerification(resourceID, resource, false)
 		return rejected, nil
 	}
 
 	s.persistCommittedResource(sess, sessionID, resourceID, resource, files, planResult, notes, currentAttempts)
+
+	// Validation gate passed: amendments declaring a validation are VERIFIED.
+	s.markAmendmentVerification(resourceID, resource, true)
 
 	return &CommitResult{
 		Committed:   true,

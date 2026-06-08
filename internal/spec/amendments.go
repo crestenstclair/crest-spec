@@ -306,9 +306,13 @@ func (s *Spec) ReconcileAmendments(ctx context.Context) error {
 			if a.Graduated {
 				state = "GRADUATED"
 			}
-			if prior, _ := s.store.GetAmendment(id, a.Name); prior != nil &&
-				prior.State == "VERIFIED" && committed {
-				state = "VERIFIED"
+			if prior, _ := s.store.GetAmendment(id, a.Name); prior != nil {
+				if prior.State == "VERIFIED" && committed {
+					state = "VERIFIED"
+				}
+				if prior.State == "FAILED" && !committed {
+					state = "FAILED"
+				}
 			}
 			if err := s.store.UpsertAmendment(store.Amendment{
 				ID:              id + "::" + a.Name,
@@ -329,6 +333,31 @@ func (s *Spec) ReconcileAmendments(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// markAmendmentVerification updates VERIFIED/FAILED state for a resource's
+// amendments that declare a validation, after a commit's validation gate ran.
+// applied_spec_hash/applied_at are preserved from the existing row.
+func (s *Spec) markAmendmentVerification(resourceID string, resource cuepkg.Resource, passed bool) {
+	state := "VERIFIED"
+	if !passed {
+		state = "FAILED"
+	}
+	for _, a := range cuepkg.ResourceAmendments(resource) {
+		if a.Validation == nil {
+			continue
+		}
+		existing, _ := s.store.GetAmendment(resourceID, a.Name)
+		appliedHash := ""
+		var appliedAt, gradAt time.Time
+		if existing != nil {
+			appliedHash = existing.AppliedSpecHash
+			appliedAt = existing.AppliedAt
+			gradAt = existing.GraduatedAt
+		}
+		id := resourceID + "::" + a.Name
+		_ = s.store.UpdateAmendmentState(id, state, appliedHash, appliedAt, gradAt)
+	}
 }
 
 // pendingAmendmentChanges renders the prompts of all PENDING/FAILED amendments

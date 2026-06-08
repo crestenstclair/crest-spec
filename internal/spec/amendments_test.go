@@ -16,6 +16,7 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
+	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/engine"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -426,4 +427,131 @@ func TestGraduateAmendment_PreviewVsApply(t *testing.T) {
 	_, err = s.GraduateAmendment(ctx, resourceID, "pending-grad", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "VERIFIED")
+}
+
+// amendmentResourceWithValidation builds a value object resource carrying one
+// amendment that declares a validation (so it participates in the commit
+// verification gate) plus one amendment without a validation (untouched).
+func amendmentResourceWithValidation(resourceID string) cuepkg.Resource {
+	return cuepkg.Resource{
+		ID:   resourceID,
+		Kind: "valueObject",
+		Declaration: cuepkg.ValueObject{
+			Meta: cuepkg.Meta{
+				Amendments: []cuepkg.Amendment{
+					{
+						Name:   "validated-change",
+						Prompt: "do the validated thing",
+						Validation: &cuepkg.Validation{
+							Kind:    "test",
+							Command: []string{"true"},
+						},
+					},
+					{
+						Name:   "no-validation",
+						Prompt: "untouched here",
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestCommit_MarksAmendmentVerified drives the successful-commit verification
+// write (via markAmendmentVerification, which Commit calls on the success path):
+// an amendment that declares a validation flips APPLIED -> VERIFIED, and its
+// existing applied_spec_hash / applied_at are PRESERVED (not wiped).
+func TestCommit_MarksAmendmentVerified(t *testing.T) {
+	s, st := setupAmendmentsSpec(t)
+	const resourceID = "valueObject.Synth.Verified"
+
+	appliedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:              resourceID + "::validated-change",
+		ResourceID:      resourceID,
+		Name:            "validated-change",
+		State:           "APPLIED",
+		AppliedSpecHash: "decl-hash-abc",
+		AppliedAt:       appliedAt,
+		CreatedAt:       time.Now().UTC(),
+	}))
+
+	resource := amendmentResourceWithValidation(resourceID)
+	s.markAmendmentVerification(resourceID, resource, true)
+
+	got, err := st.GetAmendment(resourceID, "validated-change")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "VERIFIED", got.State)
+	assert.Equal(t, "decl-hash-abc", got.AppliedSpecHash, "applied_spec_hash must be preserved")
+	assert.Equal(t, appliedAt, got.AppliedAt, "applied_at must be preserved")
+
+	// The amendment without a validation must be untouched (no row created).
+	none, err := st.GetAmendment(resourceID, "no-validation")
+	require.NoError(t, err)
+	assert.Nil(t, none, "amendments without a validation must not be written")
+}
+
+// TestCommit_MarksAmendmentFailed drives the rejected-commit verification write
+// (markAmendmentVerification(passed=false)): a validation-declaring amendment is
+// marked FAILED, preserving its applied fields.
+func TestCommit_MarksAmendmentFailed(t *testing.T) {
+	s, st := setupAmendmentsSpec(t)
+	const resourceID = "valueObject.Synth.Failed"
+
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:              resourceID + "::validated-change",
+		ResourceID:      resourceID,
+		Name:            "validated-change",
+		State:           "APPLIED",
+		AppliedSpecHash: "decl-hash-xyz",
+		CreatedAt:       time.Now().UTC(),
+	}))
+
+	resource := amendmentResourceWithValidation(resourceID)
+	s.markAmendmentVerification(resourceID, resource, false)
+
+	got, err := st.GetAmendment(resourceID, "validated-change")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "FAILED", got.State)
+	assert.Equal(t, "decl-hash-xyz", got.AppliedSpecHash, "applied_spec_hash must be preserved")
+}
+
+// TestReconcile_PreservesFailedWhenUncommitted verifies that a prior FAILED
+// amendment stays FAILED across a reconcile while the resource is uncommitted
+// (stored decl hash != current), rather than being reset to PENDING.
+func TestReconcile_PreservesFailedWhenUncommitted(t *testing.T) {
+	s, st := setupAmendmentsSpec(t)
+	ctx := context.Background()
+
+	planResult, err := s.Plan(ctx)
+	require.NoError(t, err)
+
+	var amendID string
+	for id, r := range planResult.Registry.Resources {
+		if r.Kind != "valueObject" {
+			continue
+		}
+		amendID = id
+		break
+	}
+	require.NotEmpty(t, amendID)
+
+	// Seed the existing amendment row (the spec's "clamp-upper-bound") as FAILED.
+	// No stored resource => uncommitted (stored decl hash != current).
+	require.NoError(t, st.UpsertAmendment(store.Amendment{
+		ID:         amendID + "::clamp-upper-bound",
+		ResourceID: amendID,
+		Name:       "clamp-upper-bound",
+		State:      "FAILED",
+		CreatedAt:  time.Now().UTC(),
+	}))
+
+	require.NoError(t, s.ReconcileAmendments(ctx))
+
+	got, err := st.GetAmendment(amendID, "clamp-upper-bound")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "FAILED", got.State, "FAILED must be preserved while uncommitted, not reset to PENDING")
 }
