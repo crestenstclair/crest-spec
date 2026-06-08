@@ -436,6 +436,20 @@ func (s *Spec) writeChangedFiles(files []CommitFile) error {
 	return nil
 }
 
+// resourceValidations returns the full set of validations to run when a
+// resource is committed: the resource's own declared validations PLUS any
+// validation declared on its amendments. Amendment-declared validations prove
+// the amendment's intent was actually satisfied (applied != fixed).
+func resourceValidations(resource cuepkg.Resource) []cuepkg.Validation {
+	validations := append([]cuepkg.Validation(nil), resource.Validations...)
+	for _, a := range cuepkg.ResourceAmendments(resource) {
+		if a.Validation != nil {
+			validations = append(validations, *a.Validation)
+		}
+	}
+	return validations
+}
+
 func (s *Spec) runCommitValidations(
 	ctx context.Context,
 	sess *store.Session,
@@ -447,9 +461,10 @@ func (s *Spec) runCommitValidations(
 ) ([]ValidationResult, *CommitResult) {
 	var validationResults []ValidationResult
 
-	if len(resource.Validations) > 0 {
+	validations := resourceValidations(resource)
+	if len(validations) > 0 {
 		cwd := filepath.Dir(s.cfg.SpecDir)
-		results, err := RunValidations(ctx, resource.Validations, cwd)
+		results, err := RunValidations(ctx, validations, cwd)
 		if err == nil {
 			validationResults = results
 			if rejection := s.checkForFailure(validationResults, sess.ApplyID, sessionID, resourceID, "validate", attempts); rejection != nil {
