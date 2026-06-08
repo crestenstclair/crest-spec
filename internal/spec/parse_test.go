@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,6 +54,30 @@ func TestParseCodeBlocks_BlockWithoutPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
 	assert.Equal(t, "", blocks[0].Path)
+}
+
+func TestParseCodeBlocks_NoLeadingNewlineAfterPath(t *testing.T) {
+	// Models commonly emit a blank line between the `// path:` annotation and the
+	// first line of code. The extracted content must NOT begin with that blank
+	// line, otherwise the written file starts with a newline and fails cargo fmt.
+	output := "```rust\n// path: src/voice.rs\n\npub struct Voice {}\n```\n"
+
+	blocks, err := ParseCodeBlocks(output)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, "src/voice.rs", blocks[0].Path)
+	assert.False(t, strings.HasPrefix(blocks[0].Content, "\n"), "content must not start with a newline")
+	assert.True(t, strings.HasPrefix(blocks[0].Content, "pub struct Voice"), "content should start at the first real line")
+}
+
+func TestParseCodeBlocks_LeadingBlankLinesNoPath(t *testing.T) {
+	// Leading blank lines with no path annotation are also trimmed from the start.
+	output := "```rust\n\n\npub fn main() {}\n```\n"
+
+	blocks, err := ParseCodeBlocks(output)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	assert.True(t, strings.HasPrefix(blocks[0].Content, "pub fn main"), "leading blank lines should be dropped")
 }
 
 func TestParseCodeBlocks_MixedWithAndWithoutPath(t *testing.T) {

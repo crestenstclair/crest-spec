@@ -44,6 +44,12 @@ func ParseCodeBlocks(output string) ([]CodeBlock, error) {
 				current.Path = strings.TrimSpace(m[1])
 				continue
 			}
+			// Drop blank lines before the first real content line (commonly the
+			// blank line a model emits after the `// path:` annotation). Otherwise
+			// the file would start with a leading newline and fail `cargo fmt`.
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 		}
 
 		contentLines = append(contentLines, line)
