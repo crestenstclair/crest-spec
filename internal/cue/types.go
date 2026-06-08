@@ -101,18 +101,19 @@ type LayerRule struct {
 }
 
 type Meta struct {
-	Language    string   `json:"language,omitempty"`
-	Style       string   `json:"style,omitempty"`
-	Rules       []string `json:"rules,omitempty"`
-	Prompts     []string `json:"prompts,omitempty"`
-	References  []string `json:"references,omitempty"`
-	Examples    []string `json:"examples,omitempty"`
-	Avoid       []string `json:"avoid,omitempty"`
-	Notes       string   `json:"notes,omitempty"`
-	Rationale   string   `json:"rationale,omitempty"`
-	ReviewLevel string   `json:"reviewLevel,omitempty"`
-	Framework   string   `json:"framework,omitempty"`
-	Mode        string   `json:"mode,omitempty"`
+	Language    string      `json:"language,omitempty"`
+	Style       string      `json:"style,omitempty"`
+	Rules       []string    `json:"rules,omitempty"`
+	Prompts     []string    `json:"prompts,omitempty"`
+	References  []string    `json:"references,omitempty"`
+	Examples    []string    `json:"examples,omitempty"`
+	Avoid       []string    `json:"avoid,omitempty"`
+	Notes       string      `json:"notes,omitempty"`
+	Rationale   string      `json:"rationale,omitempty"`
+	ReviewLevel string      `json:"reviewLevel,omitempty"`
+	Framework   string      `json:"framework,omitempty"`
+	Mode        string      `json:"mode,omitempty"`
+	Amendments  []Amendment `json:"amendments,omitempty"`
 }
 
 type Context struct {
@@ -141,7 +142,6 @@ type Aggregate struct {
 	Entities     map[string]Entity      `json:"entities,omitempty"`
 	ValueObjects map[string]ValueObject `json:"valueObjects,omitempty"`
 	Validations  []Validation           `json:"validations,omitempty"`
-	Amendments   []Amendment            `json:"amendments,omitempty"`
 	Assets       map[string]Asset       `json:"assets,omitempty"`
 }
 
@@ -149,7 +149,6 @@ type Entity struct {
 	State       map[string]string `json:"state,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
-	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type ValueObject struct {
@@ -159,7 +158,6 @@ type ValueObject struct {
 	Invariants  []string          `json:"invariants,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
-	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type Port struct {
@@ -173,7 +171,6 @@ type Adapter struct {
 	Layer       string       `json:"layer,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
-	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type Repository struct {
@@ -181,7 +178,6 @@ type Repository struct {
 	Contract    map[string]string `json:"contract,omitempty"`
 	Meta        Meta              `json:"meta,omitempty"`
 	Validations []Validation      `json:"validations,omitempty"`
-	Amendments  []Amendment       `json:"amendments,omitempty"`
 }
 
 type DomainService struct {
@@ -191,7 +187,6 @@ type DomainService struct {
 	Publishes   []string     `json:"publishes,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
-	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type ApplicationService struct {
@@ -200,7 +195,6 @@ type ApplicationService struct {
 	Operations  map[string]Operation `json:"operations,omitempty"`
 	Meta        Meta                 `json:"meta,omitempty"`
 	Validations []Validation         `json:"validations,omitempty"`
-	Amendments  []Amendment          `json:"amendments,omitempty"`
 }
 
 type Operation struct {
@@ -223,7 +217,6 @@ type Asset struct {
 	Targets     []string     `json:"targets,omitempty"`
 	Meta        Meta         `json:"meta,omitempty"`
 	Validations []Validation `json:"validations,omitempty"`
-	Amendments  []Amendment  `json:"amendments,omitempty"`
 }
 
 type Validation struct {

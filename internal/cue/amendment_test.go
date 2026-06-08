@@ -35,17 +35,16 @@ func TestValueObject_CarriesAmendments(t *testing.T) {
 	raw := `{
 		"from": "f64",
 		"description": "equal temperament tuning",
-		"invariants": ["reference pitch must be finite and positive"],
-		"amendments": [
+		"meta": { "amendments": [
 			{"name": "validate-reference-pitch", "prompt": "reject 0.0/NaN/inf", "origin": "deep_review"}
-		]
+		] }
 	}`
 	var vo ValueObject
 	if err := json.Unmarshal([]byte(raw), &vo); err != nil {
 		t.Fatalf("unmarshal value object: %v", err)
 	}
-	if len(vo.Amendments) != 1 || vo.Amendments[0].Name != "validate-reference-pitch" {
-		t.Fatalf("amendments not threaded: %+v", vo.Amendments)
+	if len(vo.Meta.Amendments) != 1 || vo.Meta.Amendments[0].Name != "validate-reference-pitch" {
+		t.Fatalf("amendments not threaded: %+v", vo.Meta.Amendments)
 	}
 }
 
@@ -53,9 +52,7 @@ func TestResourceAmendments_TypeSwitches(t *testing.T) {
 	r := Resource{
 		ID:   "Audio.EqualTemperament",
 		Kind: "valueObject",
-		Declaration: ValueObject{
-			Amendments: []Amendment{{Name: "a1"}, {Name: "a2"}},
-		},
+		Declaration: ValueObject{Meta: Meta{Amendments: []Amendment{{Name: "a1"}, {Name: "a2"}}}},
 	}
 	got := ResourceAmendments(r)
 	if len(got) != 2 || got[1].Name != "a2" {

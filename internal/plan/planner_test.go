@@ -242,7 +242,7 @@ func TestPlan_AmendmentChangesDeclarationHash(t *testing.T) {
 	before := declHashForTest(vo)
 
 	voAmended := vo
-	voAmended.Amendments = []cuepkg.Amendment{{Name: "validate", Prompt: "reject NaN"}}
+	voAmended.Meta.Amendments = []cuepkg.Amendment{{Name: "validate", Prompt: "reject NaN"}}
 	after := declHashForTest(voAmended)
 
 	if before == after {
