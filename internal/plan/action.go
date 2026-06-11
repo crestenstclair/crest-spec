@@ -6,7 +6,6 @@ const (
 	ActionCreate  ActionKind = "create"
 	ActionModify  ActionKind = "modify"
 	ActionDestroy ActionKind = "destroy"
-	ActionDrift   ActionKind = "drift"
 )
 
 type PlannedAction struct {

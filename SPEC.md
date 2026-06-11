@@ -777,20 +777,16 @@ All operations acquire a slot from the shared concurrency semaphore. The spec la
 
 **Key behavior:** Change cascading. If `aggregate.Synth.Voice` changes, every resource that `uses` it gets a cascading `modify` action. This is driven by the hash computation — a resource's effective hash includes its dependencies' hashes, so any upstream change ripples downstream.
 
-**Drift detection:** The planner also detects hand-edits — files whose content hash on disk differs from the stored content hash in SQLite. These resources are flagged in the plan with reason `"refresh needed"` and action `drift`:
+**Hand-edits are not tracked.** The spec controls *what resources exist and how they are shaped* — once a file is generated, the disk is the source of truth for its *content*. Formatting, minor fixes, and manual patches to generated files are ignored by the planner (there is no content-drift detection; see `docs/drop-drift-detection.md`). Regeneration has exactly two triggers:
+
+1. **Edit the spec** — a declaration or dependency change produces an `ActionModify` via the hash cascade.
+2. **Delete the file(s)** — a missing generated file produces an `ActionModify` with reason `"generated file missing — regenerating"`:
 
 ```
-? adapter.CpalAudioOutput
-  reason: refresh needed (file modified on disk)
+~ adapter.CpalAudioOutput
+  reason: generated file missing — regenerating
   files: src/Shell/CpalAudioOutput/CpalAudioOutput.rs
 ```
-
-Drift is **never silently overwritten**. The user must explicitly choose:
-- **Accept** the hand-edits as the new baseline — updates the stored hash to match disk, no regeneration.
-- **Revert** to the last applied generation — overwrites disk with the stored output.
-- **Regenerate** — treats the resource as `modify` and runs it through the constraint loop (the hand-edits are lost).
-
-In the interactive flow (`spec/begin`), the orchestrator sees drifted resources in the plan and can handle them per-resource. In the automated flow (`spec/apply`), drifted resources pause the apply and surface as a progress notification for user resolution.
 
 **Structural kinds** (`project`, `context`, `assetKind`) are skipped during planning — they are metadata containers, not generated resources.
 
@@ -936,7 +932,7 @@ State transitions are guarded by `AND status = 'running'` clauses so terminal st
 
 **`applies` table:** Records every plan execution with status, timestamps, and spec hash.
 
-**`apply_actions` table:** What action was taken per resource per apply. The action column is free-text (the CHECK constraint limiting it to `create/modify/destroy` was removed in migration 006). Current values used in practice include `create`, `modify`, `destroy`, and `drift`.
+**`apply_actions` table:** What action was taken per resource per apply. The action column is free-text (the CHECK constraint limiting it to `create/modify/destroy` was removed in migration 006). Current values used in practice include `create`, `modify`, and `destroy`. (Historical rows may contain `drift` from before content-drift detection was removed.)
 
 **`generations` table:** Full audit of every LLM invocation:
 - Complete prompt text and output text
@@ -1378,7 +1374,7 @@ project: contexts: Synth: aggregates: Voice: meta: {
 
 ### 8A.2 Mechanism — Riding the Spec-Hash Path
 
-Adding an amendment changes the resource's **declaration hash**, so the planner emits an `ActionModify` for that resource and it regenerates (see section 5.1). This rides the normal spec-hash cascade — it is **not** file-hash drift detection (`spec/drift`, section 5.1 / 9.3), which tracks hand-edits on disk and is a separate mechanism.
+Adding an amendment changes the resource's **declaration hash**, so the planner emits an `ActionModify` for that resource and it regenerates (see section 5.1). This rides the normal spec-hash cascade — hand-edits on disk are not tracked at all (content-drift detection was removed; see `docs/drop-drift-detection.md`).
 
 Regeneration happens in **UPDATE mode**. Rather than regenerating from scratch, the generation sub-agent receives the existing committed files plus a flagged **"CHANGES TO MAKE"** block containing the pending amendment prompts, and produces a *minimal diff*. UPDATE mode is generic: any already-generated resource that needs re-rendering uses it — amendments are simply the most common trigger.
 
@@ -1507,7 +1503,6 @@ The server exposes two groups of tools: **spec tools** (the plan/apply lifecycle
 | `spec/graph` | sync | Return the resource dependency graph. |
 | `spec/diff` | sync | Reconstruct state delta between two applies. Shows what was created, modified, destroyed between `apply_a` and `apply_b`. |
 | `spec/state` | sync | Inspect or modify state tracking. `list` returns all resources in state with hashes. `rm <resourceId>` removes a resource from state without deleting its code on disk (next plan will treat it as `create`). |
-| `spec/drift` | sync | Handle drifted resources (hand-edited files). `accept <resourceId>` adopts disk content as the new baseline. `revert <resourceId>` overwrites disk with the last applied generation. |
 | `spec/vacuum` | sync | Compact history older than a given date. Deletes old generations, invariant checks, and apply records while preserving current state. Keeps the SQLite database bounded for long-lived projects. |
 | `spec/sql` | sync | Open a read-only SQLite shell against the state database. For direct inspection and ad-hoc queries. |
 | `spec/unlock` | sync | Force-clear a stale lock. |
@@ -1778,9 +1773,8 @@ Implementation:
 
 **Interactive (spec/begin -> spec/finish):**
 1. Client calls `spec/begin` -> gets plan + orchestrator instructions.
-2. If plan contains `drift` actions: handle each with `spec/drift accept` or `spec/drift revert` before proceeding.
-3. Client calls `spec/next` -> gets wave 0 resources.
-4. For each resource:
+2. Client calls `spec/next` -> gets wave 0 resources.
+3. For each resource:
    - `spec/context` -> get the scoped prompt
    - `run_prompt` with prompt + `--disallowedTools` -> get job ID
    - `crest-spec check job <id>` or `poll_result` -> collect generated code
@@ -1788,12 +1782,12 @@ Implementation:
    - Optionally `bugbot` or `code_review` on the generated files for verification
    - `spec/note` -> record design decisions
    - `spec/commit` -> record resource as complete
-5. If a resource fails:
+4. If a resource fails:
    - `spec/resolve` -> provide guidance and re-dispatch
    - `spec/amend` -> edit the CUE spec, re-load, re-dispatch with updated declaration
    - `spec/skip` -> skip and move on
-6. `spec/next` -> wave 1 resources. Repeat.
-7. `spec/next` returns `done: true` -> `spec/finish`.
+5. `spec/next` -> wave 1 resources. Repeat.
+6. `spec/next` returns `done: true` -> `spec/finish`.
 
 The interactive flow gives the orchestrating agent full control — it can inspect prompts, modify files, edit the CUE spec to fix root causes, resolve blocked resources, run targeted reviews, and make decisions the automated flow can't. The `spec/amend` path is particularly powerful: a generation failure becomes a signal to improve the spec, not just retry harder.
 
@@ -1811,7 +1805,7 @@ Effective hashes include the full dependency chain and the model identifier. Cha
 A change to a value object cascades to every aggregate that uses it, every service that uses those aggregates, every asset that references any of them. The dependency graph ensures nothing is stale.
 
 ### Respect Hand-Edits
-Generated code is not sacred. When a user hand-edits a generated file, the planner detects the drift and asks what to do — it never silently overwrites. This makes it safe to iterate manually between applies.
+Generated code is not sacred — and neither is the spec's claim on it. Once a file is generated, its content belongs to the user: format it, fix it, patch it freely; the planner ignores content changes. Regeneration is opt-in — edit the spec or delete the file. The system never holds your edits hostage behind a reconciliation step.
 
 ### Multi-File Composition via Unification
 CUE's unification model makes multi-file specs a first-class language feature. No import chains, no re-exports, no builder pattern. Files in the same package merge automatically. Split your spec however makes sense — by context, by layer, by team.

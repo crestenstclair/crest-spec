@@ -179,7 +179,31 @@ func TestPlan_Destroy(t *testing.T) {
 	assert.Equal(t, []string{"src/voice.go"}, actions[0].Files)
 }
 
-func TestPlan_DriftDetection(t *testing.T) {
+func TestPlan_MissingFileRegenerates(t *testing.T) {
+	resources := map[string]cuepkg.Resource{
+		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate", Declaration: map[string]string{"purpose": "test"}},
+	}
+	reg, g := buildPlanInputs(resources)
+	hashes := graph.ComputeEffectiveHashes(resources, g, "opus", "default")
+	st := newFakeStore()
+	st.resources["aggregate.Synth.Voice"] = store.Resource{
+		ID: "aggregate.Synth.Voice", Kind: "aggregate",
+		DeclarationHash: declHash(resources["aggregate.Synth.Voice"].Declaration),
+		EffectiveHash: hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
+	}
+	st.files["aggregate.Synth.Voice"] = []store.GeneratedFile{
+		{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "original-content-hash"},
+	}
+	// File is absent from disk → resource regenerates as a normal modify.
+	p := New(st, newFakeFS())
+	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Equal(t, ActionModify, actions[0].Kind)
+	assert.Contains(t, actions[0].Reason, "generated file missing")
+}
+
+func TestPlan_ModifiedContentIsIgnored(t *testing.T) {
 	resources := map[string]cuepkg.Resource{
 		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate", Declaration: map[string]string{"purpose": "test"}},
 	}
@@ -199,9 +223,8 @@ func TestPlan_DriftDetection(t *testing.T) {
 	p := New(st, fs)
 	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
 	require.NoError(t, err)
-	require.Len(t, actions, 1)
-	assert.Equal(t, ActionDrift, actions[0].Kind)
-	assert.Contains(t, actions[0].Reason, "file modified on disk")
+	// Hand-edits to generated files are the user's business — no action.
+	assert.Empty(t, actions)
 }
 
 func TestPlan_StructuralKindsExcluded(t *testing.T) {

@@ -328,7 +328,6 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
 		{Name: "spec/diff", Description: "Reconstruct state delta between applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`)},
 		{Name: "spec/state", Description: "Inspect/modify state tracking", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: get, set, clear"}}}`)},
-		{Name: "spec/drift", Description: "Handle drifted resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","description":"accept or revert"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["action","resource_id"]}`)},
 		{Name: "spec/vacuum", Description: "Compact old history", InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`)},
 		{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
 		{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
@@ -494,11 +493,6 @@ type specDiffArgs struct {
 type specStateArgs struct {
 	ResourceID string `json:"resource_id"`
 	Action     string `json:"action"`
-}
-
-type specDriftArgs struct {
-	Action     string `json:"action"`
-	ResourceID string `json:"resource_id"`
 }
 
 type specVacuumArgs struct {
@@ -865,13 +859,6 @@ func (s *Server) registerSpecQueryTools() {
 		Name: "spec/state", Description: "Inspect/modify state tracking",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: list or rm"}}}`),
 	}, s.handleSpecState)
-
-	s.addTool(toolDef{
-		Name: "spec/drift", Description: "Handle drifted resources",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","description":"accept or revert"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["action","resource_id"]}`),
-	}, specToolErr("drift", map[string]bool{"ok": true}, func(ctx context.Context, a specDriftArgs) error {
-		return s.spec.DriftAction(ctx, a.Action, a.ResourceID)
-	}))
 
 	s.addTool(toolDef{
 		Name: "spec/vacuum", Description: "Compact old history",

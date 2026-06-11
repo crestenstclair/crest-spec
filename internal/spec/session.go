@@ -33,7 +33,6 @@ type BeginResult struct {
 	Plan            []planpkg.PlannedAction
 	Waves           [][]string
 	Instructions    string
-	DriftActions    []planpkg.PlannedAction
 	PendingDestroys []planpkg.PlannedAction
 }
 
@@ -129,9 +128,9 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 
-	driftActions, destroyActions, otherActions := partitionActions(actions)
+	destroyActions, otherActions := partitionActions(actions)
 
-	s.seedSessionResources(sessionID, waves, otherActions, driftActions)
+	s.seedSessionResources(sessionID, waves, otherActions)
 
 	// Materialize amendment lifecycle state from the spec (best-effort: a
 	// reconcile failure must not block a generation session).
@@ -145,16 +144,13 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		Plan:            otherActions,
 		Waves:           waves,
 		Instructions:    orchestratorInstructions(),
-		DriftActions:    driftActions,
 		PendingDestroys: destroyActions,
 	}, nil
 }
 
-func partitionActions(actions []planpkg.PlannedAction) (drift, destroy, other []planpkg.PlannedAction) {
+func partitionActions(actions []planpkg.PlannedAction) (destroy, other []planpkg.PlannedAction) {
 	for _, a := range actions {
 		switch a.Kind {
-		case planpkg.ActionDrift:
-			drift = append(drift, a)
 		case planpkg.ActionDestroy:
 			destroy = append(destroy, a)
 		default:

@@ -1,6 +1,6 @@
 # Plan: Drop Drift Detection
 
-**Status:** Proposed
+**Status:** Implemented (2026-06-10)
 **Date:** 2026-06-07
 **Author:** cresten
 

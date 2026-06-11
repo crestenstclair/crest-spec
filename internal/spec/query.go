@@ -77,38 +77,6 @@ func (s *Spec) Unlock(ctx context.Context) error {
 	return s.store.ReleaseLock()
 }
 
-func (s *Spec) DriftAction(ctx context.Context, action, resourceID string) error {
-	switch action {
-	case "accept":
-		files, err := s.store.GetGeneratedFiles(resourceID)
-		if err != nil {
-			return fmt.Errorf("get files: %w", err)
-		}
-		for _, f := range files {
-			data, err := s.fs.ReadFile(f.Path)
-			if err != nil {
-				continue
-			}
-			contentHash := fmt.Sprintf("%x", sha256.Sum256(data))
-			s.store.SetGeneratedFile(store.GeneratedFile{
-				Path:        f.Path,
-				ResourceID:  f.ResourceID,
-				ContentHash: contentHash,
-				PromptHash:  f.PromptHash,
-				Model:       f.Model,
-				CreatedAt:   f.CreatedAt,
-			})
-		}
-		return nil
-
-	case "revert":
-		return fmt.Errorf("revert not yet implemented: need stored file content")
-
-	default:
-		return fmt.Errorf("unknown drift action: %s (expected 'accept' or 'revert')", action)
-	}
-}
-
 func (s *Spec) Validate(ctx context.Context) (*ValidateResult, error) {
 	planResult, err := s.Plan(ctx)
 	if err != nil {

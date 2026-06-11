@@ -160,28 +160,23 @@ func (p *Planner) classifyResource(
 		}, nil
 	}
 
-	return p.checkDrift(id)
+	return p.checkMissing(id)
 }
 
-func (p *Planner) checkDrift(id string) (*PlannedAction, error) {
+// checkMissing re-renders a resource only when its generated files are gone.
+// Content edits are intentionally ignored — once generated, the file is the
+// user's to modify. To force a re-render, edit the spec or delete the file.
+func (p *Planner) checkMissing(id string) (*PlannedAction, error) {
 	files, err := p.store.GetGeneratedFiles(id)
 	if err != nil {
 		return nil, fmt.Errorf("get generated files for %s: %w", id, err)
 	}
 
 	for _, f := range files {
-		data, err := p.fs.ReadFile(f.Path)
-		if err != nil {
+		if _, err := p.fs.ReadFile(f.Path); err != nil {
 			return &PlannedAction{
-				ResourceID: id, Kind: ActionDrift,
-				Reason: "file modified on disk", Files: filePaths(files),
-			}, nil
-		}
-		diskHash := fmt.Sprintf("%x", sha256.Sum256(data))
-		if diskHash != f.ContentHash {
-			return &PlannedAction{
-				ResourceID: id, Kind: ActionDrift,
-				Reason: "file modified on disk", Files: filePaths(files),
+				ResourceID: id, Kind: ActionModify,
+				Reason: "generated file missing — regenerating", Files: filePaths(files),
 			}, nil
 		}
 	}
