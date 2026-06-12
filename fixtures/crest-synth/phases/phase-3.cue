@@ -62,10 +62,19 @@ project: assets: MidiPlayLiveMain: {
 		"Open the default output device through the CpalAudioOutput adapter (the Shell::AudioOutput port). Render the timeline through the phase-2/3 engine (Voice + AudioRenderer) in real time, writing rendered AudioFrames to the output stream as the wall clock advances; respect --seconds if set.",
 		"If NO output device is available, exit with a clear non-zero status and a human-readable stderr message (e.g. \"no default output device\") — never panic.",
 		"Print a startup line (device name, event count, duration) before streaming. Do NOT write a WAV file — this binary is for live audio only.",
+		#"Support a `--no-device-dry-run` flag (mutually exclusive with live playback). In dry-run mode, parse the args and the timeline, and CONSTRUCT the full real-time pipeline objects — the rtrb event ring buffer, the triple_buffer ParameterBridge, and the basedrop DeferredDeallocator plumbing that the live path would use — WITHOUT opening any audio device. Then print EXACTLY a line containing the token `dry-run ok: pipeline constructed` and exit 0. This makes the realtime wiring mechanically checkable with no audio device present."#,
+		"In dry-run mode never touch cpal's host/device APIs and never block on the wall clock; it must return 0 quickly and deterministically on any machine, including CI.",
 	]
 	validations: [
-		// compiles-only: validations must NEVER open an audio device.
+		// compiles-only for the live path: validations must NEVER open an audio device.
 		{kind: "compiles", command: ["make", "build"], description: "live player compiles"},
+		// device-free behavioral check: the --no-device-dry-run mode builds the
+		// realtime pipeline (ring buffer / param bridge / deferred dealloc) and
+		// exits 0 without opening a device.
+		{kind: "integration", command: ["make", "check-live"], description: "realtime pipeline constructs without an audio device", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "stdout_contains", pattern: "dry-run ok"},
+		]},
 	]
 }
 

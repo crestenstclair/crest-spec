@@ -61,6 +61,42 @@ project: contexts: Effects: repositories: EffectChainRepository: {
 	contract: {findById: "EffectChainId -> Option<EffectChain>", save: "EffectChain -> ()"}
 }
 
+// ── Effects made audible (the phase-7 behavior prover) ─────────────────
+// effects_demo proves the EffectChain end to end through the real render path:
+// it renders the multi-patch demo, runs each patch's audio through a per-patch
+// EffectChain and the master mix through a global EffectChain, and MECHANICALLY
+// proves the two invariants — (1) slot order matters, (2) a bypassed chain
+// passes audio through unmodified. fundsp's adapter arrives in phase 9, so the
+// demo supplies a tiny in-crate EffectProcessor impl (the port exists now); the
+// proof is structural (ordering + bypass), not DSP-quality.
+
+project: assets: EffectsDemoMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/effects_demo.rs: renders the multi-patch demo through per-patch + global EffectChains, proving slot-order and bypass-passthrough to WAV"
+	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Effects.EffectChain", "port.Effects.EffectProcessor"]
+	prompts: [
+		"File path: src/bin/effects_demo.rs",
+		"CLI: `effects_demo [FILE.mid] [--out OUT.wav]`. Default output path effects-demo.wav. With no FILE, use the built-in multi-channel demo tune (sustained notes so the effect is audible).",
+		"Start from the patch_play setup: 2-3 Patches subscribed to different channels via the ChannelDispatcher into per-patch voice pools, summed via PatchMixer then GlobalMixer.",
+		"Provide a tiny in-crate implementation of the EffectProcessor port (port.Effects.EffectProcessor) — a couple of simple effects are enough (e.g. a gain/trim and a single-tap feedback delay). fundsp is NOT a dependency at this phase; do not import it.",
+		"Build a per-patch EffectChain for at least one patch with at least TWO EffectSlots, and a global (master) EffectChain on the mix bus. Process signal flow STRICTLY in order: patch voices -> per-patch EffectChain (slot 0 then slot 1 ...) -> PatchMixer -> GlobalMixer -> master EffectChain -> output. Render the whole passage to WAV.",
+		#"MECHANICALLY prove slot order: process one short test block through the chain in its declared slot order AND through the reversed slot order, and assert in code that the two outputs DIFFER (panic with a clear message if they are identical). Print a verbatim line `slot order matters: true`."#,
+		#"MECHANICALLY prove bypass passthrough: take a short test block, run it through a BYPASSED EffectChain, and assert in code the output is BIT-IDENTICAL to the dry input (panic if not). Print a verbatim line `bypass passthrough: true`."#,
+		"Write 16-bit mono WAV (default effects-demo.wav, or --out) with a pure-Rust WAV writer.",
+		"Print per-patch/per-chain stats. The `slot order matters: true` and `bypass passthrough: true` tokens MUST appear verbatim so a validation can assert both EffectChain invariants held.",
+		"Exit 0 on success (the two in-code assertions must pass for a normal run).",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "effects demo builds"},
+		{kind: "integration", command: ["make", "demo-effects"], description: "multi-patch demo renders through effect chains; slot-order and bypass invariants hold", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "file_exists", path: "effects-demo.wav"},
+			{kind: "stdout_contains", pattern: "slot order matters: true"},
+			{kind: "stdout_contains", pattern: "bypass passthrough: true"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: effectsRouting: [

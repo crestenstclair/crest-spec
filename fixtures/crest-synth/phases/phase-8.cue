@@ -75,6 +75,43 @@ project: contexts: Presets: repositories: PresetRepository: {
 	contract: {findById: "PresetId -> Option<Preset>", findByCategory: "string -> Vec<Preset>", search: "string -> Vec<Preset>", save: "Preset -> ()", listAll: "() -> Vec<Preset>"}
 }
 
+// ── Preset round-trip made provable (the phase-8 behavior prover) ──────
+// preset_demo proves the two presetIntegrity invariants MECHANICALLY: it builds
+// a full Setup (several distinct patches + mixer + mod + effects), serializes it
+// via the PresetCodec port, deserializes it back, asserts the reloaded Setup
+// equals the original, and — the real proof of "reproduces the saved sound
+// exactly" — renders the SAME demo passage through both the original and the
+// reloaded Setup and asserts the two WAVs are BIT-IDENTICAL. The SerdePresetCodec
+// adapter lands in phase 9; this phase provides the serde-backed codec inline so
+// the round-trip is testable now.
+
+project: assets: PresetRoundtripDemoMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/preset_demo.rs: serializes a full Setup, reloads it, and proves round-trip fidelity by rendering identical audio before/after"
+	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Presets.Preset", "aggregate.Presets.Setup", "port.Presets.PresetCodec"]
+	prompts: [
+		"File path: src/bin/preset_demo.rs",
+		"CLI: `preset_demo [--out OUT.wav]`. Default output path preset-demo.wav.",
+		"Build a full Setup: 2-3 distinct Patches (different OscillatorConfig/FilterConfig/AmpEnvelopeConfig, gain/pan, channel subscriptions) plus master gain. Each Patch's complete state must be captured as a Preset.",
+		"Implement the PresetCodec port (port.Presets.PresetCodec) inline using serde + serde_json (derive Serialize/Deserialize on the serialized preset/setup value objects). serialize/deserialize a single Preset and serializeSetup/deserializeSetup for the whole Setup.",
+		#"Round-trip the Setup: serializeSetup -> Vec<u8> -> deserializeSetup -> Setup'. Assert in code that Setup' EQUALS the original Setup (derive PartialEq; panic with a clear message on mismatch). Print a verbatim line `setup roundtrip: equal`."#,
+		"Render a fixed built-in demo passage through the ORIGINAL Setup to an in-memory buffer, and the SAME passage through the RELOADED Setup' to a second buffer (same dispatcher -> per-patch pools -> PatchMixer -> GlobalMixer path, deterministic, fixed sample blocks).",
+		#"Assert in code the two rendered buffers are BIT-IDENTICAL sample-for-sample (panic if any sample differs) — this is the real proof that the preset reproduces the saved sound exactly. Print a verbatim line `render identical: true`."#,
+		"Write the (identical) rendered audio to 16-bit mono WAV (default preset-demo.wav, or --out) with a pure-Rust WAV writer.",
+		"Print stats. The `setup roundtrip: equal` and `render identical: true` tokens MUST appear verbatim so a validation can assert both presetIntegrity invariants held.",
+		"Exit 0 on success (both in-code assertions must pass).",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "preset demo builds"},
+		{kind: "integration", command: ["make", "demo-presets"], description: "Setup round-trips through the codec and re-renders bit-identical audio", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "file_exists", path: "preset-demo.wav"},
+			{kind: "stdout_contains", pattern: "setup roundtrip: equal"},
+			{kind: "stdout_contains", pattern: "render identical: true"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: presetIntegrity: [

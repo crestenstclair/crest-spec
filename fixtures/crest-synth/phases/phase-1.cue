@@ -62,7 +62,7 @@ project: assets: MidiPlayMain: {
 		"When FILE is given, load it with the MidiFileLoader module into the time-ordered (seconds, MidiEvent) timeline.",
 		"Render the timeline OFFLINE through the phase-1 engine (SineVoice + AudioRenderer): step in fixed sample blocks, trigger note_on/note_off at the correct sample offsets, and render what the current engine supports — sum simultaneous notes (basic polyphony by summing active voices).",
 		"Write 16-bit mono WAV (default path midi-play.wav, or the --out path) using a pure-Rust WAV writer (no external WAV crate).",
-		"Print a one-line-per-section summary to stdout: total events, rendered duration in seconds, peak simultaneous voices, and the output path.",
+		#"Print a one-line-per-section summary to stdout. Include a verbatim line with the token `rendered seconds=` followed by the rendered duration in seconds (e.g. `rendered seconds=4.0`), plus total events, peak simultaneous voices, and the output path. The `rendered seconds=` token must appear verbatim so a validation can assert the offline render actually ran."#,
 		"Exit 0 on success; exit non-zero with a clear stderr message if the FILE cannot be parsed.",
 	]
 	validations: [
@@ -70,6 +70,7 @@ project: assets: MidiPlayMain: {
 		{kind: "integration", command: ["make", "demo-midi"], description: "built-in demo tune renders to WAV", assertions: [
 			{kind: "exit_code", expected: 0},
 			{kind: "file_exists", path: "midi-play.wav"},
+			{kind: "stdout_contains", pattern: "rendered seconds="},
 		]},
 	]
 }

@@ -74,13 +74,14 @@ project: assets: ModPlayMain: {
 		"CLI: `mod_play [FILE.mid] [--out OUT.wav]`. With no FILE, use the built-in multi-channel demo tune (sustained/legato notes so the vibrato and sweep are clearly audible).",
 		"Load FILE (when given) with the MidiFileLoader module; otherwise use the built-in timeline.",
 		"Write 16-bit mono WAV (default mod-play.wav, or --out) with a pure-Rust WAV writer.",
-		"Print stats: events per patch, peak voices per patch, and a line confirming the active modulation routings (e.g. \"LFO vibrato → pitch\", \"sweep → filter cutoff\") per patch.",
+		#"Print stats: events per patch and peak voices per patch. For the active modulation print a verbatim line per routing tagged with the token `mod routing:` — e.g. `mod routing: LFO vibrato -> pitch` and `mod routing: sweep -> filter cutoff` — so a validation can assert the ModMatrix routings were actually configured and applied. The `mod routing:` token must appear verbatim."#,
 	]
 	validations: [
 		{kind: "compiles", command: ["make", "build"], description: "mod player builds"},
-		{kind: "integration", command: ["make", "demo-mod"], description: "modulated demo renders to WAV", assertions: [
+		{kind: "integration", command: ["make", "demo-mod"], description: "modulated demo renders to WAV with active routings", assertions: [
 			{kind: "exit_code", expected: 0},
 			{kind: "file_exists", path: "mod-play.wav"},
+			{kind: "stdout_contains", pattern: "mod routing:"},
 		]},
 	]
 }

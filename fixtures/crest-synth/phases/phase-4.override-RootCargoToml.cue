@@ -13,6 +13,7 @@ project: assets: RootCargoToml: {
 		"Package name: crest-synth, version 0.1.0",
 		#"Include [[bin]] section: name = "crest-synth", path = "src/main.rs""#,
 		#"Include [[bin]] section: name = "midi_play", path = "src/bin/midi_play.rs""#,
+		#"Include [[bin]] section: name = "voice_demo", path = "src/bin/voice_demo.rs""#,
 		#"Include [[bin]] section: name = "midi_play_live", path = "src/bin/midi_play_live.rs""#,
 		#"Include [[bin]] section: name = "patch_play", path = "src/bin/patch_play.rs""#,
 		"Dependencies: `midly` (0.5.x) for SMF parsing; `cpal` for audio output; the lock-free seam crates `rtrb`, `triple_buffer`, and `basedrop`.",

@@ -60,6 +60,40 @@ project: contexts: SampleLibrary: repositories: SampleSetRepository: {
 	contract: {findById: "SampleSetId -> Option<SampleSet>", save: "SampleSet -> ()", listAll: "() -> Vec<SampleSet>"}
 }
 
+// ── Sample playback made audible (the phase-6 behavior prover) ─────────
+// sample_demo proves the SampleLibrary end to end: it SYNTHESIZES its own tiny
+// WAV sample at startup (so no sample file ships in the repo), loads it through
+// the SampleLoader into a SampleSet with multiple key/velocity zones, looks up
+// zones by (key, velocity) via the engine's SamplePlayer path, reads them back
+// pitch-shifted through the SampleInterpolator, and renders a short passage to
+// WAV. This is what mechanically proves "loading + zone lookup + interpolation"
+// rather than merely declaring the SampleLibrary context.
+
+project: assets: SamplePlayDemoMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/sample_demo.rs: hermetic SampleLibrary prover — synthesizes a sample, loads it, maps key/velocity zones, interpolates, renders to WAV"
+	uses: ["asset.MidiFileLoader", "aggregate.SampleLibrary.SampleSet", "applicationService.SampleLibrary.SampleLoader", "domainService.SampleLibrary.SampleInterpolator"]
+	prompts: [
+		"File path: src/bin/sample_demo.rs",
+		"CLI: `sample_demo [--out OUT.wav]`. Default output path sample-demo.wav.",
+		"HERMETIC: at startup, SYNTHESIZE a tiny mono 16-bit WAV sample in code (e.g. a short decaying sine ~0.3s at a known root note) and write it to a TEMP file (std::env::temp_dir() + a unique name). No sample/SF2 file may ship in the repo. Clean the temp file up at the end.",
+		"Load that temp WAV through the SampleLoader (applicationService.SampleLibrary.SampleLoader) into a SampleSet aggregate (LoadSampleSet). Build a SampleSet with at least TWO non-overlapping zones differing in KeyVelocityRange (e.g. a low-key zone and a high-key zone, or two velocity layers) sharing the synthesized SampleData via Arc.",
+		"Drive a short built-in passage of note-ons at DIFFERENT (note, velocity) pairs chosen so they land in DIFFERENT zones; for each note, look up the matching SampleZone by key+velocity, then read the sample pitch-shifted to the note's frequency through the SampleInterpolator (use Linear interpolation at minimum). Mix the rendered output in fixed sample blocks.",
+		"Write 16-bit mono WAV (default sample-demo.wav, or --out) with a pure-Rust WAV writer.",
+		#"Print verbatim behavior markers: a line `zones loaded=N` with the zone count, and for each played note a line containing the token `zone hit:` naming which zone matched the (key, velocity) lookup (e.g. `zone hit: low-key (note=48 vel=0.3)`). Both tokens must appear verbatim so a validation can assert that zone loading and key/velocity lookup actually ran."#,
+		"Exit 0 on success.",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "sample demo builds"},
+		{kind: "integration", command: ["make", "demo-samples"], description: "synthesized sample loads, zones resolve by key/velocity, interpolated render to WAV", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "file_exists", path: "sample-demo.wav"},
+			{kind: "stdout_contains", pattern: "zones loaded="},
+			{kind: "stdout_contains", pattern: "zone hit:"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: samplePlayback: [

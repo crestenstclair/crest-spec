@@ -43,6 +43,42 @@ project: contextMap: kernelToMod:         {from: "Kernel", to: "Modulation", kin
 project: contextMap: realTimeToSynth:     {from: "RealTime", to: "Synth", kind: "anti-corruption", direction: "upstream"}
 project: contextMap: realTimeToPatch:     {from: "RealTime", to: "Patch", kind: "anti-corruption", direction: "upstream"}
 
+// ── Gamepad navigation made provable (the phase-9 behavior prover) ─────
+// gamepad_demo proves the controller-first navigation logic WITHOUT any device
+// or window: it feeds a scripted sequence of raw GamepadEvents through the
+// GamepadNavigator (translating them into GamepadActions that drive the app's
+// own cursor/edit model) and resolves glyphs through the GlyphResolver for more
+// than one controller type. The gilrs/egui/eframe adapters open real devices and
+// windows, so they are NEVER invoked by a validation; this demo exercises the
+// host-agnostic domain services (GamepadNavigator, GlyphResolver) that the
+// adapters merely feed — which is exactly the "UI is a pure view / nav uses the
+// app's own cursor model" invariant made checkable.
+
+project: assets: GamepadNavDemoMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/gamepad_demo.rs: headless prover for GamepadNavigator + GlyphResolver — scripted events -> GamepadActions -> cursor model, glyph resolution per controller type"
+	uses: ["domainService.Shell.GamepadNavigator", "domainService.Shell.GlyphResolver"]
+	prompts: [
+		"File path: src/bin/gamepad_demo.rs",
+		"CLI: `gamepad_demo`. Takes no arguments and opens NO device and NO window — it is a headless harness over the host-agnostic Shell domain services. Do NOT import gilrs, egui, or eframe.",
+		"Build a small app cursor/edit model (the app's OWN navigation state, not egui focus). Feed a SCRIPTED, deterministic sequence of raw GamepadEvents through the GamepadNavigator, which must translate them into GamepadActions (Navigate, Select, Back, TweakUp, TweakDown, AssignMod, NextPage, PreviousPage, QuickSave) and drive the cursor/edit model accordingly.",
+		#"Assert in code that the scripted events produce the EXPECTED GamepadActions and the EXPECTED final cursor position (panic with a clear message on mismatch). Print a verbatim line `nav actions ok: N` where N is the number of actions dispatched."#,
+		#"Drive the GlyphResolver for at least TWO different ControllerTypes (e.g. an Xbox-style and a PlayStation-style controller) and assert each resolves to a DIFFERENT glyph for the same logical button (panic if identical). Print a verbatim line `glyphs resolved: per-controller`."#,
+		"Print a short summary. The `nav actions ok:` and `glyphs resolved: per-controller` tokens MUST appear verbatim so a validation can assert the navigation + glyph logic ran correctly with no device.",
+		"Exit 0 on success (both in-code assertions must pass).",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "gamepad demo builds"},
+		// device-free + window-free: this validation exercises only the
+		// host-agnostic GamepadNavigator/GlyphResolver domain services.
+		{kind: "integration", command: ["make", "check-gamepad"], description: "scripted gamepad events map to actions and glyphs resolve per controller, no device", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "stdout_contains", pattern: "nav actions ok:"},
+			{kind: "stdout_contains", pattern: "glyphs resolved: per-controller"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: shellDesign: [
