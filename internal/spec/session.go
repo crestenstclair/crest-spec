@@ -281,9 +281,17 @@ func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) 
 		stateMap[r.ResourceID] = r
 	}
 
-	for w := sess.CurrentWave; w < len(waves); w++ {
+	// Scan from wave 0, not sess.CurrentWave: a resource in an already-passed
+	// wave can be reset to pending (e.g. by wave verification or Resolve) after
+	// CurrentWave has advanced. Starting at CurrentWave would leave it
+	// unreachable forever and Finish would count it as stuck. Waves whose
+	// resources are all terminal/absent are skipped instantly by
+	// pendingResourcesInWave, so the rewind cost is negligible.
+	for w := 0; w < len(waves); w++ {
 		resources := s.pendingResourcesInWave(waves[w], planSet, stateMap, w)
 		if len(resources) > 0 {
+			// Persist the found wave in either direction: forward when work
+			// remains ahead, backward when an earlier wave reopened.
 			if w != sess.CurrentWave {
 				s.store.UpdateSession(sessionID, sess.Status, w)
 			}
@@ -810,23 +818,45 @@ func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.V
 	}
 }
 
+// attributeErrorToResource pins a verification/validation failure to a single
+// resource only when exactly ONE resource's generated files appear in the error
+// output. Tree-wide failures (rustfmt diffs, multi-file compiler output) mention
+// files from several resources; attributing such a failure to the first match
+// churns an innocent resource until the stall guard force-skips it. When zero or
+// multiple resources match, this returns "" (unattributed) and the
+// orchestrator-side verify agent maps files itself.
 func (s *Spec) attributeErrorToResource(errorOutput string, resources []store.SessionResource) string {
 	filePaths := parseErrorFilePaths(errorOutput)
 
+	matched := make(map[string]bool)
 	for _, r := range resources {
 		genFiles, _ := s.store.GetGeneratedFiles(r.ResourceID)
 		for _, f := range genFiles {
-			for _, errPath := range filePaths {
-				if errPath == f.Path || strings.HasSuffix(errPath, "/"+f.Path) || strings.HasSuffix(f.Path, "/"+errPath) {
-					return r.ResourceID
-				}
-			}
-			if strings.Contains(errorOutput, f.Path) {
-				return r.ResourceID
+			if resourceFileMatchesError(f.Path, filePaths, errorOutput) {
+				matched[r.ResourceID] = true
+				break
 			}
 		}
 	}
+
+	if len(matched) != 1 {
+		return ""
+	}
+	for id := range matched {
+		return id
+	}
 	return ""
+}
+
+// resourceFileMatchesError reports whether a generated file path appears in the
+// error output, either via a parsed file-path token or a raw substring match.
+func resourceFileMatchesError(filePath string, filePaths []string, errorOutput string) bool {
+	for _, errPath := range filePaths {
+		if errPath == filePath || strings.HasSuffix(errPath, "/"+filePath) || strings.HasSuffix(filePath, "/"+errPath) {
+			return true
+		}
+	}
+	return strings.Contains(errorOutput, filePath)
 }
 
 // forceTargetIntoActions ensures the target resource appears in the action

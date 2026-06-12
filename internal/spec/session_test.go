@@ -8,9 +8,76 @@ import (
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
+	"github.com/crestenstclair/crest-spec/internal/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// --- attributeErrorToResource tests ---
+
+// TestAttributeErrorToResource asserts the attribution contract: a failure is
+// pinned to a resource only when exactly ONE resource's generated file appears
+// in the error output. Zero or multiple matches return "" (unattributed), so
+// the orchestrator-side verify agent maps files itself instead of the server
+// churning an innocent resource on a tree-wide diff.
+func TestAttributeErrorToResource(t *testing.T) {
+	newSpecWithFiles := func(t *testing.T, files map[string][]string) *Spec {
+		t.Helper()
+		st, err := store.New(":memory:")
+		require.NoError(t, err)
+		t.Cleanup(func() { st.Close() })
+		for resID, paths := range files {
+			require.NoError(t, st.SetResource(store.Resource{ID: resID, Kind: "valueObject"}))
+			for _, p := range paths {
+				require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+					Path:       p,
+					ResourceID: resID,
+				}))
+			}
+		}
+		return New(st, OSFileSystem{}, &config.Config{})
+	}
+
+	resources := []store.SessionResource{
+		{ResourceID: "res.A"},
+		{ResourceID: "res.B"},
+	}
+	genFiles := map[string][]string{
+		"res.A": {"src/audio/tone.rs"},
+		"res.B": {"src/audio/mixer.rs"},
+	}
+
+	tests := []struct {
+		name        string
+		errorOutput string
+		want        string
+	}{
+		{
+			name:        "single match attributes to that resource",
+			errorOutput: "error[E0433]: failed to resolve\n --> src/audio/tone.rs:42:5",
+			want:        "res.A",
+		},
+		{
+			name: "multiple resources' files in output stay unattributed",
+			errorOutput: "Diff in src/audio/tone.rs:\n --> src/audio/tone.rs:1:1\n" +
+				"Diff in src/audio/mixer.rs:\n --> src/audio/mixer.rs:1:1",
+			want: "",
+		},
+		{
+			name:        "no match stays unattributed",
+			errorOutput: "error[E0433]: failed to resolve\n --> src/audio/voice.rs:7:1",
+			want:        "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newSpecWithFiles(t, genFiles)
+			got := s.attributeErrorToResource(tt.errorOutput, resources)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 func TestRunProjectValidations_RecordsFailures(t *testing.T) {
 	s := &Spec{cfg: &config.Config{SpecDir: t.TempDir() + "/spec"}}
