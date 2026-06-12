@@ -53,7 +53,7 @@ func makeTestRegistry() *cuepkg.Registry {
 		Resources: map[string]cuepkg.Resource{
 			"aggregate.Synth.Voice": {
 				ID: "aggregate.Synth.Voice", Kind: "aggregate", ContextName: "Synth",
-				Declaration: aggDecl,
+				Declaration:  aggDecl,
 				Dependencies: []cuepkg.Edge{{TargetID: "port.Synth.AudioOutput", Kind: "implements"}},
 			},
 			"port.Synth.AudioOutput": {
@@ -62,17 +62,17 @@ func makeTestRegistry() *cuepkg.Registry {
 			},
 			"domainService.Synth.Mixer": {
 				ID: "domainService.Synth.Mixer", Kind: "domainService", ContextName: "Synth",
-				Declaration: svcDecl,
+				Declaration:  svcDecl,
 				Dependencies: []cuepkg.Edge{{TargetID: "aggregate.Synth.Voice", Kind: "uses"}},
 			},
 			"repository.Synth.VoicePool": {
 				ID: "repository.Synth.VoicePool", Kind: "repository", ContextName: "Synth",
-				Declaration: repoDecl,
+				Declaration:  repoDecl,
 				Dependencies: []cuepkg.Edge{{TargetID: "aggregate.Synth.Voice", Kind: "of"}},
 			},
 			"adapter.CoreAudioAdapter": {
 				ID: "adapter.CoreAudioAdapter", Kind: "adapter",
-				Declaration: adapterDecl,
+				Declaration:  adapterDecl,
 				Dependencies: []cuepkg.Edge{{TargetID: "port.Synth.AudioOutput", Kind: "implements"}},
 			},
 			"assetKind.source_file": {

@@ -50,8 +50,8 @@ func TestValueObject_CarriesAmendments(t *testing.T) {
 
 func TestResourceAmendments_TypeSwitches(t *testing.T) {
 	r := Resource{
-		ID:   "Audio.EqualTemperament",
-		Kind: "valueObject",
+		ID:          "Audio.EqualTemperament",
+		Kind:        "valueObject",
 		Declaration: ValueObject{Meta: Meta{Amendments: []Amendment{{Name: "a1"}, {Name: "a2"}}}},
 	}
 	got := ResourceAmendments(r)

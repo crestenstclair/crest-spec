@@ -113,22 +113,32 @@ type memDirEntry struct {
 	dir  bool
 }
 
-func (e memDirEntry) Name() string               { return e.name }
-func (e memDirEntry) IsDir() bool                 { return e.dir }
-func (e memDirEntry) Type() fs.FileMode           { if e.dir { return fs.ModeDir }; return 0 }
-func (e memDirEntry) Info() (fs.FileInfo, error)   { return memFileInfo{name: e.name, dir: e.dir}, nil }
+func (e memDirEntry) Name() string { return e.name }
+func (e memDirEntry) IsDir() bool  { return e.dir }
+func (e memDirEntry) Type() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (e memDirEntry) Info() (fs.FileInfo, error) { return memFileInfo{name: e.name, dir: e.dir}, nil }
 
 type memFileInfo struct {
 	name string
 	dir  bool
 }
 
-func (i memFileInfo) Name() string      { return i.name }
-func (i memFileInfo) Size() int64       { return 0 }
-func (i memFileInfo) Mode() fs.FileMode { if i.dir { return fs.ModeDir | 0o755 }; return 0o644 }
+func (i memFileInfo) Name() string { return i.name }
+func (i memFileInfo) Size() int64  { return 0 }
+func (i memFileInfo) Mode() fs.FileMode {
+	if i.dir {
+		return fs.ModeDir | 0o755
+	}
+	return 0o644
+}
 func (i memFileInfo) ModTime() time.Time { return time.Time{} }
-func (i memFileInfo) IsDir() bool       { return i.dir }
-func (i memFileInfo) Sys() any          { return nil }
+func (i memFileInfo) IsDir() bool        { return i.dir }
+func (i memFileInfo) Sys() any           { return nil }
 
 func newTestSpec(mfs *memFS) *Spec {
 	return &Spec{

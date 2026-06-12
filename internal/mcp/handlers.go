@@ -3,7 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"errors"
+	"time"
 
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 )
@@ -24,34 +25,40 @@ func (s *Server) handleInitialize(ctx context.Context, id any, params json.RawMe
 				"name":    "crest-spec",
 				"version": "0.1.0",
 			},
-			"instructions": `crest-spec is a declarative code generation system. YOU are the orchestrator.
+			"instructions": `crest-spec is a declarative code generation system. The MCP server is a pure
+spec state engine — it never calls an LLM and never spawns subprocesses.
+YOU (Claude Code) are the orchestrator and run all generation with your own
+sub-agents/workflows. Default generation model: sonnet.
 
-## Spec workflow — agent-driven generation
+## Spec workflow — native orchestration
 
-To generate code from a spec, drive this pipeline yourself. Do NOT use spec_apply — it is unattended mode and gives you no control.
+1. spec/plan            → see what needs generating
+2. spec/begin           → start a session (returns session_id, plan, waves, pending destroys)
+3. spec/confirm_destroys → if PendingDestroys is non-empty, confirm deletions
+4. spec/next            → next wave of resources (dependency order)
+5. For each resource in the wave (parallelize across the wave):
+   a. spec/context      → scoped prompt + system_prompt + project invariants
+   b. Generate with a sub-agent (sonnet) using that prompt
+   c. Judge each returned invariant against the generated files (pass/fail + summary)
+   d. spec/commit       → files + notes + model + invariant_checks
+                          The server writes files and runs the resource's
+                          mechanical validations (compile/test/custom).
+                          A failed validation or a failed invariant verdict
+                          rejects the commit.
+   e. If Committed=false: call spec/context again (it now includes the
+      failure), regenerate, re-commit — up to max_retries. Then
+      spec/resolve (guidance) or spec/skip.
+6. Repeat from step 4 until spec/next returns done=true
+7. spec/finish          → finalize; if reflection_prompt is non-empty, run it
+                          with a sub-agent and submit via spec/record_learnings
 
-1. spec_plan          → see what needs generating
-2. spec_begin         → start a session, get session_id
-3. spec_next          → get the next wave of resources (respects dependency order)
-4. For each resource in the wave:
-   a. spec_context    → get the scoped prompt + system_prompt for this resource
-   b. run_prompt      → dispatch the prompt to a Claude sub-agent (async, returns job_id)
-   c. poll_result     → retrieve the generated output when ready
-   d. Parse the output: extract code blocks with "// path:" annotations
-   e. spec_commit     → commit the parsed files for this resource
-   f. If generation fails or output is bad: fix the prompt and retry, or spec_skip
-5. Repeat step 3 until spec_next returns done=true
-6. spec_finish        → finalize the session
+The core loop is generate → commit → validate → retry-with-feedback.
+Never write implementation code in the orchestrator context — every file
+comes from a sub-agent. You are the quality gate: review before committing.
 
-You can run multiple run_prompt calls in parallel for resources within the same wave.
-Review the generated code before committing — you are the quality gate.
-
-## Other tools
-- run_prompt: ad-hoc generation (not tied to a spec session)
-- code_review: multi-model code review
-- bugbot: lightweight bug scan
-- poll_result: check async job status (use with run_prompt, code_review, bugbot)
-- cancel_job: kill a running async job`,
+## Self-improvement
+- spec/evolve + spec/record_learnings: distill learnings from failures
+- spec/learnings + spec/promote_learnings: inspect and promote learnings`,
 		},
 	}
 }
@@ -94,12 +101,13 @@ func (s *Server) handleToolCall(ctx context.Context, id any, params json.RawMess
 		}
 	}
 
-	var progressToken string
-	if tcp.Meta != nil && len(tcp.Meta.ProgressToken) > 0 {
-		progressToken = strings.Trim(string(tcp.Meta.ProgressToken), "\"")
+	start := time.Now()
+	result := handler(ctx, tcp.Arguments)
+	var recordErr error
+	if result.IsError {
+		recordErr = errors.New("tool error")
 	}
-
-	result := handler(ctx, tcp.Arguments, progressToken)
+	s.metrics.Record(tcp.Name, time.Since(start), recordErr)
 	return jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -247,7 +255,7 @@ func (s *Server) handlePromptsGet(ctx context.Context, id any, params json.RawMe
 		}}
 
 	case "orchestrator_instructions":
-		instructions := "You are a dispatcher, not a code generator. Do not write code yourself.\nFor each resource: call spec/context to get its prompt, then call run_prompt with that prompt."
+		instructions := "You are the orchestrator. For each resource: spec/context → generate with a sub-agent (sonnet) → judge the returned invariants → spec/commit with files + invariant_checks. On Committed=false, re-call spec/context (it includes the failure) and retry."
 		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"messages": []map[string]string{{"role": "user", "content": instructions}},
 		}}

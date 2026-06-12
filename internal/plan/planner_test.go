@@ -97,7 +97,7 @@ func TestPlan_NoChanges(t *testing.T) {
 	st.resources["aggregate.Synth.Voice"] = store.Resource{
 		ID: "aggregate.Synth.Voice", Kind: "aggregate",
 		DeclarationHash: declHash(resources["aggregate.Synth.Voice"].Declaration),
-		EffectiveHash: hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
+		EffectiveHash:   hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
 	}
 	p := New(st, newFakeFS())
 	actions, err := p.Plan(context.Background(), reg, g, "opus", "default")
@@ -126,7 +126,7 @@ func TestPlan_DeclarationChanged(t *testing.T) {
 func TestPlan_DependencyCascade(t *testing.T) {
 	resources := map[string]cuepkg.Resource{
 		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate",
-			Declaration: map[string]string{"purpose": "voice"},
+			Declaration:  map[string]string{"purpose": "voice"},
 			Dependencies: []cuepkg.Edge{{TargetID: "aggregate.Synth.Osc", Kind: "uses"}}},
 		"aggregate.Synth.Osc": {ID: "aggregate.Synth.Osc", Kind: "aggregate",
 			Declaration: map[string]string{"purpose": "osc-updated"}},
@@ -189,7 +189,7 @@ func TestPlan_MissingFileRegenerates(t *testing.T) {
 	st.resources["aggregate.Synth.Voice"] = store.Resource{
 		ID: "aggregate.Synth.Voice", Kind: "aggregate",
 		DeclarationHash: declHash(resources["aggregate.Synth.Voice"].Declaration),
-		EffectiveHash: hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
+		EffectiveHash:   hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
 	}
 	st.files["aggregate.Synth.Voice"] = []store.GeneratedFile{
 		{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "original-content-hash"},
@@ -213,7 +213,7 @@ func TestPlan_ModifiedContentIsIgnored(t *testing.T) {
 	st.resources["aggregate.Synth.Voice"] = store.Resource{
 		ID: "aggregate.Synth.Voice", Kind: "aggregate",
 		DeclarationHash: declHash(resources["aggregate.Synth.Voice"].Declaration),
-		EffectiveHash: hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
+		EffectiveHash:   hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
 	}
 	st.files["aggregate.Synth.Voice"] = []store.GeneratedFile{
 		{Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "original-content-hash"},
