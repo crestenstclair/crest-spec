@@ -71,6 +71,35 @@ project: contexts: Patch: repositories: PatchRepository: {
 	contract: {findById: "PatchId -> Option<Patch>", findByChannel: "ChannelAddress -> Vec<Patch>", save: "Patch -> ()", listAll: "() -> Vec<Patch>"}
 }
 
+// ── Multi-patch MIDI playback (the integration prover) ─────────────────
+// patch_play is THE end-to-end integration proof: a multi-channel MIDI file
+// fanned out by the ChannelDispatcher into per-patch voice pools and summed
+// by the PatchMixer / GlobalMixer to one WAV.
+
+project: assets: PatchPlayMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/patch_play.rs: multi-patch MIDI player — proves dispatcher → per-patch voice pools → global mix end to end"
+	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "domainService.Synth.VoiceAllocator"]
+	prompts: [
+		"File path: src/bin/patch_play.rs",
+		"Configure 2-3 Patch aggregates with DISTINCT engine settings (different OscillatorConfig / FilterConfig / AmpEnvelopeConfig and gain/pan), each with its own VoicePoolConfig, and each subscribed (ChannelSubscription) to a DIFFERENT MIDI channel via its ChannelAddress.",
+		"CLI: `patch_play [FILE.mid] [--out OUT.wav]`. With no FILE, build a BUILT-IN multi-channel demo tune in code: events spread across the channels the patches subscribe to (so every patch sounds), spanning a few bars.",
+		"Load FILE (when given) with the MidiFileLoader module; otherwise use the built-in multi-channel timeline.",
+		"Route EVERY event through the ChannelDispatcher to all subscribed patches; each patch drives its OWN VoiceAllocator / voice pool (independent polyphony + stealing), proving one patch cannot exhaust another's voices.",
+		"Sum each patch's rendered audio through the PatchMixer (per-patch gain + pan), then the GlobalMixer (master gain), into one output buffer.",
+		"Write 16-bit mono WAV (default patch-play.wav, or --out) with a pure-Rust WAV writer.",
+		"Print per-channel / per-patch statistics to stdout: events delivered per patch, peak simultaneous voices per patch, and voice-steal counts per patch.",
+		"Purpose: this binary proves the dispatcher → per-patch-pools → global-mix integration works end to end.",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "patch player builds"},
+		{kind: "integration", command: ["make", "demo-patches"], description: "multi-channel demo renders through all patches to WAV", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "file_exists", path: "patch-play.wav"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: patchIsolation: [

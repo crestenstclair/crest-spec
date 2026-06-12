@@ -73,15 +73,19 @@ project: assetKinds: "rust-adapter":            {description: "Rust infrastructu
 // ── Stable project assets ──────────────────────────────
 // Module declarations (lib.rs, mod.rs) are derived by the engine from the registry.
 
+// RootCargoToml and BuildMakefile carry per-phase `prompts` lists (deps and
+// make targets grow phase to phase). CUE cannot unify two concrete lists of
+// different lengths, so their `prompts` live in phase-N.override-<Asset>.cue
+// files (the harness copies the highest override N <= target phase). base.cue
+// declares only the stable kind/description; every phase 1..N ships an override
+// that supplies the prompts. See phase-1.override-{RootCargoToml,BuildMakefile}.cue.
 project: assets: RootCargoToml: {
 	kind:        "cargo-manifest"
 	description: "Root Cargo.toml for the crest-synth project"
-	prompts: ["Package name: crest-synth, version 0.1.0", #"Include [[bin]] section: name = "crest-synth", path = "src/main.rs""#]
 }
 project: assets: BuildMakefile: {
 	kind:        "makefile"
 	description: "Build automation for the crest-synth project"
-	prompts: ["Default target: build", "test: cargo test", "check: cargo check", "clean: cargo clean", "run: cargo run", "lint: cargo clippy -- -D warnings", "fmt: cargo fmt -- --check"]
 }
 project: assets: ToneTestMain: {
 	kind:        "rust-binary"

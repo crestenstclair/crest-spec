@@ -57,6 +57,34 @@ project: contexts: Modulation: domainServices: ModulationProcessor: {
 	uses: ["aggregate.Modulation.ModMatrix"]
 }
 
+// ── Modulation made audible ────────────────────────────────────────────
+// mod_play is patch_play with the Modulation context active: an LFO vibrato
+// and a filter sweep, routed through the ModMatrix and applied each block by
+// the ModulationProcessor, so the modulation is something a human can hear.
+
+project: assets: ModPlayMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/mod_play.rs: multi-patch MIDI player with the Modulation context active — audible LFO vibrato + filter sweep"
+	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Modulation.ModMatrix", "domainService.Modulation.ModulationProcessor"]
+	prompts: [
+		"File path: src/bin/mod_play.rs",
+		"Start from the patch_play setup: 2-3 Patches with distinct engine settings, each subscribed to a different MIDI channel, fed by the ChannelDispatcher into per-patch voice pools, summed via PatchMixer / GlobalMixer.",
+		"For each patch build a ModMatrix (aggregate.Modulation.ModMatrix). Configure at least one LfoConfig (ConfigureLfo) and add routings via AddRouting: (1) an LFO vibrato — ModSourceType::Lfo routed to the pitch ModDestinationType with a small depth; (2) a filter sweep — a ModSourceType (Lfo or an Envelope from a ModEnvelopeConfig) routed to the filter-cutoff ModDestinationType with a clearly audible depth.",
+		"Each audio block, run the ModulationProcessor over each patch's ModMatrix to evaluate the mod sources and apply the routed modulation to the destination parameters (pitch / filter cutoff) before rendering that patch's voices.",
+		"CLI: `mod_play [FILE.mid] [--out OUT.wav]`. With no FILE, use the built-in multi-channel demo tune (sustained/legato notes so the vibrato and sweep are clearly audible).",
+		"Load FILE (when given) with the MidiFileLoader module; otherwise use the built-in timeline.",
+		"Write 16-bit mono WAV (default mod-play.wav, or --out) with a pure-Rust WAV writer.",
+		"Print stats: events per patch, peak voices per patch, and a line confirming the active modulation routings (e.g. \"LFO vibrato → pitch\", \"sweep → filter cutoff\") per patch.",
+	]
+	validations: [
+		{kind: "compiles", command: ["make", "build"], description: "mod player builds"},
+		{kind: "integration", command: ["make", "demo-mod"], description: "modulated demo renders to WAV", assertions: [
+			{kind: "exit_code", expected: 0},
+			{kind: "file_exists", path: "mod-play.wav"},
+		]},
+	]
+}
+
 // ── Invariants ─────────────────────────────────────────
 
 project: invariants: modulationSafety: [
