@@ -97,8 +97,8 @@ for phase in $(seq "$START" "$END"); do
   # Launch generation session via claude directly, with Remote Control enabled so
   # the session can be monitored/driven from claude.ai or the Claude mobile app.
   # Each phase gets its own named Remote Control session for easy identification.
-  (cd "$WORK_DIR" && claude --permission-mode bypassPermissions \
-    --remote-control "crest-synth phase ${phase}" \
+  (cd "$WORK_DIR" && claude --remote-control "crest-synth phase ${phase}" \
+    --permission-mode bypassPermissions \
     "Use the spec-generate skill to run a full crest-spec generation session for the spec in ${SPEC_DIR}. Work through every wave; do not stop for confirmation on destroys (this is a fixture run).")
 
   echo ""
