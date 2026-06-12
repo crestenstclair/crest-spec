@@ -10,10 +10,14 @@ project: contexts: Presets: ubiquitousLanguage: {
 	Setup:      "the full app state: patch list, subscriptions, mixer, effects — everything to restore a session"
 }
 
-project: contexts: Presets: valueObjects: PresetId: {from: "string", description: "unique identifier for a preset (UUID or slug)"}
+project: contexts: Presets: valueObjects: PresetId: {from: "string", description: "unique identifier for a preset (UUID or slug)", validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetId"}]}
 project: contexts: Presets: valueObjects: PresetMetadata: {
 	state:       {name: "string", author: "string", category: "string", tags: "Vec<string>", createdAt: "string"}
 	description: "metadata about a preset for browsing and search"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetMetadata"},
+		{kind: "test", command: ["cargo", "test", "preset_metadata"], description: "PresetMetadata unit tests pass"},
+	]
 }
 
 project: contexts: Presets: aggregates: Preset: {
@@ -36,6 +40,10 @@ project: contexts: Presets: aggregates: Preset: {
 		{name: "PresetDeleted", payload: {id: "PresetId"}},
 		{name: "PresetMetadataUpdated", payload: {id: "PresetId"}},
 	]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with Preset"},
+		{kind: "test", command: ["cargo", "test", "preset"], description: "Preset unit tests pass"},
+	]
 }
 
 project: contexts: Presets: aggregates: PresetBank: {
@@ -53,6 +61,10 @@ project: contexts: Presets: aggregates: PresetBank: {
 		{name: "PresetRemovedFromBank", payload: {presetId: "PresetId"}},
 	]
 	invariants: ["factory banks are read-only; user cannot modify them"]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetBank"},
+		{kind: "test", command: ["cargo", "test", "preset_bank"], description: "PresetBank invariant tests pass"},
+	]
 }
 
 project: contexts: Presets: aggregates: Setup: {
@@ -61,18 +73,34 @@ project: contexts: Presets: aggregates: Setup: {
 	state:   {name: "string", patches: "Vec<SerializedPatch>", masterGain: "Amplitude", masterEffectChain: "SerializedEffectChain"}
 	commands: [{name: "SaveSetup", payload: {name: "string"}}, {name: "LoadSetup", payload: {path: "string"}}]
 	events:   [{name: "SetupSaved", payload: {name: "string", patchCount: "u32"}}, {name: "SetupLoaded", payload: {name: "string", patchCount: "u32"}}]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with Setup"},
+		{kind: "test", command: ["cargo", "test", "setup"], description: "Setup unit tests pass"},
+	]
 }
 
 project: contexts: Presets: ports: PresetCodec: {
 	contract: {serialize: "Preset -> Vec<u8>", deserialize: "Vec<u8> -> Result<Preset, CodecError>", serializeSetup: "Setup -> Vec<u8>", deserializeSetup: "Vec<u8> -> Result<Setup, CodecError>"}
 	meta: notes: "serde with serde_json (human-readable) or bincode (compact binary)"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetCodec port"}]
 }
 
-project: contexts: Presets: applicationServices: PresetBrowser: {purpose: "lists, searches, and previews presets from all banks", uses: ["aggregate.Presets.Preset", "aggregate.Presets.PresetBank"]}
+project: contexts: Presets: applicationServices: PresetBrowser: {
+	purpose: "lists, searches, and previews presets from all banks"
+	uses: ["aggregate.Presets.Preset", "aggregate.Presets.PresetBank"]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetBrowser"},
+		{kind: "test", command: ["cargo", "test", "preset_browser"], description: "PresetBrowser unit tests pass"},
+	]
+}
 
 project: contexts: Presets: repositories: PresetRepository: {
 	of:       "aggregate.Presets.Preset"
 	contract: {findById: "PresetId -> Option<Preset>", findByCategory: "string -> Vec<Preset>", search: "string -> Vec<Preset>", save: "Preset -> ()", listAll: "() -> Vec<Preset>"}
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with PresetRepository"},
+		{kind: "test", command: ["cargo", "test", "preset_repository"], description: "PresetRepository unit tests pass"},
+	]
 }
 
 // ── Preset round-trip made provable (the phase-8 behavior prover) ──────

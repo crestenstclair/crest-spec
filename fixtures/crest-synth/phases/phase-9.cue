@@ -5,24 +5,87 @@ package crestsynth
 
 // ── Shell additions ────────────────────────────────────
 
-project: contexts: Shell: ports: GamepadInput: contract: {poll: "() -> Vec<GamepadEvent>", connectedControllers: "() -> Vec<ControllerId>", controllerType: "ControllerId -> ControllerType"}
-project: contexts: Shell: ports: GuiRenderer: contract:   {beginFrame: "() -> UiContext", endFrame: "UiContext -> ()", customPaint: "(Rect, PaintCallback) -> ()"}
+project: contexts: Shell: ports: GamepadInput: {
+	contract: {poll: "() -> Vec<GamepadEvent>", connectedControllers: "() -> Vec<ControllerId>", controllerType: "ControllerId -> ControllerType"}
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GamepadInput port"}]
+}
+project: contexts: Shell: ports: GuiRenderer: {
+	contract: {beginFrame: "() -> UiContext", endFrame: "UiContext -> ()", customPaint: "(Rect, PaintCallback) -> ()"}
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GuiRenderer port"}]
+}
 
-project: contexts: Shell: valueObjects: GamepadAction:    {from: "enum", description: "Navigate, Select, Back, TweakUp, TweakDown, AssignMod, NextPage, PreviousPage, QuickSave"}
-project: contexts: Shell: valueObjects: ControllerGlyph:  {state: {button: "GamepadButton", controllerType: "ControllerType", glyphPath: "string"}, description: "maps a logical button to the correct visual glyph for the connected controller"}
+project: contexts: Shell: valueObjects: GamepadAction:   {from: "enum", description: "Navigate, Select, Back, TweakUp, TweakDown, AssignMod, NextPage, PreviousPage, QuickSave", validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GamepadAction"}]}
+project: contexts: Shell: valueObjects: ControllerGlyph: {
+	state: {button: "GamepadButton", controllerType: "ControllerType", glyphPath: "string"}
+	description: "maps a logical button to the correct visual glyph for the connected controller"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with ControllerGlyph"},
+		{kind: "test", command: ["cargo", "test", "controller_glyph"], description: "ControllerGlyph unit tests pass"},
+	]
+}
 
-project: contexts: Shell: domainServices: GamepadNavigator: {purpose: "translates raw gamepad events into GamepadActions and drives the cursor/edit model"}
-project: contexts: Shell: domainServices: GlyphResolver:    {purpose: "resolves the correct controller glyph for each button based on connected controller type"}
+project: contexts: Shell: domainServices: GamepadNavigator: {
+	purpose: "translates raw gamepad events into GamepadActions and drives the cursor/edit model"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GamepadNavigator"},
+		{kind: "test", command: ["cargo", "test", "gamepad_navigator"], description: "GamepadNavigator unit tests pass"},
+	]
+}
+project: contexts: Shell: domainServices: GlyphResolver: {
+	purpose: "resolves the correct controller glyph for each button based on connected controller type"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GlyphResolver"},
+		{kind: "test", command: ["cargo", "test", "glyph_resolver"], description: "GlyphResolver unit tests pass"},
+	]
+}
 
 // ── Adapters ───────────────────────────────────────────
 
-project: adapters: MidirInput:       {implements: "port.Shell.MidiInput", layer: "infrastructure", meta: notes: "midir: cross-platform MIDI I/O"}
-project: adapters: Midi2Normalizer:  {implements: "port.Shell.MidiNormalizer", layer: "infrastructure", meta: notes: "midi2: MIDI 1.0 to internal model upconversion"}
-project: adapters: EframeWindow:     {implements: "port.Shell.AppWindow", layer: "infrastructure", meta: notes: "eframe: winit + wgpu window shell for egui"}
-project: adapters: GilrsGamepad:     {implements: "port.Shell.GamepadInput", layer: "infrastructure", meta: notes: "gilrs: cross-platform gamepad input"}
-project: adapters: EguiRenderer:     {implements: "port.Shell.GuiRenderer", layer: "infrastructure", meta: notes: "egui: immediate-mode UI with custom painting"}
-project: adapters: FundspEffects:    {implements: "port.Effects.EffectProcessor", layer: "infrastructure", meta: notes: "fundsp: composable DSP nodes for reverb, chorus, delay"}
-project: adapters: SerdePresetCodec: {implements: "port.Presets.PresetCodec", layer: "infrastructure", meta: notes: "serde_json for presets, bincode for setups"}
+project: adapters: MidirInput: {
+	implements: "port.Shell.MidiInput"
+	layer: "infrastructure"
+	meta: notes: "midir: cross-platform MIDI I/O"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with MidirInput adapter"}]
+}
+project: adapters: Midi2Normalizer: {
+	implements: "port.Shell.MidiNormalizer"
+	layer: "infrastructure"
+	meta: notes: "midi2: MIDI 1.0 to internal model upconversion"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with Midi2Normalizer adapter"}]
+}
+project: adapters: EframeWindow: {
+	implements: "port.Shell.AppWindow"
+	layer: "infrastructure"
+	meta: notes: "eframe: winit + wgpu window shell for egui"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with EframeWindow adapter"}]
+}
+project: adapters: GilrsGamepad: {
+	implements: "port.Shell.GamepadInput"
+	layer: "infrastructure"
+	meta: notes: "gilrs: cross-platform gamepad input"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with GilrsGamepad adapter"}]
+}
+project: adapters: EguiRenderer: {
+	implements: "port.Shell.GuiRenderer"
+	layer: "infrastructure"
+	meta: notes: "egui: immediate-mode UI with custom painting"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with EguiRenderer adapter"}]
+}
+project: adapters: FundspEffects: {
+	implements: "port.Effects.EffectProcessor"
+	layer: "infrastructure"
+	meta: notes: "fundsp: composable DSP nodes for reverb, chorus, delay"
+	validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with FundspEffects adapter"}]
+}
+project: adapters: SerdePresetCodec: {
+	implements: "port.Presets.PresetCodec"
+	layer: "infrastructure"
+	meta: notes: "serde_json for presets, bincode for setups"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SerdePresetCodec adapter"},
+		{kind: "test", command: ["cargo", "test", "serde_preset_codec"], description: "SerdePresetCodec round-trip tests pass"},
+	]
+}
 
 // ── Context map ────────────────────────────────────────
 
