@@ -97,9 +97,22 @@ for phase in $(seq "$START" "$END"); do
   # Launch generation session via claude directly, with Remote Control enabled so
   # the session can be monitored/driven from claude.ai or the Claude mobile app.
   # Each phase gets its own named Remote Control session for easy identification.
-  (cd "$WORK_DIR" && claude --remote-control "crest-synth phase ${phase}" \
-    --permission-mode bypassPermissions \
-    "Use the spec-generate skill to run a full crest-spec generation session for the spec in ${SPEC_DIR}. Work through every wave; do not stop for confirmation on destroys (this is a fixture run).")
+  # Transient API/network failures kill a claude session with a nonzero exit;
+  # retry the phase (the planner resumes from committed state) instead of
+  # aborting the whole run. The lock is cleared between attempts.
+  for attempt in 1 2 3; do
+    if (cd "$WORK_DIR" && claude --remote-control "crest-synth phase ${phase}" \
+      --permission-mode bypassPermissions \
+      "Use the spec-generate skill to run a full crest-spec generation session for the spec in ${SPEC_DIR}. Work through every wave; do not stop for confirmation on destroys (this is a fixture run)."); then
+      break
+    fi
+    echo "Phase ${phase}: claude session exited nonzero (attempt ${attempt}/3); clearing lock and retrying."
+    sqlite3 "$WORK_DIR/.crest-spec/state.db" "DELETE FROM lock;" 2>/dev/null || true
+    if [ "$attempt" = "3" ]; then
+      echo "Phase ${phase} FAILED after 3 attempts."
+      exit 1
+    fi
+  done
 
   echo ""
   echo "Phase ${phase} complete."
