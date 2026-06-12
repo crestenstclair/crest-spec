@@ -19,8 +19,13 @@ func TestFormatLearned_WithContent(t *testing.T) {
 	require.True(t, strings.Contains(got, "prefer blocking send"), "want body, got: %q", got)
 }
 
-func TestRenderLearned_RustPlaceholderIsEmpty(t *testing.T) {
-	require.Equal(t, "", renderLearned("rust"))
+func TestRenderLearned_RustIncludesPromotedLearnings(t *testing.T) {
+	// The rust learned template carries promoted learnings; rendering must
+	// surface them under the Learned Practices header. (Asserting emptiness
+	// here would break on every real promotion — assert shape instead.)
+	got := renderLearned("rust")
+	require.NotEmpty(t, got)
+	require.Contains(t, got, "# Learned Practices")
 }
 
 func TestRenderLearned_MissingLangNoPanic(t *testing.T) {
