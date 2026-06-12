@@ -76,6 +76,7 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/finish", Description: "Step 6: Finalize the session.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`)},
 		{Name: "spec/status", Description: "Session-level status overview", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional)"}}}`)},
 		{Name: "spec/wave_status", Description: "Detailed wave-level view", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index"}},"required":["session_id","wave_index"]}`)},
+		{Name: "spec/verify_wave", Description: "Run wave-level verification: project type-check/test commands plus project-level validations, executed in the project root. Returns passed plus per-resource attributed errors. Call after a wave's resources have committed; route failures back via spec/resolve.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`)},
 		{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
 		{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
 		{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
@@ -470,6 +471,13 @@ func (s *Server) registerSpecQueryTools() {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`),
 	}, specTool("wave_status", func(ctx context.Context, a specWaveStatusArgs) (any, error) {
 		return s.spec.WaveStatus(ctx, a.SessionID, a.WaveIndex)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/verify_wave", Description: "Run wave-level verification: project type-check/test commands plus project-level validations, executed in the project root. Returns passed plus per-resource attributed errors. Call after a wave's resources have committed; route failures back via spec/resolve.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`),
+	}, specTool("verify_wave", func(ctx context.Context, a specWaveStatusArgs) (any, error) {
+		return s.spec.VerifyWave(ctx, a.SessionID, a.WaveIndex), nil
 	}))
 
 	s.addTool(toolDef{
