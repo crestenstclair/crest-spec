@@ -2,19 +2,21 @@
 
 ## Overview
 
-crest-spec is a **declarative, domain-driven code generation system**. You describe your software architecture as CUE specification files using a schema rooted in Domain-Driven Design (DDD) vocabulary, then generate implementation code by dispatching each declared resource to an LLM sub-agent with surgically scoped prompts. The system tracks all state in SQLite, diffs specs against prior state to build execution plans, and enforces architectural invariants at every stage.
+crest-spec is a **declarative, domain-driven code generation system**. You describe your software architecture as CUE specification files using a schema rooted in Domain-Driven Design (DDD) vocabulary, then generate implementation code one resource at a time with surgically scoped prompts. The system tracks all state in SQLite, diffs specs against prior state to build execution plans, and enforces architectural invariants at every stage.
 
 The mental model is **Terraform for code generation**: you declare what your system *should* look like, the tool plans what needs to change, and then applies those changes — with dependency ordering, retry loops, and verification gates.
 
-**Runtime:** A standalone Go binary (`crest-spec`) that acts as an MCP server. Its sub-agent execution engine is adapted from the proven `claude-mcp` server — the same agent wrapper (config isolation, process groups, concurrency semaphore), async job model (SQLite-persisted, PID-liveness-reconciled), and dual transports (stdio + Streamable HTTP) that are already battle-tested. The orchestrator dispatches sub-agents for code generation via `run_prompt`, and can invoke `code_review` and `bugbot` as verification steps in the constraint loop. On top of this engine, crest-spec adds CUE spec loading (via `cuelang.org/go`), a plan/apply lifecycle, prompt construction, wave-based execution, and the constraint loop.
+**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, enforces orchestrator-supplied invariant verdicts, and records history. **It never calls an LLM and never spawns subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent pulls a scoped prompt + invariants from `spec/context`, authors files, judges each invariant, and submits the result to `spec/commit`. The core validation loop survives at that commit boundary (see §4 and §8).
+
+> **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or subprocess; Claude Code is the orchestrator. Tombstones throughout this document mark the removed surfaces.
 
 - **Module:** `github.com/crestenstclair/crest-spec`
 - **Go version:** 1.26.4
 - **Server version reported over MCP:** `0.1.0`
 - **MCP protocol version:** `2024-11-05`
-- **Transport:** stdio (JSON-RPC over stdin/stdout) and Streamable HTTP (`POST /mcp`; SSE upgrade for progress streaming is planned but not yet implemented — currently plain JSON-RPC only)
-- **Sub-agent invocation:** `runner.RunPrompt` (claude `--print` subprocess), with `--disallowedTools` for constrained code generation
-- **Platform assumptions:** Unix-like (uses `syscall.Kill`, process groups, `ps`); developed on macOS/Darwin.
+- **Transport:** stdio (JSON-RPC over stdin/stdout) and Streamable HTTP (`POST /mcp`; plain JSON-RPC only)
+- **Code generation:** performed by the orchestrator's own sub-agents (default model: sonnet); the server only constructs prompts and validates results
+- **Platform assumptions:** Unix-like; developed on macOS/Darwin.
 
 ---
 
@@ -478,7 +480,7 @@ project: assets: CpalAudioOutputAdapter: {
 | `stderr_empty` | (none) |
 | `file_matches` | `path, regex: string` |
 
-**How validations fit the lifecycle:** After the constraint loop produces accepted output, the resource validator checks for `validations` declared on the resource and runs them in order. A validation failure feeds back into the sub-agent state machine — the resource transitions from `completed` to `rejected` with the validation output attached, triggering a re-dispatch with the failure details in the fix prompt.
+**How validations fit the lifecycle:** Validations run at the `spec/commit` gate (§8.2). The server writes the resource's files, runs its declared `validations` in order, and any failure rejects the commit — the resource transitions from `completed` to `rejected` with the validation output attached, and that failure is injected into the next `spec/context` so the regenerated attempt sees it.
 
 #### `invariants` — Architectural Invariants
 
@@ -497,7 +499,7 @@ project: invariants: [
 ]
 ```
 
-Invariants are checked both structurally (at plan time) and against generated code (during the constraint loop). The `rationale` is injected into prompts so the LLM understands *why*.
+Invariants are checked structurally at plan time, and against generated code at commit time by the **orchestrator's** verdict (`spec/commit`'s `invariant_checks`), which the server enforces but does not itself judge (§4). The `rationale` is injected into the `spec/context` prompt so the sub-agent judges against *why* the rule exists, not just the rule.
 
 Since CUE unifies all files in the package, invariants declared in any file apply to the entire spec — no need to redeclare them.
 
@@ -530,19 +532,21 @@ meta: {
     notes?:      string       // Free-form notes
     rationale?:  string       // Why this exists
     framework?:  string       // Framework/library to use (e.g., "nih-plug", "actix-web")
-    reviewLevel?: "full" | "light" | "solid" | "skip"  // Constraint loop review depth (see section 8.2)
+    reviewLevel?: "full" | "light" | "solid" | "skip"  // Review-depth hint (see note below)
     ...                       // Extensible
 }
 ```
 
-**`reviewLevel` values:**
+**`reviewLevel` values:** The field is still parsed and propagated through the registry, but it no longer triggers a **server-side** LLM review — the server runs no LLM. It is now a hint the orchestrator may use to decide how hard to review a resource's committed code (e.g. before drafting amendments, §8A). The historical values:
 
-| Value | Behavior |
-|-------|----------|
-| `"full"` | Multi-model code review via `engine.CodeReview`. Heavyweight — fans out across opus/sonnet. Default for aggregates, domain services, adapters. |
-| `"light"` | Single-model severity-ranked scan via `engine.Bugbot`. Default for value objects, entities, assets. |
-| `"solid"` | Single-model SOLID/DI/interface review via `engine.Review`. Explicit opt-in for any resource. |
-| `"skip"` | No LLM review. For generated boilerplate (mod.rs, Cargo.toml, manifests). |
+| Value | Intended review depth |
+|-------|----------------------|
+| `"full"` | Heavyweight, multi-model architecture review. Suits aggregates, domain services, adapters. |
+| `"light"` | Lightweight, severity-ranked scan. Suits value objects, entities, assets. |
+| `"solid"` | SOLID/DI/interface review. Explicit opt-in for any resource. |
+| `"skip"` | No review. For generated boilerplate (mod.rs, Cargo.toml, manifests). |
+
+> The old server-dispatched review tools (`engine.CodeReview` / `engine.Bugbot` / `engine.Review`) were removed in the native-workflow pivot; reviewing is now the orchestrator's job.
 
 The `framework` field is injected into prompts to guide framework-specific code generation (e.g., a `plugin` context with `framework: "nih-plug"` tells the LLM to generate nih-plug compatible code).
 
@@ -586,163 +590,114 @@ In CUE, dependencies are expressed as ID strings (e.g., `uses: ["aggregate.Synth
 
 ### 2.1 Component Map
 
-The codebase has two layers: the **engine** (adapted from `claude-mcp`) and the **spec system** (crest-spec's domain). The engine handles subprocess management, async jobs, transports, and concurrency. The spec system handles CUE loading, planning, prompt construction, and the constraint loop. The spec system dispatches sub-agents through the engine.
+The server is a single layer: the **spec state engine**. It handles CUE loading, planning, prompt construction, mechanical validation, and history — all in-process, with no subprocess management and no LLM calls. Orchestration (sub-agent dispatch, retries, parallelism) lives **outside the server**, in Claude Code's skills and workflows.
 
 ```
 cmd/crest-spec/main.go               Entrypoint + flag/help handling
   +- config.New()                     envconfig (CREST_SPEC_ prefix)
   +- store.New(dbPath)                SQLite store (WAL mode) — all state in one DB
-  +- agent.New(...)                   claude CLI wrapper (from claude-mcp)
-  +- engine.New(agent, store, ...)    wraps run_prompt / code_review / bugbot execution
-  +- spec.New(engine, store, ...)     plan/apply/verify lifecycle
-  +- mcp.New(...)                     MCP server (tools, dispatch, metrics)
+  +- spec.New(store, fs, cfg)         plan / commit / validate / history lifecycle
+  +- mcp.New(spec, stdin, stdout, log, cfg)   MCP server (tools, dispatch, metrics)
        +- stdio transport             reads stdin, writes stdout (Server handles directly)
-       +- HTTP transport              net/http server, POST /mcp (Server handles directly)
-       +- app.New(srv).Run(ctx)       lifecycle wrapper (Run until ctx cancelled)
+       +- HTTP transport              net/http server, POST /mcp (started if HTTPAddr set)
 
 internal/
-  ## Engine layer (adapted from claude-mcp)
-  agent/        Wraps the claude binary via os/exec; config isolation, process groups, concurrency
   config/       envconfig-based configuration + usage/help text
-  engine/       Orchestration primitives: run_prompt, code_review, bugbot as callable functions
-  mcp/          JSON-RPC server, tool definitions, dispatch, async jobs, metrics, recursion guard
-
-  ## Spec layer (crest-spec domain)
+  mcp/          JSON-RPC server, tool definitions, dispatch, metrics
   cue/          CUE loader: multi-file unification, resource parsing
   graph/        Resource dependency graph: topological sort, wave computation, hash propagation
   plan/         Planner: diff registry against state, compute effective hashes, produce PlannedAction[]
-  prompt/       Prompt builder: system prompt, resource prompt, fix prompt, context injection
-  spec/         Spec engine: plan/apply lifecycle, wave execution, constraint loop, sub-agent state machine; includes validation (validate.go)
+  prompt/       Prompt builder: system prompt, resource prompt, fix/UPDATE-mode context, invariants
+  spec/         Spec engine: plan/begin/context/commit/finish lifecycle, wave verification,
+                commit-time validation gate, session state machine; includes validation (validate.go)
 
   ## Shared
   db/           sqlc-generated query code (DO NOT EDIT)
   errors/       Const error sentinel type (`type New string`)
-  store/        SQLite store: jobs, resources, files, applies, generations, sessions, notes, lock
+  store/        SQLite store: resources, files, applies, generations, sessions, notes, lock
+                (the jobs table is retained in the schema but unused — see §7.1)
 migrations/     SQL schema, embedded via go:embed; applied at store startup
 sql/queries/    sqlc query definitions (source for internal/db)
+
+.claude/
+  skills/spec-generate/SKILL.md       orchestrator entrypoint (the spec-generate skill)
+  workflows/spec-generate.js          per-wave sub-agent fan-out + commit/retry/triage loop
 ```
+
+> **Tombstone — engine/agent layers.** The `internal/agent` (claude CLI wrapper) and `internal/engine` (run_prompt / code_review / bugbot dispatch) packages were removed in the native-workflow pivot. The server no longer touches `os/exec`, the `claude` binary, or any concurrency semaphore. The work those packages did — dispatching sub-agents, retrying, parallelizing a wave — is now done by the Claude Code workflow in `.claude/workflows/spec-generate.js`.
 
 ### 2.2 How the Layers Connect
 
-The spec layer never touches `os/exec` or the `claude` binary directly. It calls the engine:
+There is no server-internal generation path. The connection between the spec engine and the LLM is the **prompt-out / verdict-in** contract across the MCP tool boundary (see §4):
 
-- **Code generation**: `engine.Generate(ctx, prompt, model, opts)` — calls `runner.RunPrompt` with `--disallowedTools` to get pure code output. This is a constrained `run_prompt` invocation: no tool access, no session persistence.
-- **LLM verification**: `engine.Review(ctx, code, requirements, opts)` — calls `runner.RunPrompt` with a review prompt. Can also use `engine.CodeReview` or `engine.Bugbot` for multi-model verification passes in the constraint loop.
-- **Concurrency**: all subprocess spawns flow through the engine's shared `MaxConcurrency` semaphore — wave-parallel code generation and verification passes share the same pool.
-- **Async jobs**: long-running spec operations (`spec/apply`) use the same async job model as claude-mcp — job ID returned immediately, background goroutine, SQLite-persisted state, progress notifications.
+- **Prompt out**: `spec/context` returns the system prompt, the scoped resource prompt, and the project invariants (each `{text, rationale}`) for a resource. The orchestrator hands those to a sub-agent it spawns itself.
+- **Files + verdict in**: `spec/commit` accepts the generated files, the model label, and the orchestrator's per-invariant verdicts (`invariant_checks`). The server writes the files, runs the resource's **mechanical** validations (compile / test / custom), and enforces the supplied invariant verdicts. Any failure rejects the commit and feeds the failure into the next `spec/context`.
+- **Reflection out / learnings in**: `spec/evolve` (and `spec/finish`, per `CREST_SPEC_EVOLVE`) returns a reflection prompt built from the session's failure history; the orchestrator runs it and submits the raw output to `spec/record_learnings`.
 
 ### 2.3 Dependency Injection / Interfaces
 
 The codebase uses **package-private interfaces at the consumer** for testability:
 
-- `engine.runner` — the surface of `agent.Agent` the engine depends on (`RunPrompt`, `Models`, `About`, `Status`). Faked by `mocks.FakeRunner`.
-- `spec.engine` — the surface of `engine.Engine` the spec layer depends on (`Generate`, `Review`, `CodeReview`, `Bugbot`). Faked by `mocks.FakeEngine`.
-- `mcp.processTree` — abstraction over process-tree walking (`ParentProcess`, `SelfPID`). Real impl is `mcp.OSProcessTree`; faked by `mocks.FakeProcessTree`.
+- `spec.FileSystem` — the filesystem surface the spec engine writes through (`MkdirAll`, `ReadFile`, `WriteFile`, …). Real impl is `spec.OSFileSystem{}`; faked in tests so commits can be validated without touching disk.
 - `app.server` — anything with `Run(ctx) error`.
 
-Mocks are generated with counterfeiter (`//go:generate` directives) and committed under `internal/mocks/`.
+Mocks/fakes are committed under `internal/mocks/` (counterfeiter `//go:generate` directives) where still used.
 
 ### 2.4 Startup Sequence (`main.go`)
 
-1. **Subcommand check** — if `os.Args` is `check job <id>`, run `checkJob()` and exit (see section 13.3).
-2. **Help** — `-h`/`--help` prints usage + env var table (`config.Help()`), exits 0.
+1. **Help** — `-h`/`--help` prints usage + env var table (`config.Help()`), exits 0.
+2. **Subcommand check** — `crest-spec dashboard|state|diff|vacuum|sql` dispatch to their handlers and exit (see §13.3).
 3. **Config** — `config.New()`; on error, print help and panic.
 4. **Store** — `store.New(dbPath())` where `dbPath()` is `.crest-spec/state.db` in the project directory. `defer store.Close()`.
-5. **Orphan cleanup** — `store.CleanupOrphans()` marks jobs whose owner PID is dead as `failed` (logged, non-fatal on error).
-6. **Signal context** — `signal.NotifyContext(ctx, SIGINT, SIGTERM)`.
-7. **Agent** — `agent.New(...)` from config.
-8. **Engine** — `engine.New(agent, store, cfg)` — wraps the agent with concurrency control and the run_prompt/code_review/bugbot execution paths.
-9. **Spec** — `spec.New(engine, store, cfg)` — the plan/apply lifecycle engine.
-10. **Transport setup** — stdio always starts; HTTP starts if `HTTPAddr` is set:
-    - Build `mcp.New(spec, engine, store, OSProcessTree{}, os.Stdin, os.Stdout, log, cfg)`.
-    - If `cfg.HTTPAddr != ""`, start the Streamable HTTP transport on that address.
-    - `app.New(srv).Run(ctx)`.
-    - On exit: if `ctx.Err() != nil` it was a graceful shutdown (log info); otherwise panic with the error.
+5. **Signal context** — `signal.NotifyContext(ctx, SIGINT, SIGTERM)`.
+6. **Spec** — `sp := spec.New(store, OSFileSystem{}, cfg)` — the plan/commit/validate lifecycle engine.
+7. **Server** — `srv := mcp.New(sp, os.Stdin, os.Stdout, log, cfg)`.
+8. **Transport** — stdio is always served by `srv.Run(ctx)`; if `cfg.HTTPAddr != ""`, the Streamable HTTP transport (`POST /mcp`) also starts on that address. On exit, a graceful shutdown is logged.
 
 ---
 
 ## 3. Configuration (`internal/config`)
 
-All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &cfg)`.
-
-#### Engine config (adapted from claude-mcp)
+All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &cfg)`. The `Config` struct is small — the server has no subprocess, model-client, or concurrency knobs to configure.
 
 | Field | Env var | Type | Default | Purpose |
 |-------|---------|------|---------|---------|
-| `APIKey` | `CREST_SPEC_API_KEY` | string | (none) | Passed to subprocess as `ANTHROPIC_API_KEY`. If unset, the child uses the developer's OAuth/keychain session. |
-| `AgentPath` | `CREST_SPEC_AGENT_PATH` | string | `claude` | Path/name of the claude binary. |
-| `DefaultModel` | `CREST_SPEC_DEFAULT_MODEL` | string | `claude-sonnet-4-6` | Model used when a call omits one. Accepts aliases (`opus`/`sonnet`) or full IDs. |
-| `PermissionMode` | `CREST_SPEC_PERMISSION_MODE` | string | `default` | Default permission mode (maps to `claude --permission-mode`). |
-| `Timeout` | `CREST_SPEC_TIMEOUT` | `time.Duration` | `0s` | Default per-`RunPrompt` timeout; `0s` = no timeout. |
-| `MaxConcurrency` | `CREST_SPEC_MAX_CONCURRENCY` | int | `5` | Maximum concurrent `claude` subprocess spawns server-wide. Shared across code generation, verification, and any direct tool calls. |
-| `HTTPAddr` | `CREST_SPEC_HTTP_ADDR` | string | (none) | Listen address for Streamable HTTP transport (e.g., `:8080`). If unset, only stdio is active. |
-
-#### Spec config
-
-| Field | Env var | Type | Default | Purpose |
-|-------|---------|------|---------|---------|
-| `GenerateModel` | `CREST_SPEC_GENERATE_MODEL` | string | `claude-sonnet-4-6` | Model used for code generation sub-agents. Overrides `DefaultModel` for generation dispatches. |
-| `VerifyModel` | `CREST_SPEC_VERIFY_MODEL` | string | `claude-sonnet-4-6` | Model used for the LLM verification pass in the constraint loop. |
-| `MaxRetries` | `CREST_SPEC_MAX_RETRIES` | int | `3` | Default retry count per resource in the constraint loop. |
+| `HTTPAddr` | `CREST_SPEC_HTTP_ADDR` | string | (none) | Listen address for the Streamable HTTP transport (e.g., `:8080`). If unset, only stdio is active. |
+| `GenerateModel` | `CREST_SPEC_GENERATE_MODEL` | string | `claude-sonnet-4-6` | Model **label** recorded in effective hashes / state rows and used as the default commit label when `spec/commit` omits `model`. The server does not invoke this model — it is provenance metadata. |
+| `MaxRetries` | `CREST_SPEC_MAX_RETRIES` | int | `3` | Per-resource retry budget surfaced to the orchestrator (the workflow uses it to bound its commit/retry loop). |
 | `WaveMaxRetries` | `CREST_SPEC_WAVE_MAX_RETRIES` | int | `2` | Retry count for wave-level verification failures. |
 | `SpecDir` | `CREST_SPEC_SPEC_DIR` | string | `./spec` | Directory containing CUE spec files. |
-| `TypeCheckCommand` | `CREST_SPEC_TYPE_CHECK_CMD` | string | (none) | Build/type-check command (e.g., `cargo check`). |
-| `TestCommand` | `CREST_SPEC_TEST_CMD` | string | (none) | Test command (e.g., `cargo test`). |
+| `TypeCheckCommand` | `CREST_SPEC_TYPE_CHECK_CMD` | string | (none) | Build/type-check command (e.g., `cargo check`) used at the wave-verification gate. |
+| `TestCommand` | `CREST_SPEC_TEST_CMD` | string | (none) | Test command (e.g., `cargo test`) used at the wave-verification gate. |
+| `Mode` | `CREST_SPEC_MODE` | string | `default` | Mode label folded into hashes — different modes regenerate. |
+| `Evolve` | `CREST_SPEC_EVOLVE` | string | `all` | Controls when reflection prompts are emitted. `finish`/`all` make `spec/finish` return a `reflection_prompt`. |
 
 `config.Help()` renders an aligned usage table to stderr using `tabwriter` + `envconfig.Usagef`.
 
-A separate env var `CLAUDE_CONFIG_DIR` (read directly in `agent.New`) overrides the Claude Code config directory (default `~/.claude`); it governs where the child process reads/writes `.claude.json`, credentials, and session state.
+> **Tombstone — removed config.** The native-workflow pivot dropped every subprocess/model-client knob: `CREST_SPEC_API_KEY`, `CREST_SPEC_AGENT_PATH`, `CREST_SPEC_DEFAULT_MODEL`, `CREST_SPEC_TIMEOUT`, `CREST_SPEC_MAX_CONCURRENCY`, and `CREST_SPEC_VERIFY_MODEL`. The server spawns nothing, so there is nothing for them to govern; the orchestrator owns model choice and concurrency.
 
 ---
 
-## 4. The Agent Wrapper & Engine Layer
+## 4. The Orchestration Boundary
 
-### 4.1 Agent (`internal/agent`) — Adapted from claude-mcp
+> **Tombstone.** This section previously documented the `internal/agent` CLI wrapper and the `internal/engine` sub-agent dispatch layer (`Generate` / `Review` / `CodeReview` / `Bugbot`). Both packages were deleted in the native-workflow pivot. The server no longer generates code, runs reviews, or spawns processes. What follows is the contract that replaced them.
 
-The agent wrapper is taken directly from the working claude-mcp implementation. It wraps the `claude` CLI binary via `os/exec` and handles all the subprocess management that makes concurrent invocations reliable.
+The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **prompt-out / verdict-in**: the server emits prompts and ingests verdicts, but never judges generated content itself.
 
-**`Agent` struct** holds `path`, `apiKey`, `defaultModel`, `permissionMode`, `timeout`, and `configDir`. Constructed by `New(path, apiKey, defaultModel, permissionMode, timeout)`.
+**The contract:**
 
-**Data types:**
-- `RunOpts` — Prompt, Model, Mode, Effort, Cwd, RelevantPaths, AddDirs, Continue, Resume, SessionID, Force, AllowedTools, DisallowedTools, AppendSystemPrompt.
-- `RunResult` — Output, Stderr, Model, SessionID, DurationMS, NumTurns, CostUSD, IsError, `*Usage`.
-- `Usage` — InputTokens, OutputTokens, CacheReadTokens, CacheCreationTokens.
+- **`spec/context` (prompt out)** — given `{session_id, resource_id}`, returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`). The prompt carries the resource declaration, dependency declarations, dependency notes, existing files (in UPDATE mode), and any prior commit failure for this resource. The orchestrator hands these to a sub-agent it spawns itself.
+- **`spec/commit` (files + verdicts in)** — given `{session_id, resource_id, files:[{path,content}], notes, model, invariant_checks:[{invariant, passed, summary}]}`, the server writes the changed files (per-file SHA256 skip), runs the resource's **mechanical** validations (`compiles` / `test` / `integration` / `custom`) plus any amendment validations, and enforces the supplied invariant verdicts. **Any failing validation or any `passed:false` invariant verdict rejects the commit** (`Committed:false`, state → rejected). The server records a `Generation` row labelled with `model` (or the configured `GenerateModel` if omitted) and the invariant verdicts as `invariant_checks` rows. It never re-judges an invariant — the orchestrator's verdict is authoritative.
+- **`spec/evolve` (reflection out)** — given `{session_id}`, returns `{reflection_prompt}` built from the session's failure history (empty when there is nothing to learn). The orchestrator runs the prompt with a sub-agent.
+- **`spec/record_learnings` (learnings in)** — given `{session_id, output}` (the raw reflection output), persists the distilled learnings and returns `{learnings_added}`.
+- **`spec/finish`** — finalizes the session and, when `CREST_SPEC_EVOLVE` is `finish`/`all`, also returns a `reflection_prompt` so reflection can run without a separate `spec/evolve` call.
 
-**`RunPrompt`** builds the `claude` argv:
-- Always: `--print --output-format json`.
-- `--model`, `--permission-mode`, `--effort`, `--add-dir`, `--continue`, `--resume`, `--session-id`, `--dangerously-skip-permissions`, `--allowedTools`, `--disallowedTools`, `--append-system-prompt`, `--no-session-persistence` — all supported, matching the claude-mcp implementation.
-- Prompts <= 8 KB passed as positional arg; larger prompts piped via stdin.
+The orchestrator implementation lives in this repo under `.claude/`:
 
-**Subprocess robustness** (proven in claude-mcp):
-- **Config isolation** — when an API key is configured (`CREST_SPEC_API_KEY`), each invocation gets a fresh temp config dir mirroring `~/.claude`. `.claude.json` is copied (writable per-process); credentials are hard-linked; subdirectories are symlinked. Prevents concurrent processes from racing. When no API key is set, config isolation is not activated — there is nothing to isolate since the child uses the developer's existing session.
-- **Process groups** — `SysProcAttr{Setpgid: true}`; `cmd.Cancel` sends `SIGKILL` to the whole group (`syscall.Kill(-pid, SIGKILL)`); `cmd.WaitDelay = 5s`.
-- **Partial results** — on error, parses whatever stdout was produced, attaches Stderr, returns `(partialResult, wrappedError)`.
-- **`is_error` detection** — a JSON envelope with `is_error: true` is surfaced as an error even with exit code 0.
+- **`.claude/workflows/spec-generate.js`** — the per-wave engine. It calls `spec/next` for a wave, spawns one sub-agent per resource via `parallel(...)`, and each sub-agent runs the `spec/context` → author → judge invariants → `spec/commit` → retry-on-rejection loop (bounded by `maxRetries`). Persistent failures are triaged (`spec/resolve` or `spec/skip`); a stall guard force-skips resources stuck after repeated wave passes (see §8).
+- **`.claude/skills/spec-generate/SKILL.md`** — the operator-facing entrypoint that drives `spec/plan` → `spec/begin` → `spec/confirm_destroys` → the workflow → `spec/finish` (+ reflection).
 
-**Read-only commands:** `Models`, `About`, `Status`, `MCPServers`, `MCPTools` — same as claude-mcp.
-
-### 4.2 Engine (`internal/engine`) — Sub-Agent Dispatch for crest-spec
-
-The engine wraps the agent with higher-level operations that the spec layer calls. It owns the concurrency semaphore and provides the execution paths adapted from claude-mcp's async exec funcs.
-
-**`Engine` struct** holds a `runner` (agent interface), the store, config, and the `chan struct{}` concurrency semaphore (size `MaxConcurrency`, default 5).
-
-**Operations:**
-
-- **`Generate(ctx, prompt, systemPrompt, model, GenerateOpts) (*RunResult, error)`** — the primary code generation path. Calls `runner.RunPrompt` with:
-  - `--disallowedTools Bash Read Edit Write Glob Grep WebFetch WebSearch` — no tool access, pure code output
-  - `--no-session-persistence` — stateless
-  - `--append-system-prompt` with the crest-spec system prompt
-  - Model defaults to `GenerateModel` config
-  - Acquires a concurrency slot before spawning, releases on exit
-
-- **`Review(ctx, code, requirements, model) (*RunResult, error)`** — LLM verification pass. Calls `runner.RunPrompt` with a generic review prompt. SOLID/DI/clean code checks are not hardcoded in the review template — they come from the user's meta rules (e.g., `meta.rules` in the CUE spec). Parses for `PASS`/`FAIL` verdict. Uses `VerifyModel` config.
-
-- **`CodeReview(ctx, cwd, models, prompt, CodeReviewOpts) (string, error)`** — multi-model code review of generated files. Adapted from claude-mcp's `execCodeReview`: fans out across models (default `[opus, sonnet]`), each checking for architecture issues, nil derefs, bounds errors, performance, leaks. Results aggregated per model. Useful as a heavyweight verification step for critical resources.
-
-- **`Bugbot(ctx, cwd, models, prompt, BugbotOpts) (string, error)`** — lightweight severity-ranked scan. Adapted from claude-mcp's `execBugbot`: defaults to `[sonnet]`, demands per-finding severity + remedy. Useful as a fast sanity check in the constraint loop.
-
-All operations acquire a slot from the shared concurrency semaphore. The spec layer never needs to think about subprocess limits — the engine enforces them.
+The core validation loop — the thing that makes generation reliable — survives entirely at the `spec/commit` boundary. The server is still the quality gate; only the dispatch machinery moved out.
 
 ---
 
@@ -790,30 +745,19 @@ All operations acquire a slot from the shared concurrency semaphore. The spec la
 
 **Structural kinds** (`project`, `context`, `assetKind`) are skipped during planning — they are metadata containers, not generated resources.
 
-### 5.2 Apply — `spec/apply`
+### 5.2 Apply — the workflow-driven loop
 
-**What it does:**
-1. Runs the planner to build the execution plan
-2. Acquires an exclusive lock in SQLite (prevents concurrent applies)
-3. Executes the plan in two phases:
+> **Tombstone — `spec/apply`.** The server no longer ships an unattended, server-side apply that dispatches sub-agents and runs an in-server constraint loop. `spec/apply` (and its async job) was removed in the native-workflow pivot. "Applying" a plan is now done by the orchestrator, not the server.
 
-   **Phase A — Destroys:** Deletes files and state for removed resources.
+The apply phase is driven by Claude Code through the spec-generate skill/workflow (§4, §8):
 
-   **Phase B — Generates:** For each `create` or `modify` action:
-   - Builds a full prompt (system prompt + resource prompt + context layers)
-   - Dispatches to a sub-agent via `engine.Generate`
-   - Runs the Constraint Loop (parse -> verify -> retry)
-   - Writes files to disk (per-file content hash check: files whose SHA256 matches what's already on disk are skipped — no write, no timestamp change, no file watcher trigger)
-   - Records everything in SQLite
+1. **`spec/begin`** runs the planner, acquires the SQLite session lock, computes dependency waves, and returns `{session_id, plan, waves, PendingDestroys}`.
+2. **`spec/confirm_destroys`** (when `PendingDestroys` is non-empty) deletes files and state for removed resources — only for the resource IDs the operator confirms.
+3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → author files → judge invariants → `spec/commit`. The server writes files (per-file SHA256 skip — files whose content already matches on disk are not rewritten), runs the resource's mechanical validations, enforces the invariant verdicts, and records everything in SQLite. On rejection the sub-agent re-pulls `spec/context` (now carrying the failure) and retries, up to `MaxRetries`.
+4. Persistent failures are triaged with `spec/resolve` or `spec/skip`; the wave advances when every resource is committed, skipped, or terminally rejected.
+5. **`spec/finish`** releases the lock and returns the session summary (and a `reflection_prompt` when `EVOLVE` is `finish`/`all`).
 
-4. Releases the lock
-
-**Two execution modes:**
-
-| Mode | Behavior |
-|------|----------|
-| **Flat** (default) | Each resource goes through the constraint loop independently |
-| **Wave-based** (incremental) | Resources are grouped into dependency waves; verification runs between waves |
+There is no "flat vs wave" mode toggle: generation is always wave-based, ordered by the dependency graph, with resources inside a wave run in parallel by the workflow (§8.6).
 
 ### 5.3 Targeting and Forcing
 
@@ -883,33 +827,18 @@ This gives the LLM full context on what it produced and exactly what went wrong.
 
 ## 7. SQLite as the Integration Layer
 
-SQLite is the single source of truth for all system state. One database (`.crest-spec/state.db` in the project directory) holds everything: async job tracking, spec state, generation audit trail, and sub-agent coordination.
+SQLite is the single source of truth for all system state. One database (`.crest-spec/state.db` in the project directory) holds everything: spec state, generation audit trail, and session coordination.
 
 - SQLite via `modernc.org/sqlite` (pure-Go, CGO-free).
 - PRAGMAs at open: `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON` (enables cascade behavior for foreign key constraints).
 - Migrations: SQL files embedded via `migrations.FS` (go:embed), applied in filename order, tracked in a `schema_migrations(filename)` table; each applied transactionally.
 - Queries are sqlc-generated into `internal/db/` (do not hand-edit); query source is `sql/queries/*.sql`.
 
-### 7.1 Jobs (Async Tool Lifecycle)
+### 7.1 Jobs (retired — async tool lifecycle removed)
 
-Every long-running tool call (plan, apply, generate) returns a job ID immediately. The work proceeds in a background goroutine, and the result is collected later via `poll_result` or SSE streaming.
+> **Tombstone.** Every tool call is now synchronous: the server does no background work because it spawns no subprocesses. The async job lifecycle (`run_prompt`/`spec/apply` returning a job ID, a background goroutine, `poll_result`, `cancel_job`, `list_jobs`, orphan reconciliation via PID liveness) was removed in the native-workflow pivot.
 
-**`jobs` table:**
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | TEXT PK | UUID |
-| `tool` | TEXT | originating tool name |
-| `status` | TEXT | `running` / `completed` / `failed` / `cancelled` / `deleted` (default `running`) |
-| `result` | TEXT | populated on completion |
-| `error` | TEXT | populated on failure |
-| `pid` | INTEGER | owner process PID |
-| `started_at` | TEXT | RFC3339Nano UTC |
-| `done_at` | TEXT | RFC3339Nano UTC |
-
-State transitions are guarded by `AND status = 'running'` clauses so terminal states are immutable.
-
-**Orphan detection:** `processAlive(pid)` uses `syscall.Kill(pid, 0)`. `CleanupOrphans` (run at startup) finds distinct PIDs of `running` jobs and marks any whose owner process is dead as `failed`. `WaitForCompletion(ctx, id)` polls with exponential backoff (100ms initial, doubling, capped at 2s).
+The **`jobs` table is retained in the migrated schema** (so no migration churn was needed) but is **unused** — nothing writes to it and no tool reads it. It is kept only to avoid a destructive migration; treat it as dead schema. The original columns (`id`, `tool`, `status`, `result`, `error`, `pid`, `started_at`, `done_at`) and their semantics are no longer load-bearing.
 
 ### 7.2 State Tracking (What exists)
 
@@ -961,8 +890,6 @@ State transitions are guarded by `AND status = 'running'` clauses so terminal st
 
 Single `Store` struct exposes all operations:
 
-**Job operations:** `CreateJob`, `CompleteJob`, `FailJob`, `CancelJob`, `GetJob`, `ListJobs`, `DeleteJob`, `CleanupOrphans`, `WaitForCompletion`.
-
 **State operations:** `GetResource`, `SetResource`, `ListResources`, `DeleteResource`, `SetGeneratedFile`, `GetGeneratedFiles`, `SetDependency`.
 
 **Apply operations:** `CreateApply`, `CompleteApply`, `RecordAction`, `RecordGeneration`, `RecordInvariantCheck`.
@@ -973,7 +900,9 @@ Single `Store` struct exposes all operations:
 
 ---
 
-## 8. The Plan/Apply/Dispatch/Retry Loop
+## 8. The Plan / Generate / Commit / Retry Loop
+
+> **Tombstone — server-side dispatch.** The loop below used to run *inside* the server: an apply engine that dispatched `engine.Generate` and ran an in-server constraint loop (parse → validate → invariant → code-review → fix-prompt → retry). That machinery was removed. The loop now spans the MCP boundary: the **orchestrator** generates (via a sub-agent) and the **server** validates (at `spec/commit`). Code-review-as-LLM-gate is gone; the commit gate is purely mechanical validations plus orchestrator-supplied invariant verdicts.
 
 ### 8.1 High-Level Flow
 
@@ -993,7 +922,7 @@ Single `Store` struct exposes all operations:
 |             SQLite State Database                           |
 |  effective_hash comparison -> PlannedAction[]               |
 +-------------+-----------------------------------------------+
-              | plan
+              | spec/plan, spec/begin (waves + lock)
               v
 +-------------------------------------------------------------+
 |                    Plan                                     |
@@ -1001,105 +930,76 @@ Single `Store` struct exposes all operations:
 |  ~ domainService.Synth.Allocator (dependency changed)      |
 |  - aggregate.Audio.SineVoice (removed)                     |
 +-------------+-----------------------------------------------+
-              | apply (flat or wave-based)
+              | Claude Code workflow (.claude/workflows/spec-generate.js)
               v
 +-------------------------------------------------------------+
-|              Apply Engine                                   |
-|  For each planned action:                                  |
-|    1. Build prompt (system + resource + context)            |
-|    2. Dispatch to sub-agent via engine.Generate             |
-|    3. Run Constraint Loop                                  |
-|    4. Write files / update state                           |
+|         Orchestrator (per wave, resources in parallel)      |
+|  For each resource in the wave -> one sub-agent:            |
+|    1. spec/context  -> SystemPrompt + Prompt + Invariants   |
+|    2. author files (sub-agent, full file contents)         |
+|    3. judge each invariant -> {invariant, passed, summary}  |
+|    4. spec/commit  -> files + model + invariant_checks      |
 +-------------+-----------------------------------------------+
-              |
+              | spec/commit (server side)
               v
 +-------------------------------------------------------------+
-|            Constraint Loop (per resource)                   |
-|                                                             |
-|  +---> Generate (engine.Generate -> claude subprocess)     |
-|  |      prompt from: assetKind.prompts + asset.prompts     |
-|  |                   + resource declaration + dependencies  |
-|  |        |                                                 |
-|  |        v                                                 |
-|  |    Parse: extract code blocks (assetKind.filePattern)    |
-|  |        |                                                 |
-|  |        v                                                 |
-|  |    Resource Validations (from resource `validations`):   |
-|  |      compiles    — build command                         |
-|  |      test        — test command                          |
-|  |      integration — run + structured assertions           |
-|  |      custom      — arbitrary script                      |
-|  |        |                                                 |
-|  |        v                                                 |
-|  |    Invariant Check (from project `invariants`)           |
-|  |      each invariant.text checked against generated code  |
-|  |      invariant.meta.rationale injected on failure        |
-|  |        |                                                 |
-|  |        v                                                 |
-|  |    Code Review (engine.CodeReview / engine.Bugbot)       |
-|  |      review level from assetKind or resource meta        |
-|  |        |                                                 |
-|  |        v                                                 |
-|  |    Pass? --yes--> Return files                           |
-|  |        |                                                 |
-|  |       no                                                 |
-|  |        |                                                 |
-|  +--- Build fix prompt (original + previous output + error) |
-|      Retry up to maxRetries (config, default 3)            |
-+-------------------------------------------------------------+
+|         Commit Gate (server — mechanical + verdicts)        |
+|    write changed files (per-file SHA256 skip)              |
+|    run resource validations:                               |
+|      compiles / test / integration / custom                |
+|    run amendment validations                               |
+|    enforce supplied invariant_checks verdicts              |
+|        |                                                    |
+|        +-- all pass -> Committed=true, record Generation    |
+|        +-- any fail  -> Committed=false (rejected),         |
+|                         failure stored for next context     |
++-------------+-----------------------------------------------+
+              | on rejection
+              v
+   sub-agent re-pulls spec/context (now includes the failure),
+   regenerates, re-commits — up to MaxRetries. Then triage:
+   spec/resolve (guidance) or spec/skip.
 ```
 
-### 8.2 The Constraint Loop in Detail
+### 8.2 The Commit Gate in Detail
 
-The constraint loop is the core verification engine. Each step is driven by DSL objects declared in the CUE spec — the loop reads the resource's declarations, its `assetKind`, its `validations`, and the project's `invariants` to decide what to verify.
+The validation loop is the core of crest-spec's reliability, and it lives at `spec/commit`. The **orchestrator's sub-agent** assembles and generates; the **server** validates. Per resource:
 
-For each resource, the loop executes these steps in order:
-
-1. **Generate**: Dispatches via `engine.Generate`. The prompt is assembled from:
+1. **Generate (orchestrator sub-agent)**: `spec/context` returns the prompt assembled from:
    - The resource's `assetKind.prompts` (generation rules inherited by all assets of this kind)
    - The resource's own `prompts` field (asset-specific instructions)
    - The resource declaration as JSON (state fields, commands, events, port contracts)
    - Dependency declarations (from `uses`, `implements`, `of` references)
-   - Runtime context: module tree, existing dependency files, agent notes from upstream resources
-   
-   The sub-agent has no tool access — it returns pure code blocks.
+   - Runtime context: module tree, existing dependency files, notes from upstream resources, and — on a retry — the prior commit failure
+   - The project `Invariants` (each `{text, rationale}`) the sub-agent must judge
 
-2. **Parse**: Extracts fenced code blocks with `// path:` or `# path:` annotations. Expected file patterns come from `assetKind.filePattern` when available. If no parseable blocks -> retry.
+   The sub-agent authors full file contents at the correct paths and produces a `{invariant, passed, summary}` verdict for each invariant.
 
-3. **Resource Validations**: Runs the `validations` declared on the resource (see section 1.4), in order:
-   - **`compiles`** — runs the declared build command (e.g., `["cargo", "build"]`). Fails -> retry with compiler errors.
-   - **`test`** — runs the declared test command (e.g., `["cargo", "test", "--lib", "cpal_audio_output"]`). Fails -> retry with test output.
-   - **`integration`** — runs a command and checks structured `assertions`: `exit_code`, `file_exists`, `file_not_empty`, `stdout_contains`, `stderr_empty`, `file_matches`. Any assertion failure -> retry with the specific assertion that failed and the actual output.
+2. **Write (server)**: `spec/commit` writes the changed files. Each file is content-hashed (SHA256); a file whose content already matches what is on disk is skipped — no write, no timestamp change, no file-watcher trigger.
+
+3. **Resource Validations (server)**: Runs the `validations` declared on the resource (see §1.4), in order:
+   - **`compiles`** — runs the declared build command (e.g., `["cargo", "build"]`).
+   - **`test`** — runs the declared test command (e.g., `["cargo", "test", "--lib", "cpal_audio_output"]`).
+   - **`integration`** — runs a command and checks structured `assertions`: `exit_code`, `file_exists`, `file_not_empty`, `stdout_contains`, `stderr_empty`, `file_matches`.
    - **`custom`** — runs an arbitrary script. Exit 0 = pass, nonzero = fail with stderr attached.
 
-   If a resource declares no `validations`, this step falls back to the global `TypeCheckCommand` and `TestCommand` from config (if configured).
+   If a resource declares no `validations`, this step falls back to the global `TypeCheckCommand` / `TestCommand` from config (if configured). Amendment validations (§8A) run here too.
 
-4. **Invariant Check**: Checks generated code against `project.invariants` from the CUE spec. Each invariant has a `text` (the rule) and `meta.rationale` (why it exists). On failure, both are injected into the retry prompt so the LLM understands not just *what* it violated but *why* the rule exists. Example: invariant `"audio thread must never allocate heap memory"` with rationale `"any allocation risks missing the audio buffer deadline"` — the LLM gets both.
+4. **Invariant Verdicts (server enforces, does not judge)**: The server does **not** check invariants against the code — it has no LLM. It enforces the `invariant_checks` the orchestrator supplied: any verdict with `passed:false` rejects the commit. The verdicts are recorded as `invariant_checks` rows (prompt-out / verdict-in). Each invariant's `text` and `meta.rationale` were already in the `spec/context` prompt, so the sub-agent judged against both the rule and why it exists.
 
-5. **Code Review**: Runs a multi-model review via the engine. Which review to run is determined by the resource's `meta.reviewLevel` field, or defaults based on resource kind:
+**Outcome.** If every validation passes and no invariant verdict is false, the commit succeeds (`Committed:true`), the resource is persisted, the `Generation` row is marked `success` (labelled with the supplied `model`), and amendment validations are marked `VERIFIED`. Otherwise the commit is rejected (`Committed:false`, state → `rejected`), the `Generation` row is marked `rejected` with the first failure message, amendment validations are marked `FAILED`, and the failure is stored so the next `spec/context` for this resource includes it.
 
-   | Review level | Engine call | Default for | What it checks |
-   |-------------|-------------|-------------|----------------|
-   | `"full"` | `engine.CodeReview` | aggregates, domain services, adapters | Fans out across models (opus, sonnet). Architecture, nil derefs, bounds, performance, leaks, concurrency. |
-   | `"light"` | `engine.Bugbot` | value objects, entities, assets | Single model (sonnet). Severity-ranked findings: High/Medium/Low with remedies. |
-   | `"solid"` | `engine.Review` | any (explicit opt-in) | Single model. Checks SOLID principles, DI, interfaces, folder structure against the resource's declared commands/events/invariants/contracts. |
-   | `"skip"` | (none) | module declarations, manifests | No LLM review. Useful for generated boilerplate (mod.rs, Cargo.toml). |
-
-   A `FAIL` verdict -> retry with the review findings (severity, description, suggested remedy) in the fix prompt.
-
-**On retry**, the fix prompt includes:
+**On retry**, the regenerated `spec/context` prompt carries:
 - The original resource prompt (full requirements from the DSL)
-- The previous attempt's output (all generated files)
-- The specific failure: validation output, invariant violation with rationale, or code review findings with severity and remedy
+- The existing committed files (UPDATE mode), so the sub-agent fixes rather than rewrites
+- The specific failure: validation output or the failed invariant with its rationale
 - Any user guidance from `spec/resolve` (injected as `## User Guidance`)
 
-The `maxRetries` config (default 3) controls how many automatic attempts the loop makes. After exhaustion, the resource transitions to `errored` in the sub-agent state machine (see section 8.5) and the user is prompted for resolution:
+`MaxRetries` (config, default 3) bounds the workflow's retry loop. After exhaustion the resource stays `rejected` and is triaged (§8.5, §8.6):
 
-- **`spec/resolve`** — user provides guidance (e.g., "the test expects the module at `src/synth/voice.rs` not `src/Synth/Voice.rs`"), injected into the next attempt's prompt, and the resource is re-dispatched.
-- **`spec/amend`** — user fixes the root cause in the CUE spec (e.g., adds a missing dependency, relaxes an invariant, corrects a validation command). The spec is re-loaded, hashes re-computed, and the resource re-dispatched with the updated declaration. This can also cascade: if the amendment changes a dependency, all downstream resources in the plan are re-planned.
-- **`spec/skip`** — user skips the resource entirely. The wave proceeds without it.
-
-A validation failure after the constraint loop passes (i.e., the resource reached `completed` but resource-specific `validations` then fail) follows the same resolution paths. The resource transitions to `rejected` and the user can resolve, amend the validation, or skip.
+- **`spec/resolve`** — provide guidance (e.g., "the test expects the module at `src/synth/voice.rs` not `src/Synth/Voice.rs`"); the resource resets to `pending` and the next wave pass regenerates it with the guidance injected.
+- **`spec/amend`** — fix the root cause in the CUE spec (add a missing dependency, relax an invariant, correct a validation command). The spec is re-loaded, hashes re-computed, and the resource regenerates with the updated declaration — cascading to downstream resources if a dependency changed.
+- **`spec/skip`** — skip the resource entirely; the wave proceeds without it.
 
 ### 8.3 Wave-Based Execution (Incremental Mode)
 
@@ -1115,92 +1015,88 @@ Wave 3: [asset.ToneTestMain, ...]
 **Algorithm:** Each resource is assigned to `wave = max(dependency_waves) + 1`. Resources with no dependencies go in wave 0.
 
 **Execution:**
-1. Generate all resources in wave 0 (with concurrency, bounded by `MaxConcurrency` semaphore)
-2. Run verification (type check + tests) against the whole project
-3. If verification fails:
-   - Attribute errors to specific resources using file path matching
-   - Re-dispatch only the failed resources with error context
-   - Retry up to `waveMaxRetries` times
+1. The workflow generates all resources in wave 0 — one sub-agent per resource, run by the workflow's `parallel(...)` (concurrency is the orchestrator's, not the server's; see §8.6).
+2. Each sub-agent's `spec/commit` already ran the resource's validations. After the wave, **wave verification** (`VerifyWave`) runs the project-level `TypeCheckCommand` / `TestCommand` and any project-level validations against the whole tree.
+3. If wave verification fails:
+   - Errors are attributed to specific resources using file-path matching
+   - The failed resources are reset and regenerated on the next `spec/next` pass with error context
+   - Retry up to `WaveMaxRetries` times
 4. If all pass, proceed to wave 1
 5. Repeat until all waves complete
 
-**Error attribution:** The verifier parses compiler/test output, looks for file paths in error messages, and maps them back to resources using the file-to-resource map. It uses a sliding window of +/-10 lines to find file references near error lines.
+**Error attribution:** The verifier parses compiler/test output, looks for file paths in error messages, and maps them back to resources using the file-to-resource map. It uses a sliding window of +/-10 lines to find file references near error lines. `VerifyWave` itself is unchanged by the pivot — only the dispatch around it moved to the workflow.
 
 ### 8.4 Post-Wave Orchestrator Loop
 
-After dispatching all sub-agents in a wave, the orchestrator enters a poll-based check loop instead of assuming everything succeeded:
+After a wave's sub-agents return, the workflow (`.claude/workflows/spec-generate.js`) does not assume success. It collects each sub-agent's structured outcome (`committed` / `rejected` / `skipped` / `error`) and triages the failures before advancing:
 
 ```
-dispatch wave N
+spec/next -> wave N (resources + attempts + last_error)
   |
-  +-- poll states from SQLite ----------------------+
-  |                                                 |
-  |   all completed/committed?  --> advance to N+1  |
-  |   any blocked?              --> report to user  |
-  |   any errored (retryable)?  --> re-dispatch     |
-  |   any errored (exhausted)?  --> report to user  |
-  |   any timed_out?            --> report to user  |
-  |   still dispatched?         --> wait + re-poll  |
-  |                                                 |
-  +-------------------------------------------------+
+  +-- parallel(): one generator sub-agent per resource ----+
+  |     each runs spec/context -> author -> judge ->        |
+  |     spec/commit, retrying on rejection up to MaxRetries |
+  |                                                         |
+  +-- collect outcomes -------------------------------------+
+  |     all committed?        --> loop: spec/next (wave N+1)|
+  |     any not committed?     --> one triage agent each    |
+  |                                                         |
+  +-- triage (per failure): spec/resolve OR spec/skip ------+
+  |     resolve -> resource resets to pending; next         |
+  |               spec/next re-serves it in the same wave   |
+  |     skip    -> terminal; wave proceeds without it       |
+  +---------------------------------------------------------+
 ```
 
-The orchestrator **reports back to the user** for any non-happy-path state instead of silently skipping or failing at `finish`. The user gets a summary like:
+The workflow surfaces its `triaged` list to the operator when it finishes (the skill reports committed/skipped/errored counts and the triage decisions). A typical surfaced summary:
 
 ```
 Wave 2: 5 resources
-  completed: VoiceAllocator, AudioRenderer, SynthEngine
-  blocked:   CpalAudioOutput -- "need user decision: try_send vs send for backpressure"
-  errored:   FilterState -- compile error (attempt 2/3, retrying)
+  committed: VoiceAllocator, AudioRenderer, SynthEngine
+  resolved:  CpalAudioOutput -- guidance: "use try_send + ring buffer"
+  skipped:   FilterState     -- "contradictory invariant, deferring"
 ```
 
-The user can then:
-- **`spec/resolve`** — answer the question or provide guidance, re-dispatches the resource
-- **`spec/amend`** — fix the CUE spec (add missing fields, relax invariants, correct validations), re-loads and re-dispatches
+Resolution paths the triage agent (or the operator) uses:
+- **`spec/resolve`** — provide guidance; the resource resets to `pending` so the next `spec/next` pass regenerates it
+- **`spec/amend`** — fix the CUE spec, re-load, regenerate with the updated declaration
 - **`spec/skip`** — skip the resource and continue
 - Abort the session via `spec/finish` (with `force: true`)
 
-This loop runs per wave — wave N+1 does not begin until every resource in wave N has reached `committed`, `rejected` (with retries exhausted), or been explicitly skipped by the user.
+**Stall guard.** `rejected` is not a terminal state server-side, so if triage fails to actually call `spec/resolve`/`spec/skip`, `spec/next` would re-serve the same wave forever. The workflow tracks the last wave index; after `MAX_STALLS` (2) repeat passes of the same wave, it **force-skips** the stragglers (`spec/skip` with an `auto-skipped: unresolved after N triage passes` reason) so the session can always make progress. Wave N+1 does not begin until every resource in wave N is `committed`, `skipped`, or terminally accounted for.
 
-### 8.5 Sub-Agent State Machine
+### 8.5 Resource State Machine
 
-Each resource in a wave is tracked through a state machine in SQLite.
+Each resource in a wave is tracked through a state machine in SQLite. The server owns the states; the workflow drives transitions by calling commit/resolve/skip. (The server no longer "dispatches" anything — a sub-agent generates and the workflow re-serves the resource on the next `spec/next` pass.)
 
-**States:**
+**States** (`ResourceState`; `IsTerminal` = `committed`/`skipped`; `IsFailure` = `blocked`/`errored`/`timed_out`/`rejected`):
 
 ```
-pending --> dispatched --> completed --> committed
-                |                |
-                +-> blocked      |
-                +-> errored      +-> rejected
-                +-> timed_out
-
-Resolution (from any non-terminal failure state):
-  blocked   --[spec/resolve]--> dispatched  (re-dispatch with user's answer)
-  blocked   --[spec/amend]---> dispatched   (update spec, re-plan, re-dispatch)
-  blocked   --[spec/skip]----> skipped
-  errored   --[spec/resolve]--> dispatched  (re-dispatch with guidance)
-  errored   --[spec/amend]---> dispatched   (fix spec, re-dispatch)
-  errored   --[spec/skip]----> skipped
-  timed_out --[spec/resolve]--> dispatched  (re-dispatch with longer timeout)
-  timed_out --[spec/skip]----> skipped
-  rejected  --[spec/resolve]--> dispatched  (re-dispatch with fix guidance)
-  rejected  --[spec/amend]---> dispatched   (fix spec, re-dispatch)
-  rejected  --[spec/skip]----> skipped
+pending --> (generate) --> completed --> committed
+   ^                          |
+   |                          +-> rejected   (commit gate failed)
+   |
+Resolution (from any failure state):
+  rejected  --[spec/resolve]--> pending   (guidance injected; regenerate next pass)
+  rejected  --[spec/amend]----> pending   (fix spec, re-plan, regenerate)
+  rejected  --[spec/skip]-----> skipped
+  errored   --[spec/resolve]--> pending
+  errored   --[spec/skip]-----> skipped
+  blocked   --[spec/resolve]--> pending
+  blocked   --[spec/skip]-----> skipped
   skipped   (terminal — wave proceeds without this resource)
+  committed (terminal)
 ```
 
 | State | Meaning |
 |-------|---------|
-| `pending` | In the plan, not yet dispatched to a sub-agent |
-| `dispatched` | Sub-agent has been spawned (claude subprocess running) |
-| `completed` | Sub-agent returned output; files written but not yet committed |
-| `committed` | Files validated and recorded in state DB |
-| `blocked` | Sub-agent needs a decision from the user or another resource |
-| `errored` | Sub-agent failed (compile error, invariant violation, crash) |
-| `timed_out` | Sub-agent didn't respond within deadline |
-| `rejected` | Validation failed after completion; needs re-dispatch |
-| `skipped` | User explicitly skipped this resource; wave proceeds without it |
+| `pending` | In the plan, awaiting (re)generation. `spec/next` serves pending resources; `spec/resolve`/`spec/amend` reset a failed resource back here. |
+| `completed` | `spec/commit` wrote files; validation in progress (transient). |
+| `committed` | Files passed the commit gate and were recorded in state DB (terminal). |
+| `rejected` | The commit gate failed (validation or a `passed:false` invariant verdict). The failure is stored for the next `spec/context`. **Not terminal** — the workflow retries, then triages. |
+| `errored` | Generation failed before a clean commit (e.g., the sub-agent could not produce parseable files). |
+| `blocked` / `timed_out` | Legacy failure states retained in the enum; the native workflow folds these into the rejected/errored retry+triage path. |
+| `skipped` | Explicitly skipped (operator, triage agent, or stall guard); wave proceeds without it (terminal). |
 
 #### Blocked Context
 
@@ -1238,14 +1134,13 @@ Resolution (from any non-terminal failure state):
 
 #### State Transitions
 
-The orchestrator polls resource states after dispatching a wave (see section 8.4). Automatic transitions:
+`spec/commit` drives the core transitions inside the server; the workflow drives retry/triage around them (see §8.4):
 
-- `completed` -> runs `validations` -> all pass -> `committed`
-- `completed` -> runs `validations` -> any fail -> `rejected` (with validation output attached)
-- `errored` with `retryCount < maxRetries` -> automatic re-dispatch with error in fix prompt
-- `errored` with `retryCount >= maxRetries` -> stays `errored`, reported to user
-
-All non-terminal failure states (`blocked`, `timed_out`, exhausted `errored`, `rejected`) are reported to the user for resolution.
+- `pending` -> (sub-agent generates, `spec/commit`) -> `completed`
+- `completed` -> commit gate (validations + invariant verdicts) all pass -> `committed`
+- `completed` -> commit gate any fail -> `rejected` (failure stored for the next `spec/context`)
+- `rejected` with attempts `< MaxRetries` -> the workflow re-pulls `spec/context` (failure injected) and regenerates
+- `rejected` with attempts `>= MaxRetries` -> stays `rejected`; the workflow triages with `spec/resolve` (→ `pending`) or `spec/skip` (→ `skipped`); the stall guard force-skips after repeated wave passes
 
 ### 8.6 User Resolution & Dynamic Spec Updates
 
@@ -1253,7 +1148,7 @@ When the orchestrator encounters a non-happy-path state, it surfaces the issue t
 
 #### Path 1: Resolve — Provide Guidance (`spec/resolve`)
 
-The user answers a question or provides guidance, and the resource is re-dispatched with the answer injected into the prompt.
+The user answers a question or provides guidance; the resource resets to `pending` and the next `spec/next` pass regenerates it with the answer injected into the prompt.
 
 ```json
 {
@@ -1292,7 +1187,7 @@ The user (or orchestrating agent) modifies the CUE spec to fix the root cause, a
 2. Re-loads the CUE spec and validates it (catches syntax errors, constraint violations, missing dependency references).
 3. Re-computes effective hashes for the amended resource and its dependents.
 4. Updates the in-flight plan: the amended resource is re-planned (may change from `modify` to `create` or vice versa), and any cascading dependents are added to the plan if they weren't already.
-5. Re-dispatches the resource with the updated prompt (built from the new declaration).
+5. Resets the resource so the next wave pass regenerates it from the updated declaration.
 6. Records the amendment in the `applies` audit trail.
 
 This is the key feedback loop: **a generation failure can fix the spec, not just the generated code**. Examples:
@@ -1316,24 +1211,28 @@ The user explicitly skips the resource. It transitions to `skipped` (terminal) a
 
 The skip reason is recorded in the audit trail and in `agent_notes` so downstream resources are aware.
 
-#### Resolution in Automated vs. Interactive Mode
+#### Workflow-driven vs. hands-on resolution
 
-| Mode | Behavior on non-happy-path |
+There is one execution model — the orchestrator drives it — but resolution can be automatic or operator-directed:
+
+| Path | Behavior on non-happy-path |
 |------|---------------------------|
-| **`spec/apply` (automated)** | Automatic retries up to `maxRetries`. On exhaustion, the apply pauses and emits a progress notification with the blocked/errored resources and their context. The orchestrating agent can then call `spec/resolve`, `spec/amend`, or `spec/skip` to unblock, and the apply resumes. If no resolution comes, the apply eventually times out and reports a summary. |
-| **`spec/begin` (interactive)** | The orchestrating agent sees the state directly via `spec/next` and chooses how to handle each resource. It has full control — it can read the error, inspect the generated files, edit the spec, and call the appropriate resolution tool. |
+| **Workflow (default)** | The workflow's triage agent inspects each persistent failure and itself calls `spec/resolve` (with concrete guidance) or `spec/skip`. The stall guard force-skips anything still stuck after repeated wave passes. The operator only sees the surfaced `triaged` summary at the end. |
+| **Hands-on** | The operator drives the tools directly via the skill: `spec/status`/`spec/wave_status` show where a session stopped; they can read the error, inspect generated files, edit the CUE spec, and call `spec/resolve` / `spec/amend` / `spec/skip` before re-invoking the workflow (which resumes — `spec/next` re-serves non-terminal resources). |
 
 ### 8.6 Concurrency Model
 
-All engine operations (`Generate`, `Review`, `CodeReview`, `Bugbot`) acquire a slot from the engine's shared `chan struct{}` semaphore of size `MaxConcurrency` (default 5) before spawning any subprocess, and release it on exit. This single pool governs all `claude` subprocess spawns — code generation and verification share the same limit.
+Concurrency lives in the orchestrator, not the server. The workflow runs a wave's resources with `parallel(resources.map(...))` — one sub-agent per resource, all in flight at once; the degree of parallelism is whatever the Claude Code workflow runtime allows. Across waves, execution is sequential: wave N+1 does not begin until every resource in wave N is `committed`, `skipped`, or terminally accounted for.
 
-Within a wave, resources are dispatched concurrently (up to `MaxConcurrency`). Across waves, execution is sequential — wave N+1 does not begin until wave N is fully resolved.
+The **server is a single-writer SQLite state engine**. Every `spec/commit` (and every other state-mutating tool) is a synchronous, serialized write against `.crest-spec/state.db` (WAL mode, `busy_timeout=5000`), and a session holds an exclusive lock for its duration. So even though many sub-agents generate in parallel, their commits are linearized by the database — there is no in-server concurrency semaphore and no subprocess pool to size.
 
 ---
 
 ## 8A. Amendments
 
-Section 8.6 covers *in-flight* resolution: a resource fails mid-apply and the orchestrator unblocks it with `spec/resolve` / `spec/amend` / `spec/skip`. **Amendments** address a different problem — correcting a resource that already generated cleanly but whose committed output is wrong in some durable way (for example, a SOLID violation surfaced by a post-hoc `spec/deep_review`).
+Section 8.6 covers *in-flight* resolution: a resource fails mid-generation and the orchestrator unblocks it with `spec/resolve` / `spec/amend` / `spec/skip`. **Amendments** address a different problem — correcting a resource that already generated cleanly but whose committed output is wrong in some durable way (for example, a SOLID violation the orchestrator surfaces on a post-hoc review of the committed code).
+
+> **Tombstone — `spec/deep_review` / `spec/propose_amendments`.** The server used to run an LLM review (`spec/deep_review`) and draft amendment proposals from it (`spec/propose_amendments`). Both were removed in the native-workflow pivot — the server runs no LLM. The orchestrator now drafts amendments itself (using its own review of the committed code) and feeds the approved `{name, prompt, finding}` proposals to the still-mechanical, human-gated write-back tools below. Where this section says an amendment's `origin` is `"deep_review"`, read it as a label for "came from an orchestrator review", not a server call.
 
 An amendment is a **resource-scoped, spec-resident correction**: a targeted change request written onto the resource's declaration so it becomes a durable, incrementally-applied modification that flows through the normal generation loop. Instead of an advisory review finding that evaporates, the finding is distilled into a small instruction that lives in the spec, re-applies deterministically, and can be verified and eventually retired.
 
@@ -1396,7 +1295,7 @@ PENDING ──► APPLIED ──► VERIFIED ──► GRADUATED
 |-------|---------|
 | `PENDING` | Written into the spec, not yet regenerated/committed. |
 | `APPLIED` | The resource was committed from a spec hash that contains the amendment (derived — see 8A.3). Applied does **not** mean fixed. |
-| `VERIFIED` | The amendment's `validation` passed (or a re-run `spec/deep_review` no longer reports the finding), confirming the intent was actually achieved. |
+| `VERIFIED` | The amendment's `validation` passed (or an orchestrator re-review no longer reports the finding), confirming the intent was actually achieved. |
 | `GRADUATED` | Human-gated: the amendment's intent has been folded into the resource's canonical `invariants` and the amendment removed, so the spec describes the system cleanly instead of accumulating a patch log. A forced clean regeneration must still pass afterward. |
 | `FAILED` | Validation never passes. Surfaced for re-draft; a partial fix is **not** committed. |
 
@@ -1406,20 +1305,21 @@ PENDING ──► APPLIED ──► VERIFIED ──► GRADUATED
 
 All amendment tools that write are **human-gated**: the write path takes an explicit `apply` flag, and with `apply=false` the tool returns the CUE diff for review and writes nothing.
 
+Amendment drafting is **orchestrator-side** — there is no server tool that runs a review or drafts proposals. The orchestrator reviews the committed code with its own sub-agent, drafts `{name, prompt, finding}` proposals, and hands the approved ones to the mechanical write-back tools:
+
 | Tool | Sync/Async | Purpose |
 |------|-----------|---------|
-| `spec/propose_amendments` | sync | Runs `spec/deep_review` over the target (a single `resource_id`, or the whole session) and asks the LLM to draft a `{name, prompt, finding}` per actionable finding. **Returns proposals only — writes nothing.** |
-| `spec/apply_amendments` | sync | Human-gated write-back of approved `proposals` into the CUE spec as an override file. `apply=false` returns the CUE diff for review (writes nothing); `apply=true` writes it. After approval, the next `spec/plan` / `spec/begin` re-renders the resource in UPDATE mode. |
+| `spec/apply_amendments` | sync | Human-gated write-back of orchestrator-drafted `proposals` into the CUE spec as an override file. `apply=false` returns the CUE diff for review (writes nothing); `apply=true` writes it. After approval, the next `spec/plan` / `spec/begin` re-renders the resource in UPDATE mode. |
 | `spec/list_amendments` | sync | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. |
 | `spec/graduate_amendment` | sync | Human-gated fold of a `VERIFIED` amendment (by `resource_id` + `name`) into the resource's canonical `invariants`, removing the amendment. `apply=false` previews the CUE diff; `apply=true` writes it. |
 
 ### 8A.6 Typical Flow
 
-1. After a clean apply, run `spec/deep_review` (or `spec/propose_amendments`, which runs it) to surface durable findings.
-2. `spec/propose_amendments` drafts `{name, prompt, finding}` proposals — no writes.
+1. After a clean apply, the orchestrator reviews the committed code (its own sub-agent) to surface durable findings.
+2. The orchestrator drafts `{name, prompt, finding}` proposals from the findings — no server call writes anything.
 3. Review the proposals; pass the approved ones to `spec/apply_amendments` with `apply=false` to preview the CUE diff, then `apply=true` to write the override.
 4. `spec/plan` / `spec/begin` now shows the resource as `~` (declaration changed) and re-renders it in **UPDATE mode** with the amendment prompts in the "CHANGES TO MAKE" block. The amendment becomes `APPLIED` once committed.
-5. The amendment's `validation` runs on commit (or re-run `spec/deep_review`); on pass the amendment is `VERIFIED`, on persistent failure `FAILED` (re-draft, don't commit a partial fix).
+5. The amendment's `validation` runs on commit (mechanical, validation-gated); on pass the amendment is marked `VERIFIED`, on persistent failure `FAILED` (re-draft, don't commit a partial fix).
 6. Once `VERIFIED` and stable, `spec/graduate_amendment` folds the intent into canonical `invariants` and removes the amendment — a forced clean regeneration must still pass.
 
 ---
@@ -1439,7 +1339,6 @@ Always active. `Server.Run(ctx)`:
 - Reads stdin line-by-line with a `bufio.Scanner` whose buffer is grown to **10 MiB** to accommodate large requests.
 - Each non-empty line is dispatched in its **own goroutine** — so many requests can be in flight concurrently. A `sync.WaitGroup` tracks reader goroutines.
 - Empty/blank lines skipped. JSON parse failures emit a `-32700 Parse error`.
-- Progress notifications are written to stdout as JSON-RPC notification lines.
 
 **Output serialization:** `writeResponse` marshals and writes a single line to stdout under `outMu` (mutex), so concurrent responses don't interleave.
 
@@ -1448,12 +1347,11 @@ Always active. `Server.Run(ctx)`:
 Active when `HTTPAddr` is configured. A `net/http` server (stdlib, no framework).
 
 - **Single endpoint:** `POST /mcp` — clients send JSON-RPC requests in the POST body.
-- **Sync tools:** the response is a plain JSON-RPC response.
-- **Async tools:** the response is a plain JSON-RPC response with a job ID. SSE streaming for progress notifications is planned but not yet implemented.
-- **Session management:** stateless — each request is independent. Job IDs are the correlation mechanism.
+- **All tools are synchronous:** the response is a plain JSON-RPC response with the result inline. (There are no async tools and no job IDs; see §9.4.)
+- **Session management:** stateless — each request is independent.
 - **Shutdown:** `http.Server.Shutdown(ctx)` with a 30s drain timeout.
 
-Both transports share the same `Server` instance — same stores, metrics, concurrency pool, and tool definitions.
+Both transports share the same `Server` instance — same store, metrics, and tool definitions.
 
 ### 9.2 Request Routing
 
@@ -1473,85 +1371,74 @@ Both transports share the same `Server` instance — same stores, metrics, concu
 
 ### 9.3 MCP Tools
 
-The server exposes two groups of tools: **spec tools** (the plan/apply lifecycle) and **engine tools** (adapted from claude-mcp — the sub-agent execution primitives). The orchestrating AI agent uses both: spec tools to drive the lifecycle, engine tools to dispatch sub-agents and verify code.
+Every tool is a **spec tool** and every tool is **synchronous** — the server does no background work. There are no engine/sub-agent-execution tools; the orchestrator runs its own sub-agents.
 
 #### Spec Lifecycle Tools
 
-| Tool | Sync/Async | Purpose |
-|------|-----------|---------|
-| `spec/plan` | sync | Show what would change (dry run). Loads CUE, diffs against state, returns planned actions. |
-| `spec/apply` | **async** | Execute the plan. Dispatches sub-agents via engine, runs constraint loops, writes files, updates state. Returns a job ID. |
-| `spec/validate` | sync | Check structural invariants against the spec without generating code. |
-| `spec/begin` | sync | Start an interactive agent session: compute plan, create waves, acquire lock. Returns plan and orchestrator instructions. |
-| `spec/next` | sync | Get the next wave of uncommitted resources. Returns `done: true` when complete. |
-| `spec/context` | sync | Get the scoped prompt for a specific resource. Returns `systemPrompt`, `prompt`, `dependencyNotes`, and `instructions`. |
-| `spec/validate-resource` | sync | Run invariant checks and optional type check/tests against files on disk for a specific resource. |
-| `spec/note` | sync | Save a design decision note for a resource. Notes are injected into downstream prompts. |
-| `spec/commit` | sync | Record a resource as complete in state. |
-| `spec/resolve` | sync | Provide guidance for a blocked/errored/rejected/timed_out resource. Answer is injected into the prompt; resource is re-dispatched. See section 8.6. |
-| `spec/amend` | sync | Signal that the CUE spec has been updated for a resource. Re-loads spec, re-computes hashes, updates the in-flight plan, re-dispatches. See section 8.6. |
-| `spec/skip` | sync | Skip a failed resource. Transitions to `skipped` (terminal); wave proceeds without it. See section 8.6. |
-| `spec/deep_review` | **async** | Comprehensive SOLID/DI/clean-code/refactoring review of committed code (a `target` resource or all committed resources). The signal source for amendments. Returns a job ID. |
-| `spec/propose_amendments` | sync | Runs `spec/deep_review` and drafts `{name, prompt, finding}` amendment proposals per actionable finding. Returns proposals only — writes nothing. See section 8A. |
-| `spec/apply_amendments` | sync | Human-gated write-back of approved amendment proposals into the CUE spec. `apply=false` returns the CUE diff; `apply=true` writes it. See section 8A. |
-| `spec/list_amendments` | sync | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. See section 8A. |
-| `spec/graduate_amendment` | sync | Human-gated fold of a `VERIFIED` amendment into the resource's canonical `invariants` (then removes it). `apply=false` previews the diff; `apply=true` writes it. See section 8A. |
-| `spec/finish` | sync | Finalize the session: release lock, return summary. |
-| `spec/status` | sync | Show current state — resources in state, active session, lock status. |
-| `spec/log` | sync | List past applies with status. |
-| `spec/history` | sync | Show generation history for a specific resource. |
-| `spec/graph` | sync | Return the resource dependency graph. |
-| `spec/diff` | sync | Reconstruct state delta between two applies. Shows what was created, modified, destroyed between `apply_a` and `apply_b`. |
-| `spec/state` | sync | Inspect or modify state tracking. `list` returns all resources in state with hashes. `rm <resourceId>` removes a resource from state without deleting its code on disk (next plan will treat it as `create`). |
-| `spec/vacuum` | sync | Compact history older than a given date. Deletes old generations, invariant checks, and apply records while preserving current state. Keeps the SQLite database bounded for long-lived projects. |
-| `spec/sql` | sync | Open a read-only SQLite shell against the state database. For direct inspection and ad-hoc queries. |
-| `spec/unlock` | sync | Force-clear a stale lock. |
+| Tool | Purpose |
+|------|---------|
+| `spec/plan` | Show what would change (dry run). Loads CUE, diffs against state, returns planned actions. |
+| `spec/validate` | Check structural invariants against the spec without generating code. |
+| `spec/begin` | Start a session: compute plan, create waves, acquire lock. Returns `session_id`, plan, waves, and `PendingDestroys`. |
+| `spec/confirm_destroys` | Confirm and execute pending resource destroys for the given `resource_ids`. |
+| `spec/next` | Get the next wave of uncommitted resources. Returns `done: true` when complete. |
+| `spec/context` | Get the scoped generation prompt for a resource. Returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`), including any prior commit failure. |
+| `spec/validate-resource` | Run invariant checks and optional type check/tests against files on disk for a specific resource. |
+| `spec/note` | Save a design decision note for a resource. Notes are injected into downstream prompts. |
+| `spec/commit` | Commit a resource: writes `files`, runs the resource's mechanical validations + amendment validations, and enforces the supplied `invariant_checks` verdicts. Any failure rejects the commit. Records a `Generation` labelled with `model`. See §4, §8.2. |
+| `spec/resolve` | Provide guidance for a failed resource; resets it to `pending` so the next wave pass regenerates with the guidance injected. See §8.6. |
+| `spec/amend` | Signal that the CUE spec has been updated for a resource. Re-loads spec, re-computes hashes, updates the plan, resets for regeneration. See §8.6. |
+| `spec/skip` | Skip a failed resource. Transitions to `skipped` (terminal); wave proceeds without it. See §8.6. |
+| `spec/evolve` | Build the reflection prompt from a session's failure history. Returns `{reflection_prompt}` (empty when nothing to learn). The orchestrator runs it and submits to `spec/record_learnings`. See §9.10/Evolution. |
+| `spec/record_learnings` | Persist learnings distilled by a reflection run. Takes `{session_id, output}` (raw reflection output); returns `{learnings_added}`. |
+| `spec/learnings` | List craft-level learnings extracted by reflection, filtered by status (default `active`). |
+| `spec/promote_learnings` | Human-gated promotion of active learnings into the per-language learned prompt template (`apply=false` previews the markdown block; `apply=true` writes it). |
+| `spec/apply_amendments` | Human-gated write-back of orchestrator-drafted amendment proposals into the CUE spec. `apply=false` returns the CUE diff; `apply=true` writes it. See §8A. |
+| `spec/list_amendments` | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. See §8A. |
+| `spec/graduate_amendment` | Human-gated fold of a `VERIFIED` amendment into the resource's canonical `invariants` (then removes it). `apply=false` previews the diff; `apply=true` writes it. See §8A. |
+| `spec/finish` | Finalize the session: release lock, return summary; returns a `reflection_prompt` when `EVOLVE` is `finish`/`all`. |
+| `spec/status` | Show current state — resources in state, active session, lock status (or per-session wave progress when `session_id` is given). |
+| `spec/wave_status` | Detailed per-resource view of a specific wave (state, attempts, errors). |
+| `spec/log` | List past applies with status. |
+| `spec/history` | Show generation history for a specific resource. |
+| `spec/graph` | Return the resource dependency graph. |
+| `spec/diff` | Reconstruct state delta between two applies (`apply_a` vs `apply_b`). |
+| `spec/state` | Inspect or modify state tracking. `list` returns all resources with hashes. `rm <resourceId>` removes a resource from state without deleting its code on disk (next plan treats it as `create`). |
+| `spec/inspect` | Full debug view of a resource: effective prompt, hash breakdown, dependency chain, generated files, wave assignment. |
+| `spec/prompt` | Build and return the full prompt for a resource without committing. |
+| `spec/import` | Scan a directory of source files and generate a skeleton CUE spec (heuristic, no LLM). |
+| `spec/bootstrap` | Check environment and set up crest-spec (spec dir, database, MCP config). Idempotent. |
+| `spec/mode` | Show the current mode (environment). |
+| `spec/vacuum` | Compact history older than a given date while preserving current state. |
+| `spec/sql` | Open a read-only SQLite shell (SELECT only) against the state database. |
+| `spec/unlock` | Force-clear a stale lock. |
 
-#### Engine Tools (adapted from claude-mcp)
+#### Info Tools
 
-These are the sub-agent execution primitives. The spec layer uses them internally during `spec/apply`, and the orchestrating agent can also call them directly during interactive sessions (`spec/begin` -> `spec/finish`).
+| Tool | Purpose |
+|------|---------|
+| `about` | Static system info + a one-paragraph workflow guide ("state engine only; Claude Code orchestrates"). No subprocess. |
+| `live_metrics` | Self-monitoring snapshot: uptime, call counts, error rates, per-tool stats. Recorded per tool call at dispatch (`handleToolCall` times every call and records into `metrics`). |
 
-| Tool | Sync/Async | Purpose |
-|------|-----------|---------|
-| `run_prompt` | **async** | Run a single prompt via `claude`. The orchestrator uses this to dispatch constrained code generation sub-agents. Returns a job ID. |
-| `code_review` | **async** | Multi-model code review. The constraint loop can use this as a heavyweight verification pass. Returns a job ID. |
-| `bugbot` | **async** | Lightweight severity-ranked scan. The constraint loop can use this as a fast verification pass. Returns a job ID. |
-| `poll_result` | sync | Check a job's status; optionally consume its result (`consume` flag). |
-| `cancel_job` | sync | Cancel a running job and kill its subprocess group. |
-| `list_jobs` | sync | List up to 50 recent non-deleted jobs. |
-| `list_models` | sync | Curated static model list. |
-| `about` | sync | `claude --version` + `claude auth status`. |
-| `status` | sync | `claude auth status`. |
-| `live_metrics` | sync | Self-monitoring snapshot: uptime, call counts, error rates, per-tool stats. |
-| `bootstrap` | sync | Install `claude` and guide login. Only registered when startup `status` fails. |
+> **Tombstone — removed tools.** The native-workflow pivot deleted every async/subprocess tool: `run_prompt`, `poll_result`, `cancel_job`, `list_jobs`, `code_review`, `bugbot`, `list_models`, `status`, and the server-orchestration tools `spec/apply`, `spec/dispatch`, `spec/run_wave`, `spec/deep_review`, `spec/propose_amendments`. None of these have replacements *in the server* — the orchestrator's own sub-agents (and the spec-generate workflow) do that work.
 
-All tools return structured JSON. The MCP protocol handles transport (stdio or SSE).
+All tools return structured JSON. The MCP protocol handles transport (stdio or HTTP).
 
-### 9.4 Async Job Model
+### 9.4 Execution Model (synchronous)
 
-The heart of the async design, adapted from claude-mcp:
+> **Tombstone — async job model.** This section previously documented the claude-mcp-derived async job machinery (UUID job IDs, owner-PID capture, a `jobCtx` goroutine, `store.Complete`/`Cancel`/`Fail` outcome dispatch, and `notifications/progress` streaming). It was removed: no tool returns a job ID, nothing runs in a background goroutine, and there are no progress notifications.
 
-1. Generate a UUID job ID; capture `os.Getpid()` as the owner PID.
-2. Create a `jobCtx` derived from `bgCtx` with its own cancel; register the cancel in `s.cancels[id]` (guarded by `cancelsMu`).
-3. `store.Create(id, tool, pid)` — persist as `running`. On failure, unwind and return an error.
-4. `asyncWg.Add(1)`; spawn a goroutine that:
-   - defers `wg.Done`, `jobCancel`, and removal from `s.cancels`.
-   - runs the job func, times it, records metrics.
-   - **Outcome dispatch:** `err == nil` -> `store.Complete(id, result)`; `jobCtx.Err() != nil` (cancelled) -> `store.Cancel(id)`; else -> `store.Fail(id, err)`.
-5. Returns immediately a `textContent` with the job ID.
-
-**Progress notifications:** Each async exec func receives a `progressFunc(phase, partialResult)` callback. The MCP dispatch layer wraps this to emit `notifications/progress` if the client provided a `_meta.progressToken`. For wave-based applies, progress phases track: session started, wave N started, resource dispatched, resource completed/failed, wave N complete, all waves done.
+Tool calls are handled synchronously in `handleToolCall`: dispatch to the tool's handler, time it, record the result in `metrics`, and return the JSON-RPC response inline. Long-running work (generation, retries, reflection) happens in the **orchestrator's** sub-agents, outside the server entirely.
 
 ### 9.5 Orchestrator Protocol
 
-The `spec/begin` response includes `orchestratorInstructions` — a block of text that tells the calling agent exactly how to behave:
+The protocol the orchestrator follows is delivered three ways, all consistent: the `initialize` response `instructions`, the `about` tool, and the `orchestrator_instructions` MCP prompt. In summary:
 
-- **You are a dispatcher, not a code generator.** Do not write code yourself.
-- For each resource: call `spec/context` to get its prompt, then call `run_prompt` with that prompt (using `--disallowedTools` for constrained output), parse the output, write files, call `spec/note` with design decisions, call `spec/commit`.
-- Use `poll_result` to collect `run_prompt` results (they're async).
-- Optionally run `code_review` or `bugbot` against generated files before committing.
-- Resources within the same wave can be dispatched in parallel (multiple `run_prompt` calls).
-- Waves must be processed sequentially.
+- **You are the orchestrator, not the server.** The server runs no LLM; you spawn the sub-agents.
+- For each resource: call `spec/context` to get `SystemPrompt` + `Prompt` + `Invariants`, generate with a sub-agent (sonnet, never haiku), judge each invariant, and call `spec/commit` with `files` + `model` + `invariant_checks`.
+- On `Committed=false`, call `spec/context` again (it now includes the failure) and retry up to `MaxRetries`, then `spec/resolve` or `spec/skip`.
+- Resources within a wave run in parallel (the spec-generate workflow's `parallel(...)`); waves are sequential.
+- Never write generated-resource code in the orchestrator's own context — every file comes from a sub-agent via `spec/commit`.
 
 ### 9.6 Sub-Agent Communication via Notes
 
@@ -1590,25 +1477,17 @@ Prompts are templates exposed via `prompts/list` and `prompts/get`.
 
 | Name | Description | Arguments |
 |------|-------------|-----------|
-| `system_prompt` | The system prompt that would be sent to sub-agents for a given project | (none) |
+| `system_prompt` | The system prompt for sub-agents for a given project | (none) |
 | `resource_prompt` | The full resource prompt for a specific resource | `resource_id` (string, required) |
 | `orchestrator_instructions` | The orchestrator protocol instructions | (none) |
 
-### 9.9 Recursion Guard
+### 9.9 Recursion Guard (retired)
 
-`crest-spec` dispatches `claude` subprocesses which could themselves have `crest-spec` configured as an MCP server — risking infinite recursion and runaway API spend. `DetectRecursion` (adapted from claude-mcp) walks up the process tree from `SelfPID()`:
-
-- For each ancestor, lower-cases the basename of the command; counts processes whose name contains `claude` but **not** `crest-spec` and **not** `mcp`.
-- If it finds **more than one** such `claude` process, returns `true`.
-- Loop protection: a `visited` map and `pid > 1` guard prevent infinite loops on self-referential PIDs.
-
-On detection, the server replaces all tools with a single placeholder and `dispatch` refuses real work.
-
-**`--strict-mcp-config` flag:** When invoking `claude` subprocesses, the agent wrapper passes `--strict-mcp-config` to prevent the child process from loading MCP server configurations that could cause recursion. Combined with env var filtering (stripping `CREST_SPEC_*` and `MCP_*` variables from the child environment), this ensures sub-agents cannot accidentally invoke `crest-spec` as an MCP server.
+> **Tombstone.** The recursion guard (`DetectRecursion` / `processTree`, `--strict-mcp-config`, child-env filtering) existed because the server spawned `claude` subprocesses that could re-enter `crest-spec` as an MCP server. The server no longer spawns anything, so the recursion risk — and the guard — are gone. The orchestrator manages its own sub-agents and is responsible for not pointing them back at a generation loop.
 
 ### 9.10 Metrics
 
-Lock-free per-tool counters using `atomic.Int64` for Calls, Errors, TotalNs, MinNs, MaxNs (min/max via CAS loops). `Metrics` holds a `map[string]*toolMetric` under an `RWMutex` and a start time. `snapshot()` reports uptime, total calls/errors, and per-tool `{calls, errors, avg_ms, min_ms, max_ms}`. Metric keys include model-scoped variants (`generate:<model>`, `verify:<model>`, etc.) for tracking sub-agent performance.
+Lock-free per-tool counters using `atomic.Int64` for Calls, Errors, TotalNs, MinNs, MaxNs (min/max via CAS loops). `Metrics` holds a `map[string]*toolMetric` under an `RWMutex` and a start time. `Snapshot()` reports uptime, total calls/errors, and per-tool `{calls, errors, avg_ms, min_ms, max_ms}`. Every tool call is timed and recorded at dispatch (`handleToolCall`), keyed by tool name; `live_metrics` returns the snapshot.
 
 ---
 
@@ -1662,14 +1541,12 @@ For integration testing, the same spec is also expressed as numbered phase files
 
 ## 11. Lifecycle & Robustness
 
-- **app.New() + Run(ctx)** — minimal lifecycle wrapper (`internal/app`).
-- **Graceful shutdown** — SIGINT/SIGTERM via `signal.NotifyContext`; HTTP server (if active) shuts down via `http.Server.Shutdown(ctx)`; server drains in-flight jobs up to 30s; `cmd.Cancel` + process groups + `WaitDelay` ensure subprocess trees are SIGKILLed rather than leaked.
-- **Global concurrency** — a `chan struct{}` semaphore of size `MaxConcurrency` (default 5) ensures at most N `claude` subprocesses run simultaneously across all tools and transports.
-- **Process groups** — every subprocess runs with `Setpgid: true` and is killed via `kill(-pid, SIGKILL)` so children die too.
-- **Config isolation** — prevents concurrent `claude` processes from corrupting `~/.claude/.claude.json` or contending on the session store. Only activates when `CREST_SPEC_API_KEY` is set.
+- **Graceful shutdown** — SIGINT/SIGTERM via `signal.NotifyContext`; the HTTP server (if active) shuts down via `http.Server.Shutdown(ctx)` with a 30s drain; `store.Close()` is deferred. There are no subprocess trees to reap — the server spawns none.
 - **Logging** — zerolog to stderr with timestamps; `Panic` (not `Fatal`) per convention so deferred cleanup runs.
-- **Crash recovery** — persistent SQLite state + PID liveness reconciliation means stale `running` jobs from a previous (dead) process are cleaned up on next start. The `lock` table similarly detects stale locks from dead processes.
-- **Exclusive apply lock** — the `lock` table prevents concurrent applies from corrupting generation state. `spec/unlock` provides a manual escape hatch for stale locks.
+- **Crash recovery** — all state is persistent SQLite, so a dead orchestrator/session leaves the DB intact. Re-invoking the workflow resumes: `spec/next` re-serves non-terminal resources. The `lock` table detects a stale session lock from a dead process; `spec/unlock` is the manual escape hatch.
+- **Exclusive session lock** — the `lock` table prevents concurrent sessions from corrupting generation state. Combined with single-writer SQLite, all commits are linearized.
+
+> **Tombstone.** The subprocess-robustness machinery this section used to list — `cmd.Cancel` + process groups + `WaitDelay`, the `MaxConcurrency` semaphore, claude config isolation, and PID-liveness job reconciliation — was removed with the agent/engine layers and the jobs system. None of it applies to a server that spawns nothing.
 
 ---
 
@@ -1691,7 +1568,7 @@ For integration testing, the same spec is also expressed as numbered phase files
 
 ### 12.2 Conventions
 
-- `app.New() + Run(ctx)` lifecycle.
+- `srv.Run(ctx)` lifecycle (the MCP server runs until the signal context is cancelled).
 - `envconfig` config with a service prefix (`CREST_SPEC_`).
 - zerolog structured logging; `Panic` not `Fatal`.
 - SIGINT + SIGTERM graceful shutdown.
@@ -1730,66 +1607,51 @@ The primary mode. An orchestrating AI agent (Claude Code, Cursor, or any MCP cli
 }
 ```
 
-Auth: uses the developer's existing local Claude Code session (`~/.claude` OAuth/keychain); no API key required unless `CREST_SPEC_API_KEY` is set (passed through as `ANTHROPIC_API_KEY`).
+Auth: the server does not authenticate to any LLM — it spawns nothing. The orchestrator (Claude Code) uses its own session for the sub-agents it runs.
 
 ### 13.2 Mode 2: Dashboard
 
-A monitoring interface that exposes API endpoints for inspecting system state. The dashboard provides visibility into active sessions, job status, resource state, and generation history without going through the MCP protocol.
+A monitoring interface that exposes API endpoints for inspecting system state. The dashboard provides visibility into active sessions, resource state, and generation history without going through the MCP protocol.
+
+> **Tombstone.** The dashboard lost its **jobs** and **agent-events** views in the native-workflow pivot (there are no jobs and no server-side agent events to display). What remains is state/session/generation inspection.
 
 ### 13.3 Mode 3: CLI Subcommands
 
-The orchestrating agent runs these as background shell commands to interact with SQLite state and collect async job results without going through the MCP protocol.
+The orchestrating agent (or a human) runs these as short-lived shell commands to inspect or maintain SQLite state without going through the MCP protocol.
 
 | Invocation | Behavior |
 |------------|----------|
-| `crest-spec check job <id>` | Block until job `<id>` completes; print result to stdout (exit 0) or error to stderr (exit 1); consume the job. SIGINT/SIGTERM-aware. |
+| `crest-spec dashboard [--addr :8080]` | Start the monitoring dashboard. |
 | `crest-spec state list` | Print all resources in state with hashes and settle times. |
 | `crest-spec state rm <resourceId>` | Remove a resource from state without deleting code on disk. Next plan treats it as `create`. |
 | `crest-spec diff <apply_a> <apply_b>` | Show what changed between two applies (created, modified, destroyed resources). |
 | `crest-spec vacuum --before <date>` | Compact history older than date. Deletes old generations, invariant checks, and apply records. |
-| `crest-spec sql` | Open a read-only SQLite shell against `.crest-spec/state.db`. |
+| `crest-spec sql <query>` | Run a read-only SQL query against `.crest-spec/state.db`. |
 | `crest-spec -h` / `--help` | Print usage + env-var table; exit 0. |
 
-**`check job`** is the recommended async result collector (adapted from claude-mcp). The orchestrating agent fires an async tool call (`spec/apply`, `run_prompt`), gets a job ID, launches `crest-spec check job <id>` as a background Bash command, and is notified when it completes. This decouples long-running jobs from the synchronous MCP request/response loop.
-
-Implementation:
-1. Open the store (`.crest-spec/state.db`), run `CleanupOrphans`.
-2. `WaitForCompletion(ctx, id)` — blocks with exponential backoff, SIGINT/SIGTERM-aware.
-3. `completed` -> print `result` to stdout, soft-delete the job, exit `0`.
-4. `failed`/`cancelled` -> print status+error to stderr, soft-delete, exit `1`.
+> **Tombstone — `crest-spec run` / `crest-spec check job`.** The unattended `run` driver and the async-job result collector (`check job`, which blocked on `WaitForCompletion` and consumed a job) were removed. There are no jobs to wait on; generation is driven by the Claude Code workflow, and there is no synchronous CLI apply.
 
 ### 13.4 Multi-Phase Agent Runner
 
-`scripts/run-phased-agent.sh` is a shell script that drives crest-spec through all 10 crest-synth phases with state carry-over. It automates the full lifecycle: for each phase, it loads the corresponding CUE spec subset, runs `spec/plan` and `spec/apply`, and carries forward SQLite state between phases so that incremental planning works correctly across the full spec evolution.
+`scripts/run-phased-agent.sh` drives crest-spec through all 10 crest-synth phases with state carry-over. For each phase it symlinks the `spec-generate` skill and workflow into the workspace's `.claude/` dir, then launches an interactive `claude` session (with Remote Control enabled) and tells it to *use the spec-generate skill* to run the full generation pipeline for that phase's spec. SQLite state carries between phases, so the planner only generates what changed.
 
-### 13.5 Typical Orchestration Flows
+### 13.5 Typical Orchestration Flow
 
-**Automated (spec/apply):**
-1. Client calls `spec/plan` -> sees planned changes.
-2. Client calls `spec/apply` -> gets a job ID.
-3. Client runs `crest-spec check job <id>` in background (or polls `poll_result`, or uses SSE streaming over HTTP).
-4. On success: all resources generated, verified, and committed.
-5. On failure: progress notification surfaces blocked/errored resources. Client calls `spec/resolve`, `spec/amend`, or `spec/skip` to unblock. Apply resumes automatically.
+There is one flow — the orchestrator drives it (the spec-generate skill automates it):
 
-**Interactive (spec/begin -> spec/finish):**
-1. Client calls `spec/begin` -> gets plan + orchestrator instructions.
-2. Client calls `spec/next` -> gets wave 0 resources.
-3. For each resource:
-   - `spec/context` -> get the scoped prompt
-   - `run_prompt` with prompt + `--disallowedTools` -> get job ID
-   - `crest-spec check job <id>` or `poll_result` -> collect generated code
-   - Write files to disk
-   - Optionally `bugbot` or `code_review` on the generated files for verification
-   - `spec/note` -> record design decisions
-   - `spec/commit` -> record resource as complete
-4. If a resource fails:
-   - `spec/resolve` -> provide guidance and re-dispatch
-   - `spec/amend` -> edit the CUE spec, re-load, re-dispatch with updated declaration
-   - `spec/skip` -> skip and move on
-5. `spec/next` -> wave 1 resources. Repeat.
-6. `spec/next` returns `done: true` -> `spec/finish`.
+1. `spec/plan` -> see planned changes (empty ⇒ up to date, stop).
+2. `spec/begin` -> `session_id`, plan, waves, `PendingDestroys`.
+3. If `PendingDestroys` is non-empty, `spec/confirm_destroys` for the confirmed IDs.
+4. Run the spec-generate workflow. Per wave (`spec/next`), one sub-agent per resource runs in parallel:
+   - `spec/context` -> `SystemPrompt` + `Prompt` + `Invariants`
+   - generate the files with the sub-agent (sonnet)
+   - judge each invariant -> `{invariant, passed, summary}`
+   - `spec/commit` with `files` + `model` + `invariant_checks` (the server validates and records)
+   - on `Committed=false`, re-pull `spec/context` (failure injected) and retry up to `MaxRetries`
+5. Persistent failures are triaged: `spec/resolve` (guidance, → pending) or `spec/skip`; the stall guard force-skips anything still stuck.
+6. `spec/finish` -> finalize; if `reflection_prompt` is non-empty, run it with a sub-agent and submit via `spec/record_learnings`.
 
-The interactive flow gives the orchestrating agent full control — it can inspect prompts, modify files, edit the CUE spec to fix root causes, resolve blocked resources, run targeted reviews, and make decisions the automated flow can't. The `spec/amend` path is particularly powerful: a generation failure becomes a signal to improve the spec, not just retry harder.
+The orchestrator has full control — it can inspect prompts (`spec/inspect`/`spec/prompt`), edit the CUE spec to fix root causes (`spec/amend` / amendments), and decide how to triage. The `spec/amend` path is particularly powerful: a generation failure becomes a signal to improve the spec, not just retry harder.
 
 ---
 
@@ -1811,16 +1673,16 @@ Generated code is not sacred — and neither is the spec's claim on it. Once a f
 CUE's unification model makes multi-file specs a first-class language feature. No import chains, no re-exports, no builder pattern. Files in the same package merge automatically. Split your spec however makes sense — by context, by layer, by team.
 
 ### Verification at Every Level
-Code is verified by the constraint loop (parse -> type check -> invariant check -> test -> LLM review), then again at the wave level (cross-resource type check and tests), with retries at each level.
+Code is verified at commit time (mechanical validations + orchestrator-judged invariant verdicts), then again at the wave level (cross-resource type check and tests), with retries at each level.
 
 ### Audit Everything
-Every LLM call, every prompt, every output, every retry, every failure reason is recorded in SQLite. You can replay, debug, and understand every decision the system made.
+Every generation, every prompt, every commit outcome, every retry, every failure reason is recorded in SQLite. You can replay, debug, and understand every decision the system made.
 
-### The LLM is a Constrained Worker
-Sub-agents have no tool access. They receive a prompt and produce code blocks with path annotations. The orchestrator handles all file I/O, state management, and verification. The LLM never touches the filesystem.
+### The Server Validates, the Orchestrator Generates
+The server never calls an LLM and never spawns a subprocess. It hands out scoped prompts (`spec/context`) and ingests generated files plus invariant verdicts (`spec/commit`), where it runs mechanical validations and enforces the verdicts. Generation — and all the LLM judgement that goes with it — happens in the orchestrator's sub-agents. This keeps the trusted core small, deterministic, and testable without a model.
 
-### Everything Long-Running is Async + Persisted
-This sidesteps stdio timeouts and lets the orchestrator dispatch several sub-agents in parallel while staying responsive. Job state survives crashes via SQLite + PID liveness reconciliation.
+### State Survives, Sessions Resume
+All state lives in one SQLite database; a session holds an exclusive lock and is the unit of progress. If a workflow dies mid-run, `spec/status`/`spec/wave_status` show where it stopped and re-invoking the workflow resumes — `spec/next` re-serves non-terminal resources. There is no async job state to reconcile because there are no background jobs.
 
 ### MCP-Native
 The Go binary is an MCP server, not a CLI with subcommands. An AI agent drives the lifecycle through structured tool calls. This makes crest-spec composable with any MCP-capable orchestrator.
