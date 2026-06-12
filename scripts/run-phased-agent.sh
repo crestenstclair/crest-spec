@@ -38,6 +38,23 @@ mkdir -p "$WORK_CLAUDE_DIR/skills" "$WORK_CLAUDE_DIR/workflows"
 ln -sfn "$REPO_ROOT/.claude/skills/spec-generate" "$WORK_CLAUDE_DIR/skills/spec-generate"
 ln -sfn "$REPO_ROOT/.claude/workflows/spec-generate.js" "$WORK_CLAUDE_DIR/workflows/spec-generate.js"
 
+# The workspace clean wiped .mcp.json (the deleted `crest-spec run` used to
+# regenerate it); write it so the launched claude session gets the server.
+cat > "$WORK_DIR/.mcp.json" <<EOF
+{
+  "mcpServers": {
+    "crest-spec": {
+      "command": "$REPO_ROOT/bin/crest-spec",
+      "env": {
+        "CREST_SPEC_SPEC_DIR": "$SPEC_DIR",
+        "CREST_SPEC_GENERATE_MODEL": "claude-sonnet-4-6",
+        "CREST_SPEC_MAX_RETRIES": "3"
+      }
+    }
+  }
+}
+EOF
+
 for phase in $(seq "$START" "$END"); do
   # Assemble spec dir: base.cue + phase-1 through phase-N
   rm -f "$SPEC_DIR"/*.cue
