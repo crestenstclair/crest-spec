@@ -4,6 +4,7 @@ export const meta = {
   whenToUse: 'After spec_begin has produced a session. Pass {sessionId, model?, maxRetries?} as args.',
   phases: [
     { title: 'Wave', detail: 'one generator agent per resource, retry loop inside the agent' },
+    { title: 'Verify', detail: 'post-wave project-level verification (type check, tests, project validations)' },
     { title: 'Triage', detail: 'resolve or skip resources still failing after retries' },
   ],
 }
@@ -47,6 +48,16 @@ const OUTCOME_SCHEMA = {
     files: { type: 'array', items: { type: 'string' } },
   },
   required: ['resource_id', 'outcome'],
+}
+
+const VERIFY_SCHEMA = {
+  type: 'object',
+  properties: {
+    passed: { type: 'boolean' },
+    resolved: { type: 'array', items: { type: 'string' } },
+    unattributed: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['passed'],
 }
 
 function generatorPrompt(resourceId, waveIndex) {
@@ -126,6 +137,21 @@ while (true) {
       schema: OUTCOME_SCHEMA,
     })
   ))
+
+  // Post-wave verification: run project-level checks only if something committed.
+  // When verify resolves resources back to pending, spec_next re-serves the SAME
+  // wave_index next pass — so the stall guard above also bounds these verify-loops.
+  const committedCount = outcomes.filter(Boolean).filter(o => o.outcome === 'committed').length
+  if (committedCount > 0) {
+    const verify = await agent(
+      `Load the crest-spec MCP tools (ToolSearch "select:mcp__crest-spec__spec_verify_wave,mcp__crest-spec__spec_resolve"), then call spec_verify_wave with {session_id: "${sessionId}", wave_index: ${wave.wave_index}}. If Passed is true, report "wave verified". If Passed is false: for EACH error that has a ResourceID, call spec_resolve with {session_id: "${sessionId}", resource_id: <that ResourceID>, guidance: <the error Kind and Message, condensed to what the regenerating agent must fix>} — this resets the resource to pending so the next wave pass regenerates it. For errors with no ResourceID, include them in your report. Report: passed true/false, which resources you resolved, and any unattributed errors.`,
+      { label: `verify:wave-${wave.wave_index}`, phase: 'Verify', schema: VERIFY_SCHEMA },
+    )
+    if (verify && verify.passed === false) {
+      triaged.push({ resource_id: `wave-${wave.wave_index}`, action: verify })
+      log(`Wave ${wave.wave_index}: verification failed — ${ (verify.resolved || []).length } resource(s) reset for regeneration`)
+    }
+  }
 
   const failed = outcomes.filter(Boolean).filter(o => o.outcome !== 'committed')
   for (const f of failed) {

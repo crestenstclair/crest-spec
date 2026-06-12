@@ -1041,6 +1041,10 @@ spec/next -> wave N (resources + attempts + last_error)
   |     all committed?        --> loop: spec/next (wave N+1)|
   |     any not committed?     --> one triage agent each    |
   |                                                         |
+  +-- verify (if any committed): spec/verify_wave ----------+
+  |     project type-check/test + project validations;      |
+  |     attributed failures routed back via spec/resolve    |
+  |                                                         |
   +-- triage (per failure): spec/resolve OR spec/skip ------+
   |     resolve -> resource resets to pending; next         |
   |               spec/next re-serves it in the same wave   |
@@ -1399,6 +1403,7 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/finish` | Finalize the session: release lock, return summary; returns a `reflection_prompt` when `EVOLVE` is `finish`/`all`. |
 | `spec/status` | Show current state — resources in state, active session, lock status (or per-session wave progress when `session_id` is given). |
 | `spec/wave_status` | Detailed per-resource view of a specific wave (state, attempts, errors). |
+| `spec/verify_wave` | Run wave-level verification (project type-check/test commands + project-level validations, executed in the project root). Returns `Passed` plus per-resource attributed errors; route failures back via `spec/resolve`. See §8.4. |
 | `spec/log` | List past applies with status. |
 | `spec/history` | Show generation history for a specific resource. |
 | `spec/graph` | Return the resource dependency graph. |

@@ -32,6 +32,9 @@ spec-generate workflow. Default model: sonnet. Never haiku.
 - The workflow retries each resource internally (server injects failure
   context into the regenerated prompt) and triages persistent failures with
   spec_resolve/spec_skip.
+- After each wave commits, the workflow verifies it with spec_verify_wave
+  (project type-check/tests + project validations) and routes attributed
+  failures back through spec_resolve to regenerate on the next pass.
 - If the whole workflow dies, `spec_status`/`spec_wave_status` show where it
   stopped; re-invoking the workflow with the same sessionId resumes (spec_next
   re-serves non-terminal resources).

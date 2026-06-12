@@ -32,6 +32,8 @@ type fakeSpec struct {
 	lastNotes           string
 	lastModel           string
 	lastInvariantChecks []specmod.InvariantCheckInput
+	lastVerifySession   string
+	lastVerifyWave      int
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -111,6 +113,11 @@ func (f *fakeSpec) SessionStatus(ctx context.Context, sessionID string) (*specmo
 }
 func (f *fakeSpec) WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error) {
 	return &specmod.WaveStatusResult{}, nil
+}
+func (f *fakeSpec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) *specmod.WaveVerifyResult {
+	f.lastVerifySession = sessionID
+	f.lastVerifyWave = waveIndex
+	return &specmod.WaveVerifyResult{WaveIndex: waveIndex, Passed: true}
 }
 func (f *fakeSpec) EvolvePrompt(ctx context.Context, sessionID string) (string, error) {
 	return "", nil
@@ -251,6 +258,18 @@ func TestCommitToolForwardsInvariantChecks(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-6", fake.lastModel)
 	require.Len(t, fake.lastFiles, 1)
 	assert.Equal(t, "a.go", fake.lastFiles[0].Path)
+}
+
+func TestVerifyWaveToolForwardsArgs(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"session_id":"sess-1","wave_index":2}`)
+	res := srv.toolFns["spec/verify_wave"](context.Background(), args)
+	assert.Equal(t, "sess-1", fake.lastVerifySession)
+	assert.Equal(t, 2, fake.lastVerifyWave)
+	require.False(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, `"Passed":true`)
+	assert.Contains(t, res.Content[0].Text, `"WaveIndex":2`)
 }
 
 func TestAbout_Static(t *testing.T) {

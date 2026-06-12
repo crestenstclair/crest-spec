@@ -101,6 +101,7 @@ type specHandler interface {
 	Bootstrap(ctx context.Context, opts specmod.BootstrapOpts) (*specmod.BootstrapResult, error)
 	SessionStatus(ctx context.Context, sessionID string) (*specmod.SessionStatusResult, error)
 	WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error)
+	VerifyWave(ctx context.Context, sessionID string, waveIndex int) *specmod.WaveVerifyResult
 	EvolvePrompt(ctx context.Context, sessionID string) (string, error)
 	RecordLearnings(ctx context.Context, sessionID, output string) (int, error)
 	ListLearnings(status string) ([]storemod.Learning, error)
