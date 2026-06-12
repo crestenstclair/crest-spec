@@ -9,6 +9,10 @@ package crestsynth
 project: contexts: Synth: valueObjects: SamplePlayerConfig: {
 	state:       {sampleSetId: "SampleSetId", interpolation: "InterpolationMode", loopMode: "LoopMode"}
 	description: "sample player engine config: which sample set, interpolation quality, loop behavior"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SamplePlayerConfig"},
+		{kind: "test", command: ["cargo", "test", "sample_player_config"], description: "SamplePlayerConfig unit tests pass"},
+	]
 }
 
 // ── SampleLibrary context ──────────────────────────────
@@ -20,16 +24,24 @@ project: contexts: SampleLibrary: ubiquitousLanguage: {
 	SampleData: "raw audio sample data (f32 frames) held in memory, swapped via basedrop"
 }
 
-project: contexts: SampleLibrary: valueObjects: SampleSetId:        {from: "u32", description: "unique identifier for a loaded sample set"}
-project: contexts: SampleLibrary: valueObjects: InterpolationMode:  {from: "enum", description: "sample interpolation quality: Nearest, Linear, Cubic, Sinc"}
+project: contexts: SampleLibrary: valueObjects: SampleSetId:        {from: "u32", description: "unique identifier for a loaded sample set", validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleSetId"}]}
+project: contexts: SampleLibrary: valueObjects: InterpolationMode:  {from: "enum", description: "sample interpolation quality: Nearest, Linear, Cubic, Sinc", validations: [{kind: "compiles", command: ["cargo", "build"], description: "crate builds with InterpolationMode"}]}
 project: contexts: SampleLibrary: valueObjects: SampleMetadata: {
 	state:       {sampleRate: "SampleRate", channels: "u8", lengthFrames: "u64", loopStart: "Option<u64>", loopEnd: "Option<u64>", rootNote: "NoteNumber"}
 	description: "metadata about a single sample"
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleMetadata"},
+		{kind: "test", command: ["cargo", "test", "sample_metadata"], description: "SampleMetadata unit tests pass"},
+	]
 }
 project: contexts: SampleLibrary: valueObjects: KeyVelocityRange: {
 	state:       {keyLow: "NoteNumber", keyHigh: "NoteNumber", velocityLow: "Velocity", velocityHigh: "Velocity"}
 	description: "the note and velocity range a sample zone responds to"
 	invariants: ["keyLow <= keyHigh", "velocityLow <= velocityHigh"]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with KeyVelocityRange"},
+		{kind: "test", command: ["cargo", "test", "key_velocity_range"], description: "KeyVelocityRange invariant tests pass"},
+	]
 }
 
 project: contexts: SampleLibrary: aggregates: SampleSet: {
@@ -50,14 +62,36 @@ project: contexts: SampleLibrary: aggregates: SampleSet: {
 		"unloading retires the Arc through DeferredDeallocator, never frees on audio thread",
 	]
 	entities: SampleZone: {state: {range: "KeyVelocityRange", metadata: "SampleMetadata", sampleDataRef: "Arc<[f32]>"}}
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleSet"},
+		{kind: "test", command: ["cargo", "test", "sample_set"], description: "SampleSet unit tests pass"},
+	]
 }
 
-project: contexts: SampleLibrary: applicationServices: SampleLoader:   {purpose: "decodes sample files (SF2, WAV) from disk into SampleSet aggregates", uses: ["aggregate.SampleLibrary.SampleSet"]}
-project: contexts: SampleLibrary: domainServices: SampleInterpolator:  {purpose: "reads sample data with pitch-shifted interpolation (linear, cubic, sinc)", uses: ["aggregate.SampleLibrary.SampleSet"]}
+project: contexts: SampleLibrary: applicationServices: SampleLoader: {
+	purpose: "decodes sample files (SF2, WAV) from disk into SampleSet aggregates"
+	uses: ["aggregate.SampleLibrary.SampleSet"]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleLoader"},
+		{kind: "test", command: ["cargo", "test", "sample_loader"], description: "SampleLoader unit tests pass"},
+	]
+}
+project: contexts: SampleLibrary: domainServices: SampleInterpolator: {
+	purpose: "reads sample data with pitch-shifted interpolation (linear, cubic, sinc)"
+	uses: ["aggregate.SampleLibrary.SampleSet"]
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleInterpolator"},
+		{kind: "test", command: ["cargo", "test", "sample_interpolator"], description: "SampleInterpolator unit tests pass"},
+	]
+}
 
 project: contexts: SampleLibrary: repositories: SampleSetRepository: {
 	of:       "aggregate.SampleLibrary.SampleSet"
 	contract: {findById: "SampleSetId -> Option<SampleSet>", save: "SampleSet -> ()", listAll: "() -> Vec<SampleSet>"}
+	validations: [
+		{kind: "compiles", command: ["cargo", "build"], description: "crate builds with SampleSetRepository"},
+		{kind: "test", command: ["cargo", "test", "sample_set_repository"], description: "SampleSetRepository unit tests pass"},
+	]
 }
 
 // ── Sample playback made audible (the phase-6 behavior prover) ─────────
