@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
-	"github.com/crestenstclair/crest-spec/internal/engine"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
@@ -51,6 +50,23 @@ type ContextResult struct {
 	SystemPrompt string
 	Prompt       string
 	Instructions string
+	Invariants   []InvariantInfo
+}
+
+// InvariantInfo is a project invariant surfaced to the orchestrator so it can
+// judge the generated files against it and supply a verdict at commit.
+type InvariantInfo struct {
+	Text      string `json:"text"`
+	Rationale string `json:"rationale,omitempty"`
+}
+
+// InvariantCheckInput is an orchestrator-supplied verdict for one project
+// invariant, judged against the files being committed. The server records and
+// enforces it; the LLM judgment happens outside the server.
+type InvariantCheckInput struct {
+	Invariant string `json:"invariant"`
+	Passed    bool   `json:"passed"`
+	Summary   string `json:"summary"`
 }
 
 type CommitFile struct {
@@ -64,9 +80,10 @@ type CommitResult struct {
 }
 
 type FinishResult struct {
-	Committed int
-	Skipped   int
-	Errored   int
+	Committed        int
+	Skipped          int
+	Errored          int
+	ReflectionPrompt string `json:"reflection_prompt,omitempty"`
 }
 
 func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) {
@@ -355,17 +372,27 @@ func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*Cont
 	runtimeCtx, _ := s.buildRuntimeContext(resource, planResult.Registry, sess.ApplyID)
 	fullPrompt := promptpkg.InjectRuntimeContext(resourcePrompt, runtimeCtx)
 
+	var invariants []InvariantInfo
+	for _, inv := range planResult.Registry.Project.Invariants {
+		invariants = append(invariants, InvariantInfo{Text: inv.Text, Rationale: inv.Meta.Rationale})
+	}
+
 	return &ContextResult{
 		SystemPrompt: systemPrompt,
 		Prompt:       fullPrompt,
 		Instructions: dispatchInstructions(resourceID),
+		Invariants:   invariants,
 	}, nil
 }
 
-func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string) (*CommitResult, error) {
+func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string, invariantChecks []InvariantCheckInput, model string) (*CommitResult, error) {
 	sess, err := s.store.GetSession(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
+	}
+
+	if model == "" {
+		model = s.cfg.GenerateModel
 	}
 
 	if err := s.writeChangedFiles(files); err != nil {
@@ -392,9 +419,19 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		return nil, fmt.Errorf("resource not found: %s", resourceID)
 	}
 
-	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, files, planResult, currentAttempts)
+	// Create the generation row only once all early-return paths have passed,
+	// so every created row is guaranteed to receive an outcome update on both
+	// remaining paths (rejected/success). Creating it earlier left dangling
+	// rows that rendered as eternal "pending" in the dashboard.
+	genID := uuid.NewString()
+	s.store.CreateGeneration(store.Generation{
+		ID: genID, ApplyID: sess.ApplyID, ResourceID: resourceID, Model: model,
+	})
+
+	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, planResult, invariantChecks, currentAttempts)
 	if rejected != nil {
 		// Validation gate failed: amendments declaring a validation are FAILED.
+		s.store.UpdateGeneration(genID, "", "rejected", firstFailureMessage(rejected.Validations), 0, 0, 0, 0)
 		s.markAmendmentVerification(resourceID, resource, false)
 		return rejected, nil
 	}
@@ -404,10 +441,23 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 	// Validation gate passed: amendments declaring a validation are VERIFIED.
 	s.markAmendmentVerification(resourceID, resource, true)
 
+	s.store.UpdateGeneration(genID, "", "success", "", 0, 0, 0, 0)
+
 	return &CommitResult{
 		Committed:   true,
 		Validations: validationResults,
 	}, nil
+}
+
+// firstFailureMessage returns the message of the first failed validation
+// result, or "" when all passed.
+func firstFailureMessage(results []ValidationResult) string {
+	for _, v := range results {
+		if !v.Passed {
+			return v.Message
+		}
+	}
+	return ""
 }
 
 func (s *Spec) writeChangedFiles(files []CommitFile) error {
@@ -456,8 +506,8 @@ func (s *Spec) runCommitValidations(
 	sess *store.Session,
 	sessionID, resourceID string,
 	resource cuepkg.Resource,
-	files []CommitFile,
 	planResult *PlanResult,
+	invariantChecks []InvariantCheckInput,
 	attempts int,
 ) ([]ValidationResult, *CommitResult) {
 	var validationResults []ValidationResult
@@ -474,18 +524,39 @@ func (s *Spec) runCommitValidations(
 		}
 	}
 
-	if s.engine != nil && len(planResult.Registry.Project.Invariants) > 0 {
-		invariantResults, err := s.checkInvariants(ctx, files, planResult.Registry.Project.Invariants)
-		if err == nil {
-			if rejection := s.checkForFailure(invariantResults, sess.ApplyID, sessionID, resourceID, "invariant", attempts); rejection != nil {
-				rejection.Validations = append(validationResults, invariantResults...)
-				return nil, rejection
-			}
-			validationResults = append(validationResults, invariantResults...)
+	if len(invariantChecks) > 0 {
+		invariantResults := s.ingestInvariantChecks(sess.ApplyID, resourceID, invariantChecks)
+		if rejection := s.checkForFailure(invariantResults, sess.ApplyID, sessionID, resourceID, "invariant", attempts); rejection != nil {
+			rejection.Validations = append(validationResults, invariantResults...)
+			return nil, rejection
 		}
+		validationResults = append(validationResults, invariantResults...)
 	}
 
 	return validationResults, nil
+}
+
+// ingestInvariantChecks converts orchestrator-supplied verdicts into
+// ValidationResults and persists them for the audit trail / reflection.
+func (s *Spec) ingestInvariantChecks(applyID, resourceID string, checks []InvariantCheckInput) []ValidationResult {
+	results := make([]ValidationResult, 0, len(checks))
+	for _, c := range checks {
+		s.store.RecordInvariantCheck(store.InvariantCheck{
+			ID:         uuid.NewString(),
+			ApplyID:    applyID,
+			ResourceID: resourceID,
+			CheckType:  c.Invariant,
+			Passed:     c.Passed,
+			Output:     c.Summary,
+			CreatedAt:  time.Now().UTC(),
+		})
+		r := ValidationResult{Kind: "invariant", Passed: c.Passed}
+		if !c.Passed {
+			r.Message = fmt.Sprintf("Invariant violated: %s\n%s", c.Invariant, c.Summary)
+		}
+		results = append(results, r)
+	}
+	return results
 }
 
 func (s *Spec) checkForFailure(results []ValidationResult, applyID, sessionID, resourceID, actionKind string, attempts int) *CommitResult {
@@ -589,11 +660,13 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 		status = "failed"
 	}
 
-	// Session-scoped reflection at finish (Component 6, trigger 3). Synchronous
-	// — this is the end of the run, so latency is acceptable. Errors are ignored;
-	// reflection must never be able to fail a session.
+	// Session-scoped reflection at finish (Component 6, trigger 3). The server
+	// only builds the prompt; the orchestrator runs it and submits the output
+	// via RecordLearnings. Errors are swallowed — reflection must never fail a
+	// session.
+	reflectionPrompt := ""
 	if s.reflector != nil && (s.cfg.Evolve == "finish" || s.cfg.Evolve == "all") {
-		_, _ = s.reflector.ReflectSession(ctx, sessionID, sess.ApplyID)
+		reflectionPrompt, _ = s.reflector.BuildSessionPrompt(sessionID, sess.ApplyID)
 	}
 
 	s.store.UpdateSession(sessionID, status, sess.CurrentWave)
@@ -601,18 +674,19 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 	s.store.ReleaseLock()
 
 	return &FinishResult{
-		Committed: committed,
-		Skipped:   skipped,
-		Errored:   errored,
+		Committed:        committed,
+		Skipped:          skipped,
+		Errored:          errored,
+		ReflectionPrompt: reflectionPrompt,
 	}, nil
 }
 
 type WaveVerifyResult struct {
-	WaveIndex     int
-	Passed        bool
-	Errors        []WaveError
-	RetryCount    int
-	MaxRetries    int
+	WaveIndex  int
+	Passed     bool
+	Errors     []WaveError
+	RetryCount int
+	MaxRetries int
 }
 
 type WaveError struct {
@@ -755,49 +829,6 @@ func (s *Spec) attributeErrorToResource(errorOutput string, resources []store.Se
 	return ""
 }
 
-func (s *Spec) checkInvariants(ctx context.Context, files []CommitFile, invariants []cuepkg.Invariant) ([]ValidationResult, error) {
-	if len(files) == 0 || len(invariants) == 0 {
-		return nil, nil
-	}
-
-	var codeBuilder string
-	for _, f := range files {
-		codeBuilder += fmt.Sprintf("// path: %s\n%s\n\n", f.Path, f.Content)
-	}
-
-	var results []ValidationResult
-	for _, inv := range invariants {
-		reviewPrompt := fmt.Sprintf(
-			"Check if this code violates the following invariant:\n\nINVARIANT: %s\n",
-			inv.Text,
-		)
-		if inv.Meta.Rationale != "" {
-			reviewPrompt += fmt.Sprintf("RATIONALE: %s\n", inv.Meta.Rationale)
-		}
-		reviewPrompt += fmt.Sprintf("\nCODE:\n%s\n\nRespond with PASS if the code respects the invariant, or FAIL with explanation if it violates it.", codeBuilder)
-
-		res, err := s.engine.Review(ctx, engine.ReviewOpts{
-			Code:         codeBuilder,
-			Requirements: reviewPrompt,
-		})
-		if err != nil {
-			continue
-		}
-
-		passed := !strings.Contains(strings.ToUpper(res.Output), "FAIL")
-		result := ValidationResult{
-			Passed: passed,
-			Kind:   "invariant",
-		}
-		if !passed {
-			result.Message = fmt.Sprintf("Invariant violated: %s\n%s", inv.Text, res.Output)
-		}
-		results = append(results, result)
-	}
-
-	return results, nil
-}
-
 // forceTargetIntoActions ensures the target resource appears in the action
 // list. If it is already present, the list is returned unchanged. Otherwise a
 // new ActionModify with reason "forced regeneration" is appended.
@@ -855,52 +886,37 @@ func orchestratorInstructions() string {
   ORCHESTRATOR RULES — YOU ARE A DISPATCHER, NOT A CODE GENERATOR
 ========================================================================
 
-You are the orchestrator. Your job is to coordinate sub-agents and make
-decisions. You MUST NOT write implementation code yourself.
+You are the orchestrator. The crest-spec server is a pure state engine — it
+never calls an LLM. You run all generation with your own sub-agents/workflows.
+Default generation model: sonnet.
 
-## Recommended flow (fewest tool calls):
+## Pipeline
 
-  1. spec/plan          → see what needs generating
-  2. spec/begin         → start session (returns session_id + plan + waves)
-  3. spec/run_wave      → dispatch entire wave in parallel
-     Blocks until the wave completes and returns the full result inline.
-     No job_id, no polling — the result comes back directly.
-     Progress notifications stream as each resource finishes.
-     Result contains:
-     - committed: resources that succeeded
-     - rejected: resources that failed validation (with error context)
-     - errored: resources that failed generation
-  4. Handle destroys (if PendingDestroys is non-empty):
-     - Review the list of resources pending deletion
-     - spec/confirm_destroys → confirm which resources to delete
-  5. Handle failures:
-     - spec/resolve     → provide guidance, re-dispatch
-     - spec/amend       → fix CUE spec, re-dispatch
-     - spec/skip        → skip and move on
-  6. Repeat step 3 until done=true
-  7. spec/finish        → finalize session
+1. spec/plan            → see what needs generating
+2. spec/begin           → start a session (session_id, plan, waves, pending destroys)
+3. spec/confirm_destroys → if PendingDestroys is non-empty, confirm deletions
+4. spec/next            → next wave of resources (dependency order)
+5. For each resource in the wave (parallelize across the wave):
+   a. spec/context      → scoped prompt + system_prompt + project invariants
+   b. Generate with a sub-agent (sonnet) using that prompt
+   c. Judge each returned invariant against the generated files (pass/fail + summary)
+   d. spec/commit       → files + notes + model + invariant_checks
+                          The server writes files and runs the resource's
+                          mechanical validations (compile/test/custom).
+                          A failed validation or a failed invariant verdict
+                          rejects the commit.
+   e. If Committed=false: call spec/context again (it now includes the
+      failure), regenerate, re-commit — up to max_retries. Then
+      spec/resolve (guidance) or spec/skip.
+6. Repeat from step 4 until spec/next returns done=true
+7. spec/finish          → finalize; if reflection_prompt is non-empty, run it
+                          with a sub-agent and submit via spec/record_learnings
 
-  Use model_overrides in spec/run_wave to assign opus to complex resources
-  that need stronger reasoning. Sonnet is the default for all resources.
+The core loop is generate → commit → validate → retry-with-feedback.
 
-## Observability (check progress at any time):
+## Observability
 
-  spec/status (session_id) → session overview: current wave, total waves,
-    per-wave counts of committed/rejected/errored/pending resources.
-  spec/wave_status (session_id, wave_index) → detailed per-resource view
-    within a wave: state, attempts, max_retries, last_error.
-
-## Single-resource dispatch:
-
-  spec/dispatch (session_id, resource_id, model) → atomic generate-and-commit.
-  Blocks until complete and returns the result inline (no polling needed).
-  Useful for re-dispatching individual failed resources after providing guidance.
-
-## Manual pipeline (full control):
-
-  spec/context → run_prompt → poll_result → parse code blocks → spec/commit
-  Use this when you need to inspect or modify sub-agent output before committing.
-  Only run_prompt requires poll_result — spec/run_wave and spec/dispatch do not.
+  spec/status (session_id) → session overview; spec/wave_status → per-resource view.
 
 DO NOT:
   - Write implementation code directly — every file must come from a sub-agent
@@ -909,16 +925,14 @@ DO NOT:
 }
 
 func dispatchInstructions(resourceID string) string {
-	return fmt.Sprintf(`Dispatch a sub-agent to generate code for %s.
+	return fmt.Sprintf(`Generate code for %s with a sub-agent (sonnet by default).
 
-Preferred: use spec/dispatch (session_id, resource_id) — it handles the full
-generate → parse → validate → commit loop and returns the result inline.
-
-Manual pipeline (if you need to inspect output before committing):
-1. Call run_prompt with prompt, system_prompt, session_id, and resource_id
-   (session_id and resource_id enable generation tracking in SQLite)
-2. Call poll_result to collect the generated code (only run_prompt needs polling)
-3. Parse code blocks with // path: annotations
-4. Call spec/commit with the parsed files
-5. If validation fails, re-dispatch with the error details`, resourceID)
+1. Give the sub-agent the system_prompt and prompt from this result.
+2. The sub-agent produces the files (path + full content).
+3. Judge each invariant in this result against the files (passed + summary).
+4. Call spec/commit with session_id, resource_id, files, model, and
+   invariant_checks. The server runs mechanical validations and rejects on
+   any failure.
+5. If Committed=false, call spec/context again — the failure context is
+   injected into the new prompt — and retry (respect max_retries).`, resourceID)
 }

@@ -9,8 +9,6 @@ import (
 	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
-	"github.com/crestenstclair/crest-spec/internal/engine"
-	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -174,81 +172,6 @@ func (s *Spec) GraduateAmendment(ctx context.Context, resourceID, name string, a
 	}
 	result.Applied = true
 	return result, nil
-}
-
-// ProposeAmendments runs deep_review over the target and asks the LLM to draft
-// amendments from the findings. Writes nothing — the result is a proposal for
-// human review, fed to ApplyAmendments on approval. Drafting is per-finding
-// (one LLM call each) so the finding→amendment mapping stays explicit.
-func (s *Spec) ProposeAmendments(ctx context.Context, sessionID, resourceID string) ([]ProposedAmendment, error) {
-	review, err := s.DeepReview(ctx, DeepReviewOpts{SessionID: sessionID, Target: resourceID})
-	if err != nil {
-		return nil, fmt.Errorf("deep review for proposal: %w", err)
-	}
-	var proposals []ProposedAmendment
-	for _, out := range review.Findings {
-		for _, f := range out.Findings {
-			prompt := promptpkg.RenderProposeAmendments(formatFinding(f))
-			res, err := s.engine.CodeReview(ctx, engine.CodeReviewOpts{Prompt: prompt})
-			if err != nil {
-				continue
-			}
-			proposals = append(proposals, parseProposedAmendments(res.Output, resourceID)...)
-		}
-	}
-	return proposals, nil
-}
-
-// formatFinding renders a single review finding into a compact text block for
-// the amendment-proposer prompt.
-func formatFinding(f ReviewFinding) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "- severity: %s\n", f.Severity)
-	if f.File != "" {
-		fmt.Fprintf(&b, "  file: %s\n", f.File)
-	}
-	if f.Line != 0 {
-		fmt.Fprintf(&b, "  line: %d\n", f.Line)
-	}
-	fmt.Fprintf(&b, "  description: %s", f.Description)
-	return b.String()
-}
-
-// parseProposedAmendments tolerantly decodes the LLM's drafting output (a JSON
-// array of amendments, possibly wrapped in prose or ```json fences) into
-// ProposedAmendments. The passed resourceID is stamped on each draft, and an
-// empty Origin defaults to "deep_review". Parse failure returns nil (no error):
-// a bad draft is dropped, not fatal.
-func parseProposedAmendments(output, resourceID string) []ProposedAmendment {
-	start := strings.Index(output, "[")
-	end := strings.LastIndex(output, "]")
-	if start < 0 || end <= start {
-		return nil
-	}
-	var raw []struct {
-		Name    string          `json:"name"`
-		Prompt  string          `json:"prompt"`
-		Origin  string          `json:"origin"`
-		Finding *cuepkg.Finding `json:"finding"`
-	}
-	if err := json.Unmarshal([]byte(output[start:end+1]), &raw); err != nil {
-		return nil
-	}
-	var out []ProposedAmendment
-	for _, a := range raw {
-		origin := a.Origin
-		if origin == "" {
-			origin = "deep_review"
-		}
-		out = append(out, ProposedAmendment{
-			ResourceID: resourceID,
-			Name:       a.Name,
-			Prompt:     a.Prompt,
-			Origin:     origin,
-			Finding:    a.Finding,
-		})
-	}
-	return out
 }
 
 // amendmentContentHash is the stable identity of an amendment: hash of the
