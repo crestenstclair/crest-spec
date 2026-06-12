@@ -88,7 +88,7 @@ project: assets: PatchPlayMain: {
 		"Route EVERY event through the ChannelDispatcher to all subscribed patches; each patch drives its OWN VoiceAllocator / voice pool (independent polyphony + stealing), proving one patch cannot exhaust another's voices.",
 		"Sum each patch's rendered audio through the PatchMixer (per-patch gain + pan), then the GlobalMixer (master gain), into one output buffer.",
 		"Write 16-bit mono WAV (default patch-play.wav, or --out) with a pure-Rust WAV writer.",
-		"Print per-channel / per-patch statistics to stdout: events delivered per patch, peak simultaneous voices per patch, and voice-steal counts per patch.",
+		#"Print per-channel / per-patch statistics to stdout. For EACH patch print a line containing the verbatim token `Peak Voices` followed by that patch's peak simultaneous voice count (e.g. `Patch 1 \"Bass\": Peak Voices = 3`). Also print events delivered per patch and voice-steal counts per patch. The `Peak Voices` token must appear verbatim so a validation can assert the per-patch voice accounting ran."#,
 		"Purpose: this binary proves the dispatcher → per-patch-pools → global-mix integration works end to end.",
 	]
 	validations: [
@@ -96,6 +96,7 @@ project: assets: PatchPlayMain: {
 		{kind: "integration", command: ["make", "demo-patches"], description: "multi-channel demo renders through all patches to WAV", assertions: [
 			{kind: "exit_code", expected: 0},
 			{kind: "file_exists", path: "patch-play.wav"},
+			{kind: "stdout_contains", pattern: "Peak Voices"},
 		]},
 	]
 }

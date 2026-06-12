@@ -1,9 +1,12 @@
 package crestsynth
 
-// Override (phase 5): adds the mod_play [[bin]]. Picked up by run-phased-agent.sh
-// (highest-numbered phase-N.override-RootCargoToml.cue with N <= target phase).
-// REPLACES the phase-4 override, so the FULL cumulative dependency + bin list
-// is enumerated here. No new crates: modulation is all in-crate.
+// Override (phase 7): adds the effects_demo [[bin]]. Picked up by
+// run-phased-agent.sh (highest-numbered phase-N.override-RootCargoToml.cue with
+// N <= target phase). REPLACES the phase-6 override, so the FULL cumulative
+// dependency + bin list is enumerated here. NO new crate at this phase: the
+// effects_demo supplies a tiny in-crate EffectProcessor impl to prove the
+// EffectChain ordering/bypass invariants. fundsp arrives with its adapter in
+// phase 9, not here.
 
 project: assets: RootCargoToml: {
 	kind:        "cargo-manifest"
@@ -16,7 +19,9 @@ project: assets: RootCargoToml: {
 		#"Include [[bin]] section: name = "midi_play_live", path = "src/bin/midi_play_live.rs""#,
 		#"Include [[bin]] section: name = "patch_play", path = "src/bin/patch_play.rs""#,
 		#"Include [[bin]] section: name = "mod_play", path = "src/bin/mod_play.rs""#,
+		#"Include [[bin]] section: name = "sample_demo", path = "src/bin/sample_demo.rs""#,
+		#"Include [[bin]] section: name = "effects_demo", path = "src/bin/effects_demo.rs""#,
 		"Dependencies: `midly` (0.5.x) for SMF parsing; `cpal` for audio output; the lock-free seam crates `rtrb`, `triple_buffer`, and `basedrop`.",
-		"Only include dependencies actually needed by the generated code (WAV writing remains pure-Rust, no crate).",
+		"Only include dependencies actually needed by the generated code (WAV writing/reading remain pure-Rust; the effects demo uses an in-crate EffectProcessor impl, so no fundsp at this phase).",
 	]
 }
