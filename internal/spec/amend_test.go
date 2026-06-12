@@ -31,7 +31,7 @@ func setupAmendSpec(t *testing.T) (*Spec, *store.Store) {
 		MaxRetries:    3,
 	}
 
-	s := New(nil, st, OSFileSystem{}, cfg)
+	s := New(st, OSFileSystem{}, cfg)
 	return s, st
 }
 

@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,287 +15,133 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
-	enginemod "github.com/crestenstclair/crest-spec/internal/engine"
+	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
 
 // ---------------------------------------------------------------------------
-// Fake engine
+// Fake spec handler
 // ---------------------------------------------------------------------------
 
-type fakeEngine struct {
-	mu              sync.Mutex
-	generateCalls   int
-	generateResult  *agent.RunResult
-	generateErr     error
-	codeReviewCalls int
-	codeReviewOut   string
-	codeReviewErr   error
-	bugbotCalls     int
-	bugbotOut       string
-	bugbotErr       error
-	modelsOut       string
-	modelsErr       error
-	aboutOut        string
-	aboutErr        error
-	statusOut       string
-	statusErr       error
-	generateDelay   time.Duration
+// fakeSpec is a minimal specHandler used to exercise the registered spec
+// tools. Methods return zero values unless a test needs otherwise; the Commit
+// method captures its arguments so tests can assert forwarding.
+type fakeSpec struct {
+	lastFiles           []specmod.CommitFile
+	lastNotes           string
+	lastModel           string
+	lastInvariantChecks []specmod.InvariantCheckInput
 }
 
-func (f *fakeEngine) Generate(ctx context.Context, opts enginemod.GenerateOpts) (*agent.RunResult, error) {
-	f.mu.Lock()
-	f.generateCalls++
-	f.mu.Unlock()
-	if f.generateDelay > 0 {
-		select {
-		case <-time.After(f.generateDelay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if f.generateErr != nil {
-		return f.generateResult, f.generateErr
-	}
-	res := f.generateResult
-	if res == nil {
-		res = &agent.RunResult{Output: "generated output"}
-	}
-	return res, nil
+func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
+	return &specmod.PlanResult{}, nil
 }
-
-func (f *fakeEngine) Review(ctx context.Context, opts enginemod.ReviewOpts) (*agent.RunResult, error) {
-	return &agent.RunResult{Output: "PASS"}, nil
+func (f *fakeSpec) Begin(ctx context.Context, opts specmod.BeginOpts) (*specmod.BeginResult, error) {
+	return &specmod.BeginResult{}, nil
 }
-
-func (f *fakeEngine) CodeReview(ctx context.Context, opts enginemod.CodeReviewOpts) (*agent.RunResult, error) {
-	f.mu.Lock()
-	f.codeReviewCalls++
-	f.mu.Unlock()
-	if f.codeReviewErr != nil {
-		return &agent.RunResult{Output: f.codeReviewOut}, f.codeReviewErr
-	}
-	out := f.codeReviewOut
-	if out == "" {
-		out = "code review output"
-	}
-	return &agent.RunResult{Output: out}, nil
+func (f *fakeSpec) ConfirmDestroys(ctx context.Context, sessionID string, resourceIDs []string) ([]specmod.DestroyedResource, error) {
+	return nil, nil
 }
-
-func (f *fakeEngine) Bugbot(ctx context.Context, opts enginemod.BugbotOpts) (*agent.RunResult, error) {
-	f.mu.Lock()
-	f.bugbotCalls++
-	f.mu.Unlock()
-	if f.bugbotErr != nil {
-		return &agent.RunResult{Output: f.bugbotOut}, f.bugbotErr
-	}
-	out := f.bugbotOut
-	if out == "" {
-		out = "bugbot output"
-	}
-	return &agent.RunResult{Output: out}, nil
+func (f *fakeSpec) Next(ctx context.Context, sessionID string) (*specmod.NextResult, error) {
+	return &specmod.NextResult{}, nil
 }
-
-func (f *fakeEngine) Models(ctx context.Context) (string, error) {
-	if f.modelsErr != nil {
-		return "", f.modelsErr
-	}
-	out := f.modelsOut
-	if out == "" {
-		out = "claude-opus-4-6, claude-sonnet-4-6"
-	}
-	return out, nil
+func (f *fakeSpec) Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error) {
+	return &specmod.ContextResult{}, nil
 }
-
-func (f *fakeEngine) About(ctx context.Context) (string, error) {
-	if f.aboutErr != nil {
-		return "", f.aboutErr
-	}
-	out := f.aboutOut
-	if out == "" {
-		out = "claude-code v1.0.0"
-	}
-	return out, nil
+func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, invariantChecks []specmod.InvariantCheckInput, model string) (*specmod.CommitResult, error) {
+	f.lastFiles = files
+	f.lastNotes = notes
+	f.lastModel = model
+	f.lastInvariantChecks = invariantChecks
+	return &specmod.CommitResult{}, nil
 }
-
-func (f *fakeEngine) Status(ctx context.Context) (string, error) {
-	if f.statusErr != nil {
-		return "", f.statusErr
-	}
-	out := f.statusOut
-	if out == "" {
-		out = "Authenticated"
-	}
-	return out, nil
+func (f *fakeSpec) Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error) {
+	return &specmod.FinishResult{}, nil
 }
-
-// ---------------------------------------------------------------------------
-// Fake store
-// ---------------------------------------------------------------------------
-
-type fakeStore struct {
-	mu             sync.Mutex
-	jobs           map[string]*storemod.Job
-	createJobCalls int
-	createJobErr   error
-	completeCount  int
-	failCount      int
-	cancelCount    int
-	deleteCount    int
-}
-
-func newFakeStore() *fakeStore {
-	return &fakeStore{jobs: make(map[string]*storemod.Job)}
-}
-
-func (f *fakeStore) CreateJob(id, tool string, pid int) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.createJobCalls++
-	if f.createJobErr != nil {
-		return f.createJobErr
-	}
-	f.jobs[id] = &storemod.Job{
-		ID:        id,
-		Tool:      tool,
-		Status:    "running",
-		PID:       pid,
-		StartedAt: time.Now(),
-	}
+func (f *fakeSpec) Resolve(ctx context.Context, sessionID, resourceID, answer, model string) error {
 	return nil
 }
-
-func (f *fakeStore) CompleteJob(id, result string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.completeCount++
-	if j, ok := f.jobs[id]; ok {
-		j.Status = "completed"
-		j.Result = result
-		now := time.Now()
-		j.DoneAt = &now
-	}
+func (f *fakeSpec) Note(ctx context.Context, sessionID, resourceID, content string) error {
 	return nil
 }
-
-func (f *fakeStore) FailJob(id string, jobErr error) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failCount++
-	if j, ok := f.jobs[id]; ok {
-		j.Status = "failed"
-		j.Error = jobErr.Error()
-		now := time.Now()
-		j.DoneAt = &now
-	}
+func (f *fakeSpec) Amend(ctx context.Context, sessionID, resourceID string) error { return nil }
+func (f *fakeSpec) Skip(ctx context.Context, sessionID, resourceID, reason string) error {
 	return nil
 }
-
-func (f *fakeStore) CancelJob(id string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.cancelCount++
-	if j, ok := f.jobs[id]; ok {
-		j.Status = "cancelled"
-		now := time.Now()
-		j.DoneAt = &now
-	}
-	return nil
+func (f *fakeSpec) Status(ctx context.Context) (*specmod.StatusResult, error) {
+	return &specmod.StatusResult{}, nil
 }
-
-func (f *fakeStore) GetJob(id string) (*storemod.Job, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	j, ok := f.jobs[id]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-	return j, nil
+func (f *fakeSpec) Log(ctx context.Context, limit int) ([]storemod.Apply, error) { return nil, nil }
+func (f *fakeSpec) History(ctx context.Context, resourceID string, limit int) ([]storemod.Generation, error) {
+	return nil, nil
 }
-
-func (f *fakeStore) ListJobs(limit int) ([]storemod.Job, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []storemod.Job
-	for _, j := range f.jobs {
-		out = append(out, *j)
-		if len(out) >= limit {
-			break
-		}
-	}
-	return out, nil
+func (f *fakeSpec) GraphInfo(ctx context.Context) (*specmod.GraphResult, error) {
+	return &specmod.GraphResult{}, nil
 }
-
-func (f *fakeStore) DeleteJob(id string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.deleteCount++
-	if j, ok := f.jobs[id]; ok {
-		j.Status = "deleted"
-	}
-	return nil
+func (f *fakeSpec) Validate(ctx context.Context) (*specmod.ValidateResult, error) {
+	return &specmod.ValidateResult{}, nil
 }
-
-func (f *fakeStore) CleanupOrphans(aliveFn func(int) bool) (int, error) {
+func (f *fakeSpec) ValidateResource(ctx context.Context, resourceID string) (*specmod.ValidateResourceResult, error) {
+	return &specmod.ValidateResourceResult{}, nil
+}
+func (f *fakeSpec) Inspect(ctx context.Context, resourceID string) (*specmod.InspectResult, error) {
+	return &specmod.InspectResult{}, nil
+}
+func (f *fakeSpec) Unlock(ctx context.Context) error { return nil }
+func (f *fakeSpec) DiffApplies(ctx context.Context, applyIDA, applyIDB string) (*specmod.DiffResult, error) {
+	return &specmod.DiffResult{}, nil
+}
+func (f *fakeSpec) Vacuum(ctx context.Context, before time.Time) (int, error) { return 0, nil }
+func (f *fakeSpec) ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error) {
+	return nil, nil
+}
+func (f *fakeSpec) RemoveResource(ctx context.Context, resourceID string) error { return nil }
+func (f *fakeSpec) Import(ctx context.Context, opts specmod.ImportOpts) (*specmod.ImportResult, error) {
+	return &specmod.ImportResult{}, nil
+}
+func (f *fakeSpec) Prompt(ctx context.Context, resourceID string) (*specmod.PromptResult, error) {
+	return &specmod.PromptResult{}, nil
+}
+func (f *fakeSpec) Bootstrap(ctx context.Context, opts specmod.BootstrapOpts) (*specmod.BootstrapResult, error) {
+	return &specmod.BootstrapResult{}, nil
+}
+func (f *fakeSpec) SessionStatus(ctx context.Context, sessionID string) (*specmod.SessionStatusResult, error) {
+	return &specmod.SessionStatusResult{}, nil
+}
+func (f *fakeSpec) WaveStatus(ctx context.Context, sessionID string, waveIndex int) (*specmod.WaveStatusResult, error) {
+	return &specmod.WaveStatusResult{}, nil
+}
+func (f *fakeSpec) EvolvePrompt(ctx context.Context, sessionID string) (string, error) {
+	return "", nil
+}
+func (f *fakeSpec) RecordLearnings(ctx context.Context, sessionID, output string) (int, error) {
 	return 0, nil
 }
-
-func (f *fakeStore) UpdateJobProgress(id, progressJSON string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if j, ok := f.jobs[id]; ok {
-		j.ProgressJSON = progressJSON
-	}
-	return nil
+func (f *fakeSpec) ListLearnings(status string) ([]storemod.Learning, error) { return nil, nil }
+func (f *fakeSpec) PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (specmod.PromoteResult, error) {
+	return specmod.PromoteResult{}, nil
 }
-
-func (f *fakeStore) CreateGeneration(g storemod.Generation) error { return nil }
-func (f *fakeStore) UpdateGeneration(id, outputText, outcome, rejectionReason string, durationMS, inputTokens, outputTokens int64, costUSD float64) error {
-	return nil
+func (f *fakeSpec) ApplyAmendments(ctx context.Context, resourceID string, proposals []specmod.ProposedAmendment, apply bool) (*specmod.AmendmentApplyResult, error) {
+	return &specmod.AmendmentApplyResult{}, nil
 }
-func (f *fakeStore) GetActiveSession() (*storemod.Session, error) { return nil, nil }
-func (f *fakeStore) UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error {
-	return nil
-}
-func (f *fakeStore) GetSessionResource(sessionID, resourceID string) (*storemod.SessionResource, error) {
+func (f *fakeSpec) ListAmendments(ctx context.Context, resourceID, state string) ([]storemod.Amendment, error) {
 	return nil, nil
 }
-func (f *fakeStore) CreateAgentEvent(e storemod.AgentEvent) error { return nil }
-func (f *fakeStore) ListAgentEventsByResource(resourceID string) ([]storemod.AgentEvent, error) {
-	return nil, nil
-}
-func (f *fakeStore) ListRecentAgentEvents(limit int) ([]storemod.AgentEvent, error) {
-	return nil, nil
-}
-
-// ---------------------------------------------------------------------------
-// Fake process tree (no recursion by default)
-// ---------------------------------------------------------------------------
-
-type noRecursionTree struct{}
-
-func (noRecursionTree) SelfPID() int { return 100 }
-func (noRecursionTree) ParentProcess(pid int) (string, int, error) {
-	if pid == 100 {
-		return "crest-spec", 50, nil
-	}
-	if pid == 50 {
-		return "zsh", 1, nil
-	}
-	return "", 0, fmt.Errorf("not found")
+func (f *fakeSpec) GraduateAmendment(ctx context.Context, resourceID, name string, apply bool) (*specmod.GraduationResult, error) {
+	return &specmod.GraduationResult{}, nil
 }
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func testServer(eng engine, st store) (*Server, *bytes.Buffer) {
+// stubServer builds a Server with no spec handler (stub tools registered).
+func stubServer() (*Server, *bytes.Buffer) {
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
-	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(nil, eng, st, noRecursionTree{}, strings.NewReader(""), &stdout, log, cfg)
+	cfg := &config.Config{}
+	srv := New(nil, strings.NewReader(""), &stdout, log, cfg)
 	return srv, &stdout
 }
 
@@ -328,7 +172,7 @@ func sendRequest(t *testing.T, srv *Server, stdout *bytes.Buffer, method string,
 // ---------------------------------------------------------------------------
 
 func TestInitialize(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "initialize", 1, nil)
 
 	assert.Nil(t, resp.Error)
@@ -348,278 +192,81 @@ func TestInitialize(t *testing.T) {
 	assert.Contains(t, caps, "prompts")
 }
 
-func TestToolsList_ReturnsAllTools(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+func toolNameSet(t *testing.T, srv *Server) map[string]bool {
+	t.Helper()
 	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)
-
-	assert.Nil(t, resp.Error)
+	require.Nil(t, resp.Error)
 	result, ok := resp.Result.(map[string]any)
 	require.True(t, ok)
 	tools, ok := result["tools"].([]toolDef)
 	require.True(t, ok)
-
-	// 10 engine tools + 36 spec stubs = 46 total
-	assert.Len(t, tools, 46)
-
-	// Check that key engine tools exist
-	toolNames := make(map[string]bool)
+	names := make(map[string]bool)
 	for _, td := range tools {
-		toolNames[td.Name] = true
+		names[td.Name] = true
 	}
-	assert.True(t, toolNames["run_prompt"])
-	assert.True(t, toolNames["code_review"])
-	assert.True(t, toolNames["bugbot"])
-	assert.True(t, toolNames["poll_result"])
-	assert.True(t, toolNames["cancel_job"])
-	assert.True(t, toolNames["list_jobs"])
-	assert.True(t, toolNames["list_models"])
-	assert.True(t, toolNames["about"])
-	assert.True(t, toolNames["status"])
-	assert.True(t, toolNames["live_metrics"])
-
-	// Check spec stubs
-	assert.True(t, toolNames["spec/plan"])
-	assert.True(t, toolNames["spec/apply"])
-	assert.True(t, toolNames["spec/validate"])
-	assert.True(t, toolNames["spec/begin"])
-	assert.True(t, toolNames["spec/sql"])
-	assert.True(t, toolNames["spec/unlock"])
+	return names
 }
 
-func TestTools_AmendmentToolsRegistered(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
-	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)
+func TestToolsList_DropsRemovedTools(t *testing.T) {
+	srv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	names := toolNameSet(t, srv)
 
-	assert.Nil(t, resp.Error)
-	result, ok := resp.Result.(map[string]any)
-	require.True(t, ok)
-	tools, ok := result["tools"].([]toolDef)
-	require.True(t, ok)
-
-	toolNames := make(map[string]bool)
-	for _, td := range tools {
-		toolNames[td.Name] = true
+	// Deleted tools must no longer be registered.
+	for _, gone := range []string{
+		"run_prompt", "poll_result", "cancel_job", "list_jobs",
+		"code_review", "bugbot", "list_models", "status",
+		"recursion_detected",
+		"spec/apply", "spec/dispatch", "spec/run_wave",
+		"spec/deep_review", "spec/propose_amendments",
+	} {
+		assert.False(t, names[gone], "tool %q should have been removed", gone)
 	}
 
-	for _, name := range []string{
-		"spec/propose_amendments",
-		"spec/apply_amendments",
-		"spec/list_amendments",
+	// Kept info tools.
+	assert.True(t, names["about"])
+	assert.True(t, names["live_metrics"])
+
+	// New tool.
+	assert.True(t, names["spec/record_learnings"])
+
+	// Spot-check kept spec tools.
+	for _, kept := range []string{
+		"spec/plan", "spec/begin", "spec/next", "spec/context",
+		"spec/commit", "spec/finish", "spec/evolve", "spec/sql",
+		"spec/unlock", "spec/apply_amendments", "spec/list_amendments",
 		"spec/graduate_amendment",
 	} {
-		assert.True(t, toolNames[name], "expected tool %q to be registered", name)
+		assert.True(t, names[kept], "tool %q should be registered", kept)
 	}
 }
 
-func TestRunPrompt_ReturnsJobID(t *testing.T) {
-	fe := &fakeEngine{}
-	fs := newFakeStore()
-	srv, _ := testServer(fe, fs)
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "run_prompt",
-		Arguments: json.RawMessage(`{"prompt":"hello"}`),
-	})
-
-	assert.Nil(t, resp.Error)
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.False(t, result.IsError)
-	assert.Len(t, result.Content, 1)
-	assert.Contains(t, result.Content[0].Text, "job_id")
-
-	// Wait for async goroutine to complete
-	time.Sleep(100 * time.Millisecond)
-
-	fe.mu.Lock()
-	assert.Equal(t, 1, fe.generateCalls)
-	fe.mu.Unlock()
-
-	fs.mu.Lock()
-	assert.Equal(t, 1, fs.completeCount)
-	fs.mu.Unlock()
-}
-
-func TestRunPrompt_EngineFailure(t *testing.T) {
-	fe := &fakeEngine{
-		generateErr: fmt.Errorf("engine exploded"),
+func TestCommitToolForwardsInvariantChecks(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"session_id":"s","resource_id":"r","files":[{"path":"a.go","content":"x"}],"model":"claude-sonnet-4-6","invariant_checks":[{"invariant":"no globals","passed":false,"summary":"global var"}]}`)
+	srv.toolFns["spec/commit"](context.Background(), args)
+	if len(fake.lastInvariantChecks) != 1 || fake.lastInvariantChecks[0].Passed {
+		t.Fatal("invariant_checks not forwarded to spec.Commit")
 	}
-	fs := newFakeStore()
-	srv, _ := testServer(fe, fs)
-
-	sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "run_prompt",
-		Arguments: json.RawMessage(`{"prompt":"hello"}`),
-	})
-
-	// Wait for async goroutine
-	time.Sleep(100 * time.Millisecond)
-
-	fs.mu.Lock()
-	assert.Equal(t, 1, fs.failCount)
-	fs.mu.Unlock()
+	assert.Equal(t, "claude-sonnet-4-6", fake.lastModel)
+	require.Len(t, fake.lastFiles, 1)
+	assert.Equal(t, "a.go", fake.lastFiles[0].Path)
 }
 
-func TestPollResult_ExistingJob(t *testing.T) {
-	fs := newFakeStore()
-	fs.jobs["job-123"] = &storemod.Job{
-		ID:     "job-123",
-		Status: "completed",
-		Result: "output data",
-	}
-	srv, _ := testServer(&fakeEngine{}, fs)
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "poll_result",
-		Arguments: json.RawMessage(`{"job_id":"job-123"}`),
-	})
-
-	assert.Nil(t, resp.Error)
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.False(t, result.IsError)
-	assert.Contains(t, result.Content[0].Text, "completed")
-	assert.Contains(t, result.Content[0].Text, "output data")
-}
-
-func TestPollResult_MissingJob(t *testing.T) {
-	fs := newFakeStore()
-	srv, _ := testServer(&fakeEngine{}, fs)
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "poll_result",
-		Arguments: json.RawMessage(`{"job_id":"nonexistent"}`),
-	})
-
-	assert.Nil(t, resp.Error)
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.Content[0].Text, "not found")
-}
-
-func TestPollResult_Consume(t *testing.T) {
-	fs := newFakeStore()
-	fs.jobs["job-123"] = &storemod.Job{
-		ID:     "job-123",
-		Status: "completed",
-		Result: "data",
-	}
-	srv, _ := testServer(&fakeEngine{}, fs)
-
-	sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "poll_result",
-		Arguments: json.RawMessage(`{"job_id":"job-123","consume":true}`),
-	})
-
-	fs.mu.Lock()
-	assert.Equal(t, 1, fs.deleteCount)
-	fs.mu.Unlock()
-}
-
-func TestCancelJob(t *testing.T) {
-	fe := &fakeEngine{generateDelay: 5 * time.Second}
-	fs := newFakeStore()
-	srv, _ := testServer(fe, fs)
-
-	// Start an async job
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "run_prompt",
-		Arguments: json.RawMessage(`{"prompt":"slow"}`),
-	})
-
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-
-	// Extract job_id
-	var jobResp struct{ JobID string `json:"job_id"` }
-	json.Unmarshal([]byte(result.Content[0].Text), &jobResp)
-	require.NotEmpty(t, jobResp.JobID)
-
-	// Cancel it
-	time.Sleep(50 * time.Millisecond) // ensure goroutine started
-	cancelResp := sendRequest(t, srv, nil, "tools/call", 2, toolCallParams{
-		Name:      "cancel_job",
-		Arguments: json.RawMessage(fmt.Sprintf(`{"job_id":"%s"}`, jobResp.JobID)),
-	})
-
-	cancelResult, ok := cancelResp.Result.(toolResult)
-	require.True(t, ok)
-	assert.False(t, cancelResult.IsError)
-
-	// Wait for async goroutine to complete
-	time.Sleep(200 * time.Millisecond)
-
-	fs.mu.Lock()
-	assert.Equal(t, 1, fs.cancelCount)
-	fs.mu.Unlock()
-}
-
-func TestListJobs(t *testing.T) {
-	fs := newFakeStore()
-	fs.jobs["j1"] = &storemod.Job{ID: "j1", Status: "running"}
-	fs.jobs["j2"] = &storemod.Job{ID: "j2", Status: "completed"}
-	srv, _ := testServer(&fakeEngine{}, fs)
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "list_jobs",
-		Arguments: json.RawMessage(`{}`),
-	})
-
-	assert.Nil(t, resp.Error)
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.False(t, result.IsError)
-	// The output is a JSON array of jobs
-	assert.Contains(t, result.Content[0].Text, "j1")
-}
-
-func TestListModels(t *testing.T) {
-	fe := &fakeEngine{modelsOut: "model-a, model-b"}
-	srv, _ := testServer(fe, newFakeStore())
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "list_models",
-		Arguments: json.RawMessage(`{}`),
-	})
-
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.Contains(t, result.Content[0].Text, "model-a")
-	assert.Contains(t, result.Content[0].Text, "model-b")
-}
-
-func TestAbout(t *testing.T) {
-	fe := &fakeEngine{aboutOut: "v1.0.0", statusOut: "Authenticated"}
-	srv, _ := testServer(fe, newFakeStore())
-
+func TestAbout_Static(t *testing.T) {
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
 		Name:      "about",
 		Arguments: json.RawMessage(`{}`),
 	})
-
 	result, ok := resp.Result.(toolResult)
 	require.True(t, ok)
-	assert.Contains(t, result.Content[0].Text, "Version: v1.0.0")
-	assert.Contains(t, result.Content[0].Text, "Auth: Authenticated")
-}
-
-func TestStatus(t *testing.T) {
-	fe := &fakeEngine{statusOut: "Authenticated as user@example.com"}
-	srv, _ := testServer(fe, newFakeStore())
-
-	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
-		Name:      "status",
-		Arguments: json.RawMessage(`{}`),
-	})
-
-	result, ok := resp.Result.(toolResult)
-	require.True(t, ok)
-	assert.Contains(t, result.Content[0].Text, "Authenticated")
+	assert.False(t, result.IsError)
+	assert.Contains(t, result.Content[0].Text, "state engine only")
 }
 
 func TestLiveMetrics(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 
 	// Record a fake metric
 	srv.metrics.Record("test_tool", 100*time.Millisecond, nil)
@@ -635,8 +282,25 @@ func TestLiveMetrics(t *testing.T) {
 	assert.Contains(t, result.Content[0].Text, "test_tool")
 }
 
+func TestHandleToolCall_RecordsMetrics(t *testing.T) {
+	srv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+
+	// Call a known tool through the handleToolCall choke point.
+	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
+		Name:      "about",
+		Arguments: json.RawMessage(`{}`),
+	})
+	require.Nil(t, resp.Error)
+
+	snap := srv.metrics.Snapshot()
+	require.Contains(t, snap.Tools, "about", "metrics should have an entry for the called tool")
+	assert.Equal(t, int64(1), snap.Tools["about"].Calls)
+	assert.Equal(t, int64(0), snap.Tools["about"].Errors)
+	assert.Equal(t, int64(1), snap.TotalCalls)
+}
+
 func TestUnknownMethod(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "nonexistent/method", 1, nil)
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, -32601, resp.Error.Code)
@@ -644,7 +308,7 @@ func TestUnknownMethod(t *testing.T) {
 }
 
 func TestUnknownTool(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
 		Name:      "nonexistent_tool",
 		Arguments: json.RawMessage(`{}`),
@@ -661,8 +325,8 @@ func TestMalformedJSON_StdioTransport(t *testing.T) {
 	stdin := strings.NewReader("this is not json\n")
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
-	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(nil, &fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
+	cfg := &config.Config{}
+	srv := New(nil, stdin, &stdout, log, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -680,8 +344,8 @@ func TestStdioTransport_InitializeFlow(t *testing.T) {
 	stdin := strings.NewReader(initReq + listReq)
 	var stdout bytes.Buffer
 	log := zerolog.New(io.Discard)
-	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(nil, &fakeEngine{}, newFakeStore(), noRecursionTree{}, stdin, &stdout, log, cfg)
+	cfg := &config.Config{}
+	srv := New(&fakeSpec{}, stdin, &stdout, log, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -691,17 +355,16 @@ func TestStdioTransport_InitializeFlow(t *testing.T) {
 	output := stdout.String()
 	assert.Contains(t, output, "2024-11-05")
 	assert.Contains(t, output, "crest-spec")
-	assert.Contains(t, output, "run_prompt")
+	assert.Contains(t, output, "spec/commit")
 }
 
 func TestHTTPTransport(t *testing.T) {
-	fe := &fakeEngine{modelsOut: "model-x"}
-	srv, _ := testServer(fe, newFakeStore())
+	srv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
 
 	ts := httptest.NewServer(http.HandlerFunc(srv.ServeHTTP))
 	defer ts.Close()
 
-	reqBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_models","arguments":{}}}`
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"live_metrics","arguments":{}}}`
 	resp, err := http.Post(ts.URL, "application/json", strings.NewReader(reqBody))
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -711,11 +374,11 @@ func TestHTTPTransport(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), "model-x")
+	assert.Contains(t, string(body), "uptime_seconds")
 }
 
 func TestHTTPTransport_MalformedJSON(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 
 	ts := httptest.NewServer(http.HandlerFunc(srv.ServeHTTP))
 	defer ts.Close()
@@ -729,22 +392,38 @@ func TestHTTPTransport_MalformedJSON(t *testing.T) {
 	assert.Contains(t, string(body), "-32700")
 }
 
-func TestSpecToolStubs_ReturnNotImplemented(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+// TestSpecToolStubs_Parity asserts that the stub server (nil spec) exposes
+// exactly the same tool names as the real server (fakeSpec). This guards
+// against future drift: adding a real tool without a matching stub will fail
+// the test immediately.
+func TestSpecToolStubs_Parity(t *testing.T) {
+	realSrv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	stubSrv, _ := stubServer()
 
-	specTools := []string{
-		"spec/plan", "spec/apply", "spec/validate", "spec/begin",
-		"spec/confirm_destroys", "spec/next", "spec/context", "spec/validate-resource",
-		"spec/note", "spec/commit", "spec/resolve", "spec/amend",
-		"spec/skip", "spec/finish", "spec/status", "spec/wave_status", "spec/log",
-		"spec/history", "spec/graph", "spec/diff", "spec/state",
-		"spec/vacuum", "spec/sql", "spec/unlock",
-		"spec/bootstrap", "spec/deep_review",
-		"spec/propose_amendments", "spec/apply_amendments",
-		"spec/list_amendments", "spec/graduate_amendment",
+	realNames := toolNameSet(t, realSrv)
+	stubNames := toolNameSet(t, stubSrv)
+
+	for name := range realNames {
+		assert.True(t, stubNames[name], "stub server is missing tool %q (add it to registerSpecStubs)", name)
 	}
+	for name := range stubNames {
+		assert.True(t, realNames[name], "stub server has extra tool %q not present in real server", name)
+	}
+}
 
-	for _, tool := range specTools {
+// TestSpecToolStubs_ReturnNotImplemented verifies every spec/* stub returns
+// the "not implemented" sentinel text.
+func TestSpecToolStubs_ReturnNotImplemented(t *testing.T) {
+	srv, _ := stubServer()
+
+	// Collect all spec/* tools from the stub server dynamically so this list
+	// stays in sync with registerSpecStubs automatically.
+	names := toolNameSet(t, srv)
+	for tool := range names {
+		if !strings.HasPrefix(tool, "spec/") {
+			continue
+		}
+		tool := tool // capture
 		t.Run(tool, func(t *testing.T) {
 			resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
 				Name:      tool,
@@ -760,7 +439,7 @@ func TestSpecToolStubs_ReturnNotImplemented(t *testing.T) {
 }
 
 func TestResourcesList_Empty(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "resources/list", 1, nil)
 
 	assert.Nil(t, resp.Error)
@@ -772,7 +451,7 @@ func TestResourcesList_Empty(t *testing.T) {
 }
 
 func TestResourcesRead_Error(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "resources/read", 1, nil)
 
 	require.NotNil(t, resp.Error)
@@ -780,7 +459,7 @@ func TestResourcesRead_Error(t *testing.T) {
 }
 
 func TestPromptsList_Empty(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "prompts/list", 1, nil)
 
 	assert.Nil(t, resp.Error)
@@ -792,47 +471,9 @@ func TestPromptsList_Empty(t *testing.T) {
 }
 
 func TestPromptsGet_Error(t *testing.T) {
-	srv, _ := testServer(&fakeEngine{}, newFakeStore())
+	srv, _ := stubServer()
 	resp := sendRequest(t, srv, nil, "prompts/get", 1, nil)
 
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, -32602, resp.Error.Code)
-}
-
-func TestRecursionDetected_DisablesTools(t *testing.T) {
-	// Fake process tree with recursion
-	pt := &fakeProcessTree{
-		selfPID: 100,
-		processes: map[int]fakeProcess{
-			100: {name: "crest-spec", ppid: 90},
-			90:  {name: "claude", ppid: 80},
-			80:  {name: "node", ppid: 70},
-			70:  {name: "claude", ppid: 60},
-			60:  {name: "zsh", ppid: 1},
-		},
-	}
-
-	var stdout bytes.Buffer
-	log := zerolog.New(io.Discard)
-	cfg := &config.Config{MaxConcurrency: 5}
-	srv := New(nil, &fakeEngine{}, newFakeStore(), pt, strings.NewReader(""), &stdout, log, cfg)
-
-	// tools/list should return only the recursion_detected tool
-	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)
-	result, ok := resp.Result.(map[string]any)
-	require.True(t, ok)
-	tools, ok := result["tools"].([]toolDef)
-	require.True(t, ok)
-	assert.Len(t, tools, 1)
-	assert.Equal(t, "recursion_detected", tools[0].Name)
-
-	// Calling any tool should return error
-	callResp := sendRequest(t, srv, nil, "tools/call", 2, toolCallParams{
-		Name:      "recursion_detected",
-		Arguments: json.RawMessage(`{}`),
-	})
-	callResult, ok := callResp.Result.(toolResult)
-	require.True(t, ok)
-	assert.True(t, callResult.IsError)
-	assert.Contains(t, callResult.Content[0].Text, "recursion detected")
 }

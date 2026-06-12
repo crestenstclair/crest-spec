@@ -8,24 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
-	"github.com/crestenstclair/crest-spec/internal/engine"
 	"github.com/crestenstclair/crest-spec/internal/evolve"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
-
-type specEngine interface {
-	Generate(ctx context.Context, opts engine.GenerateOpts) (*agent.RunResult, error)
-	Review(ctx context.Context, opts engine.ReviewOpts) (*agent.RunResult, error)
-	CodeReview(ctx context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error)
-	Bugbot(ctx context.Context, opts engine.BugbotOpts) (*agent.RunResult, error)
-	ActiveCount() int
-	MaxConcurrency() int
-}
 
 type specStore interface {
 	GetResource(id string) (*store.Resource, error)
@@ -83,52 +72,19 @@ type specStore interface {
 }
 
 type Spec struct {
-	engine    specEngine
 	store     specStore
 	fs        fileSystem
 	cfg       *config.Config
 	reflector *evolve.Reflector
 }
 
-func New(eng specEngine, st specStore, fs fileSystem, cfg *config.Config) *Spec {
-	model := ""
-	if cfg != nil {
-		model = cfg.GenerateModel
-	}
-	reflector := evolve.New(
-		&engineGenerator{eng: eng},
-		&storeReflectorAdapter{st: st},
-		model,
-	)
+func New(st specStore, fs fileSystem, cfg *config.Config) *Spec {
 	return &Spec{
-		engine:    eng,
 		store:     st,
 		fs:        fs,
 		cfg:       cfg,
-		reflector: reflector,
+		reflector: evolve.New(&storeReflectorAdapter{st: st}),
 	}
-}
-
-// engineGenerator adapts a specEngine to evolve.Generator, narrowing the rich
-// engine.Generate signature down to the plain (prompt, model) → text contract
-// the reflector depends on. A nil engine yields an error, which the reflector
-// swallows — reflection must never be able to fail a run.
-type engineGenerator struct {
-	eng specEngine
-}
-
-func (g *engineGenerator) Generate(ctx context.Context, prompt, model string) (string, error) {
-	if g.eng == nil {
-		return "", fmt.Errorf("evolve: no engine available")
-	}
-	res, err := g.eng.Generate(ctx, engine.GenerateOpts{Prompt: prompt, Model: model})
-	if err != nil {
-		return "", err
-	}
-	if res == nil {
-		return "", nil
-	}
-	return res.Output, nil
 }
 
 // storeReflectorAdapter exposes only the read+write methods evolve.Store needs,
@@ -140,10 +96,6 @@ type storeReflectorAdapter struct {
 
 func (a *storeReflectorAdapter) ListSessionResources(sessionID string) ([]store.SessionResource, error) {
 	return a.st.ListSessionResources(sessionID)
-}
-
-func (a *storeReflectorAdapter) ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error) {
-	return a.st.ListSessionResourcesByWave(sessionID, wave)
 }
 
 func (a *storeReflectorAdapter) GetResource(id string) (*store.Resource, error) {
@@ -166,11 +118,25 @@ func (a *storeReflectorAdapter) CreateLearning(l store.Learning) error {
 	return a.st.CreateLearning(l)
 }
 
-// Evolve runs an on-demand session-scoped reflection (Component 6, trigger 2)
-// and returns the number of learnings added. It resolves the session's apply ID
-// so reflection can read failed invariant checks. Reflection never fails a run,
-// so a missing session simply yields zero learnings.
-func (s *Spec) Evolve(ctx context.Context, sessionID string) (int, error) {
+// EvolvePrompt builds the reflection prompt for a session's failure history.
+// The orchestrator runs it against an LLM and submits the output via
+// RecordLearnings. Returns "" when the session has no failure signal.
+func (s *Spec) EvolvePrompt(ctx context.Context, sessionID string) (string, error) {
+	if s.reflector == nil {
+		return "", nil
+	}
+	applyID := ""
+	if sess, err := s.store.GetSession(sessionID); err == nil && sess != nil {
+		applyID = sess.ApplyID
+	}
+	return s.reflector.BuildSessionPrompt(sessionID, applyID)
+}
+
+// RecordLearnings parses LLM reflection output (the
+// ===CREST_LEARNINGS_BEGIN===/===CREST_LEARNINGS_END=== marker block) and
+// persists new learnings, tagging each with the session's ApplyID for
+// provenance. Returns the number added.
+func (s *Spec) RecordLearnings(ctx context.Context, sessionID, output string) (int, error) {
 	if s.reflector == nil {
 		return 0, nil
 	}
@@ -178,7 +144,7 @@ func (s *Spec) Evolve(ctx context.Context, sessionID string) (int, error) {
 	if sess, err := s.store.GetSession(sessionID); err == nil && sess != nil {
 		applyID = sess.ApplyID
 	}
-	return s.reflector.ReflectSession(ctx, sessionID, applyID)
+	return s.reflector.Record(output, applyID)
 }
 
 // ListLearnings returns learnings with the given status, delegating to the

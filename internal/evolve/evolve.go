@@ -12,7 +12,6 @@
 package evolve
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"strings"
@@ -23,10 +22,6 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
-// defaultModel is the model used for extraction when none is supplied. Sonnet
-// by default — no haiku anywhere in this pillar.
-const defaultModel = "claude-sonnet-4-6"
-
 // Marker sentinels wrap the extraction JSON so it can be located unambiguously
 // amid model prose. This mirrors the hardened pattern from the constraint loop
 // (internal/spec/loop.go) — deterministic parse, no keyword heuristics.
@@ -35,21 +30,12 @@ const (
 	learningsEnd   = "===CREST_LEARNINGS_END==="
 )
 
-// Generator is the narrow LLM abstraction the reflector depends on. It exists
-// so the reflector can be tested with a fake (Dependency Inversion). The real
-// engine is adapted to this interface by the caller.
-type Generator interface {
-	Generate(ctx context.Context, prompt, model string) (string, error)
-}
-
 // Store is the narrow persistence abstraction the reflector depends on. It
 // names only the read+write methods reflection needs — nothing more (Interface
 // Segregation). The concrete *store.Store satisfies it.
 type Store interface {
 	// ListSessionResources returns every resource state in a session.
 	ListSessionResources(sessionID string) ([]store.SessionResource, error)
-	// ListSessionResourcesByWave returns resource states for a single wave.
-	ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error)
 	// GetResource resolves a resource's kind (and other metadata) by ID.
 	GetResource(id string) (*store.Resource, error)
 	// ListGenerations returns recent generations for a resource.
@@ -67,68 +53,42 @@ type Store interface {
 // It holds its collaborators via interfaces injected through the constructor;
 // it never instantiates its own dependencies.
 type Reflector struct {
-	gen   Generator
-	st    Store
-	model string
+	st Store
 }
 
-// New builds a Reflector. model defaults to the sonnet default when empty.
-func New(gen Generator, st Store, model string) *Reflector {
-	if model == "" {
-		model = defaultModel
-	}
-	return &Reflector{gen: gen, st: st, model: model}
+// New builds a Reflector over the given store. The server never calls an LLM
+// itself: BuildSessionPrompt emits the extraction prompt for the orchestrator
+// to run, and Record ingests the orchestrator's output.
+func New(st Store) *Reflector {
+	return &Reflector{st: st}
 }
 
-// ReflectSession reflects over the whole session and returns the number of
-// learnings added. It NEVER returns a non-nil error from extraction/LLM/parse
-// failures — reflection must not be able to fail a run. The returned error is
-// reserved for future use and is always nil today.
-func (r *Reflector) ReflectSession(ctx context.Context, sessionID, applyID string) (int, error) {
+// BuildSessionPrompt gathers the session's failure signal and returns the
+// extraction prompt the orchestrator should run against an LLM. Returns "" when
+// the session has no failure signal (nothing to reflect on). Failures gathering
+// signal are swallowed and yield "" — reflection must never fail a run.
+func (r *Reflector) BuildSessionPrompt(sessionID, applyID string) (string, error) {
 	resources, err := r.st.ListSessionResources(sessionID)
 	if err != nil {
-		log.Printf("evolve: ReflectSession list resources failed (swallowed): %v", err)
-		return 0, nil
+		log.Printf("evolve: BuildSessionPrompt list resources failed (swallowed): %v", err)
+		return "", nil
 	}
-	return r.reflect(ctx, sessionID, applyID, resources), nil
-}
-
-// ReflectWave reflects over a single wave's resources (incremental reflection).
-// Same non-blocking guarantee as ReflectSession. Delegates to the shared helper.
-func (r *Reflector) ReflectWave(ctx context.Context, sessionID, applyID string, waveIndex int) (int, error) {
-	resources, err := r.st.ListSessionResourcesByWave(sessionID, waveIndex)
-	if err != nil {
-		log.Printf("evolve: ReflectWave list resources failed (swallowed): %v", err)
-		return 0, nil
-	}
-	return r.reflect(ctx, sessionID, applyID, resources), nil
-}
-
-// reflect is the shared pipeline: gather failure signal for the given
-// resources, build one extraction prompt, call the generator, parse the
-// markers, and persist deduped learnings. Returns the count added. Any failure
-// along the way is swallowed and yields a partial (possibly zero) count.
-func (r *Reflector) reflect(ctx context.Context, sessionID, applyID string, resources []store.SessionResource) int {
 	signal := r.gatherSignal(applyID, resources)
 	if len(signal) == 0 {
-		return 0
+		return "", nil
 	}
+	return buildExtractionPrompt(signal, r.loadExisting()), nil
+}
 
-	existing := r.loadExisting()
-	prompt := buildExtractionPrompt(signal, existing)
-
-	output, err := r.gen.Generate(ctx, prompt, r.model)
-	if err != nil {
-		log.Printf("evolve: extraction generate failed (swallowed): %v", err)
-		return 0
-	}
-
+// Record parses the orchestrator's reflection output (the marker block) and
+// persists deduped learnings, tagging each with the source applyID for
+// provenance. Returns the count added. Parse failures yield 0.
+func (r *Reflector) Record(output, applyID string) (int, error) {
 	parsed := parseLearnings(output)
 	if len(parsed) == 0 {
-		return 0
+		return 0, nil
 	}
-
-	return r.persist(parsed, existing, applyID)
+	return r.persist(parsed, r.loadExisting(), applyID), nil
 }
 
 // resourceSignal is the failure evidence gathered for one resource, used both

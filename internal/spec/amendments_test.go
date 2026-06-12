@@ -7,17 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
-	"github.com/crestenstclair/crest-spec/internal/engine"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -67,7 +64,7 @@ func setupAmendmentsSpec(t *testing.T) (*Spec, *store.Store) {
 		MaxRetries:    3,
 	}
 
-	s := New(nil, st, OSFileSystem{}, cfg)
+	s := New(st, OSFileSystem{}, cfg)
 	return s, st
 }
 
@@ -155,66 +152,6 @@ func TestBegin_ReconcilesAmendments(t *testing.T) {
 	assert.Equal(t, "clamp-upper-bound", rows[0].Name)
 }
 
-// TestProposeAmendments verifies the drafting path: a deep review surfaces a
-// finding, the proposer drafts one amendment per finding, and the parsed result
-// carries the passed resourceID. Writes nothing.
-func TestProposeAmendments(t *testing.T) {
-	ctx := context.Background()
-
-	st, err := store.New(":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { st.Close() })
-
-	const resourceID = "valueObject.Audio.EqualTemperament"
-	require.NoError(t, st.SetResource(store.Resource{
-		ID:              resourceID,
-		Kind:            "valueObject",
-		ContextName:     "Audio",
-		DeclarationHash: "h",
-		EffectiveHash:   "e",
-		Model:           "test-model",
-		SettledAt:       time.Now().UTC(),
-	}))
-
-	// A real generated file on disk so DeepReview has code to review.
-	dir := t.TempDir()
-	codePath := filepath.Join(dir, "equal_temperament.rs")
-	require.NoError(t, os.WriteFile(codePath, []byte("pub fn pitch(hz: f64) -> f64 { hz }\n"), 0o644))
-	require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
-		Path:        codePath,
-		ResourceID:  resourceID,
-		ContentHash: "c",
-		PromptHash:  "p",
-		Model:       "test-model",
-		CreatedAt:   time.Now().UTC(),
-	}))
-
-	const draftJSON = `[{"name":"validate-reference-pitch","prompt":"reject 0.0/NaN/inf","finding":{"severity":"major","file":"src/audio/equal_temperament.rs","line":17,"text":"no validation"}}]`
-	const reviewJSON = `{"passed":false,"findings":[{"severity":"major","description":"no validation","file":"src/audio/equal_temperament.rs","line":17}],"summary":"missing input validation"}`
-
-	eng := &mockEngine{
-		codeReviewFn: func(_ context.Context, opts engine.CodeReviewOpts) (*agent.RunResult, error) {
-			// The proposer prompt is the amendment-drafting template; the deep
-			// review prompt is the SOLID/clean-code reviewer. Dispatch on which.
-			if strings.Contains(opts.Prompt, "spec amendments") {
-				return &agent.RunResult{Output: draftJSON}, nil
-			}
-			return &agent.RunResult{Output: reviewJSON}, nil
-		},
-	}
-
-	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
-	s := New(eng, st, OSFileSystem{}, cfg)
-
-	result, err := s.ProposeAmendments(ctx, "sess-1", resourceID)
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, "validate-reference-pitch", result[0].Name)
-	assert.NotEmpty(t, result[0].Prompt)
-	assert.Equal(t, resourceID, result[0].ResourceID)
-	assert.Equal(t, "deep_review", result[0].Origin)
-}
-
 // applyAmendmentsBaseCUE is a minimal spec declaring a value object
 // EqualTemperament in context Audio, so Plan/registry resolves the resource
 // "valueObject.Audio.EqualTemperament" for ApplyAmendments to target.
@@ -239,7 +176,7 @@ func TestApplyAmendments_PreviewVsApply(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
-	s := New(nil, st, OSFileSystem{}, cfg)
+	s := New(st, OSFileSystem{}, cfg)
 
 	const resourceID = "valueObject.Audio.EqualTemperament"
 	expectedOverridePath := filepath.Join(dir, "override-EqualTemperament.cue")
@@ -296,7 +233,7 @@ func TestListAmendments_FilterByState(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
-	s := New(nil, st, OSFileSystem{}, cfg)
+	s := New(st, OSFileSystem{}, cfg)
 
 	const resA = "valueObject.Audio.EqualTemperament"
 	const resB = "valueObject.Audio.Other"
@@ -351,7 +288,7 @@ func TestGraduateAmendment_PreviewVsApply(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
-	s := New(nil, st, OSFileSystem{}, cfg)
+	s := New(st, OSFileSystem{}, cfg)
 
 	const resourceID = "valueObject.Audio.EqualTemperament"
 	const name = "validate-reference-pitch"

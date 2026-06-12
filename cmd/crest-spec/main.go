@@ -16,9 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/crestenstclair/crest-spec/internal/agent"
 	"github.com/crestenstclair/crest-spec/internal/config"
-	"github.com/crestenstclair/crest-spec/internal/engine"
 	"github.com/crestenstclair/crest-spec/internal/mcp"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
@@ -28,10 +26,6 @@ func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixMs
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	if len(os.Args) >= 4 && os.Args[1] == "check" && os.Args[2] == "job" {
-		checkJob(os.Args[3])
-		return
-	}
 	if showHelp() {
 		return
 	}
@@ -49,14 +43,11 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "Usage: crest-spec [command]")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "With no arguments, starts the MCP server on stdio.")
-			fmt.Fprintln(os.Stderr, "Use 'crest-spec run' to start a generation session.")
-			fmt.Fprintln(os.Stderr, "Or connect directly via MCP: spec/begin → spec/run_wave → spec/finish")
+			fmt.Fprintln(os.Stderr, "Generation is driven by Claude Code via MCP — see the spec-generate skill.")
+			fmt.Fprintln(os.Stderr, "Or connect via MCP: spec/begin → spec/next → spec/context → spec/commit → spec/finish")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "Commands:")
-			fmt.Fprintln(os.Stderr, "  run [--spec-dir ./spec] [--model claude-opus-4-8]")
-			fmt.Fprintln(os.Stderr, "                                 start a generation session (launches Claude)")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
-			fmt.Fprintln(os.Stderr, "  check job <id>                 block until job completes; print result")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
 			fmt.Fprintln(os.Stderr, "  state rm <resourceId>          remove a resource from state")
 			fmt.Fprintln(os.Stderr, "  diff <apply_a> <apply_b>       show changes between two applies")
@@ -75,9 +66,6 @@ func runSubcommand() bool {
 		return false
 	}
 	switch os.Args[1] {
-	case "run":
-		cmdRun(os.Args[2:])
-		return true
 	case "dashboard":
 		flags := parseFlags(os.Args[2:])
 		cmdDashboard(flags)
@@ -132,20 +120,11 @@ func runServer() {
 	}
 	defer s.Close()
 
-	cleaned, err := s.CleanupOrphans(processAlive)
-	if err != nil {
-		log.Warn().Err(err).Msg("orphan cleanup failed")
-	} else if cleaned > 0 {
-		log.Info().Int("cleaned", cleaned).Msg("cleaned orphaned jobs")
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ag := agent.New(cfg.AgentPath, cfg.APIKey, cfg.DefaultModel, cfg.Timeout)
-	eng := engine.New(ag, cfg)
-	sp := specmod.New(eng, s, specmod.OSFileSystem{}, cfg)
-	srv := mcp.New(sp, eng, s, mcp.OSProcessTree{}, os.Stdin, os.Stdout, log.Logger, cfg)
+	sp := specmod.New(s, specmod.OSFileSystem{}, cfg)
+	srv := mcp.New(sp, os.Stdin, os.Stdout, log.Logger, cfg)
 
 	if cfg.HTTPAddr != "" {
 		startHTTPTransport(cfg.HTTPAddr, srv, ctx)
@@ -176,47 +155,10 @@ func startHTTPTransport(addr string, srv *mcp.Server, ctx context.Context) {
 	}()
 }
 
-func checkJob(id string) {
-	dbPath := dbPath()
-	s, err := store.New(dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "store: %v\n", err)
-		os.Exit(1)
-	}
-	defer s.Close()
-
-	s.CleanupOrphans(processAlive)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	job, err := s.WaitForCompletion(ctx, id)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wait: %v\n", err)
-		os.Exit(1)
-	}
-
-	switch job.Status {
-	case "completed":
-		fmt.Println(job.Result)
-		s.DeleteJob(id)
-		os.Exit(0)
-	default:
-		fmt.Fprintf(os.Stderr, "job %s: status=%s error=%s\n", id, job.Status, job.Error)
-		s.DeleteJob(id)
-		os.Exit(1)
-	}
-}
-
 func dbPath() string {
 	dir := filepath.Join(".", ".crest-spec")
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "state.db")
-}
-
-func processAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import (
 // BootstrapStep reports the outcome of a single bootstrap check.
 type BootstrapStep struct {
 	Name    string `json:"name"`
-	Status  string `json:"status"`            // "ok", "created", "error"
+	Status  string `json:"status"` // "ok", "created", "error"
 	Message string `json:"message,omitempty"`
 }
 

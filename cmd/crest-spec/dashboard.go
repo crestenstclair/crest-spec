@@ -45,7 +45,7 @@ func cmdDashboard(flags cliFlags) {
 	}
 	defer st.Close()
 
-	sp := specmod.New(nil, st, specmod.OSFileSystem{}, cfg)
+	sp := specmod.New(st, specmod.OSFileSystem{}, cfg)
 
 	d := &dashboard{store: st, spec: sp, cfg: cfg, log: log}
 
@@ -58,15 +58,11 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
 	mux.HandleFunc("GET /api/applies/{id}/actions", d.handleApplyActions)
 	mux.HandleFunc("GET /api/generations/{resourceID}", d.handleGenerations)
-	mux.HandleFunc("GET /api/jobs", d.handleJobs)
 	mux.HandleFunc("GET /api/notes/{applyID}", d.handleNotes)
 	mux.HandleFunc("GET /api/session-resources/{sessionID}", d.handleSessionResources)
 	mux.HandleFunc("GET /api/session-resources/{sessionID}/wave/{waveIndex}", d.handleSessionResourcesByWave)
 	mux.HandleFunc("GET /api/invariant-checks/{applyID}", d.handleInvariantChecks)
 	mux.HandleFunc("GET /api/generations-recent", d.handleRecentGenerations)
-	mux.HandleFunc("GET /api/agent-events/{resourceID}", d.handleAgentEvents)
-	mux.HandleFunc("GET /api/agent-events-recent", d.handleRecentAgentEvents)
-	mux.HandleFunc("GET /api/agent-events-stream/{resourceID}", d.handleAgentEventsStream)
 	mux.HandleFunc("GET /api/live-status", d.handleLiveStatus)
 	mux.HandleFunc("GET /api/learnings", d.handleLearnings)
 
@@ -117,14 +113,6 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	lock, _ := d.store.GetLock()
 	session, _ := d.store.GetActiveSession()
 	applies, _ := d.store.ListApplies(1)
-	jobs, _ := d.store.ListJobs(50)
-
-	runningJobs := 0
-	for _, j := range jobs {
-		if j.Status == "running" {
-			runningJobs++
-		}
-	}
 
 	type resourceStateCounts struct {
 		Pending    int `json:"pending"`
@@ -138,20 +126,18 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type statusResp struct {
-		Resources       int                  `json:"resources"`
-		Lock            *store.Lock          `json:"lock"`
-		Session         *store.Session       `json:"session"`
-		LatestApply     *store.Apply         `json:"latest_apply"`
-		RunningJobs     int                  `json:"running_jobs"`
-		SessionActions  []store.ApplyAction  `json:"session_actions,omitempty"`
-		ResourceStates  *resourceStateCounts `json:"resource_states,omitempty"`
+		Resources      int                  `json:"resources"`
+		Lock           *store.Lock          `json:"lock"`
+		Session        *store.Session       `json:"session"`
+		LatestApply    *store.Apply         `json:"latest_apply"`
+		SessionActions []store.ApplyAction  `json:"session_actions,omitempty"`
+		ResourceStates *resourceStateCounts `json:"resource_states,omitempty"`
 	}
 
 	resp := statusResp{
-		Resources:   len(resources),
-		Lock:        lock,
-		Session:     session,
-		RunningJobs: runningJobs,
+		Resources: len(resources),
+		Lock:      lock,
+		Session:   session,
 	}
 	if len(applies) > 0 {
 		resp.LatestApply = &applies[0]
@@ -287,15 +273,6 @@ func (d *dashboard) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	d.writeJSON(w, gens)
 }
 
-func (d *dashboard) handleJobs(w http.ResponseWriter, r *http.Request) {
-	jobs, err := d.store.ListJobs(50)
-	if err != nil {
-		d.writeError(w, 500, err.Error())
-		return
-	}
-	d.writeJSON(w, jobs)
-}
-
 func (d *dashboard) handleNotes(w http.ResponseWriter, r *http.Request) {
 	applyID := r.PathValue("applyID")
 	notes, err := d.store.ListNotes(applyID)
@@ -363,81 +340,6 @@ func (d *dashboard) handleRecentGenerations(w http.ResponseWriter, r *http.Reque
 	d.writeJSON(w, rows)
 }
 
-func (d *dashboard) handleAgentEvents(w http.ResponseWriter, r *http.Request) {
-	resourceID := r.PathValue("resourceID")
-	resourceID = strings.ReplaceAll(resourceID, "%2F", "/")
-	events, err := d.store.ListAgentEventsByResource(resourceID)
-	if err != nil {
-		d.writeError(w, 500, err.Error())
-		return
-	}
-	d.writeJSON(w, events)
-}
-
-func (d *dashboard) handleRecentAgentEvents(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.URL.Query().Get("limit")
-	limit := 200
-	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 1000 {
-			limit = n
-		}
-	}
-	events, err := d.store.ListRecentAgentEvents(limit)
-	if err != nil {
-		d.writeError(w, 500, err.Error())
-		return
-	}
-	d.writeJSON(w, events)
-}
-
-func (d *dashboard) handleAgentEventsStream(w http.ResponseWriter, r *http.Request) {
-	resourceID := r.PathValue("resourceID")
-	resourceID = strings.ReplaceAll(resourceID, "%2F", "/")
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		d.writeError(w, 500, "streaming not supported")
-		return
-	}
-
-	ctx := r.Context()
-	var lastCount int
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	sendUpdate := func() {
-		events, _ := d.store.ListAgentEventsByResource(resourceID)
-		if len(events) == lastCount {
-			return
-		}
-		newEvents := events
-		if lastCount > 0 && lastCount < len(events) {
-			newEvents = events[lastCount:]
-		}
-		lastCount = len(events)
-
-		data, _ := json.Marshal(newEvents)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	sendUpdate()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sendUpdate()
-		}
-	}
-}
-
 func (d *dashboard) handleLearnings(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	if status == "" {
@@ -499,14 +401,10 @@ func (d *dashboard) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 
 	sendUpdate := func() {
 		session, _ := d.store.GetActiveSession()
-		jobs, _ := d.store.ListJobs(50)
 		applies, _ := d.store.ListApplies(1)
-		recentEvents, _ := d.store.ListRecentAgentEvents(50)
 
 		payload := map[string]interface{}{
-			"session":      session,
-			"jobs":         jobs,
-			"agent_events": recentEvents,
+			"session": session,
 		}
 		if len(applies) > 0 {
 			payload["latest_apply"] = applies[0]

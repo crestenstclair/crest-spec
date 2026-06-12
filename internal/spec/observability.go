@@ -60,13 +60,10 @@ func (s *Spec) SessionStatus(ctx context.Context, sessionID string) (*SessionSta
 
 	summaries := buildWaveSummaries(waves, allResources)
 
-	active := s.engine.ActiveCount()
-	max := s.engine.MaxConcurrency()
-	dispatched := countDispatched(allResources)
-	queued := dispatched - active
-	if queued < 0 {
-		queued = 0
-	}
+	// The server no longer owns a generation semaphore — concurrency is managed
+	// by the external orchestrator. Active/Max are 0; Queued reports how many
+	// resources are dispatched (awaiting the orchestrator's commit).
+	queued := countDispatched(allResources)
 
 	return &SessionStatusResult{
 		SessionID:     sessionID,
@@ -75,8 +72,8 @@ func (s *Spec) SessionStatus(ctx context.Context, sessionID string) (*SessionSta
 		TotalWaves:    len(waves),
 		WaveSummaries: summaries,
 		Concurrency: ConcurrencyStatus{
-			Active: active,
-			Max:    max,
+			Active: 0,
+			Max:    0,
 			Queued: queued,
 		},
 	}, nil

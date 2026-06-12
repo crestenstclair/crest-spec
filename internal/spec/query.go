@@ -132,18 +132,18 @@ type ValidateResourceResult struct {
 // ---------------------------------------------------------------------------
 
 type InspectResult struct {
-	ResourceID      string              `json:"resource_id"`
-	Kind            string              `json:"kind"`
-	ContextName     string              `json:"context_name"`
-	DeclarationHash string              `json:"declaration_hash"`
-	EffectiveHash   string              `json:"effective_hash"`
-	StoredHash      string              `json:"stored_hash,omitempty"`
-	HashChanged     bool                `json:"hash_changed"`
-	Dependencies    []InspectDep        `json:"dependencies,omitempty"`
+	ResourceID      string                `json:"resource_id"`
+	Kind            string                `json:"kind"`
+	ContextName     string                `json:"context_name"`
+	DeclarationHash string                `json:"declaration_hash"`
+	EffectiveHash   string                `json:"effective_hash"`
+	StoredHash      string                `json:"stored_hash,omitempty"`
+	HashChanged     bool                  `json:"hash_changed"`
+	Dependencies    []InspectDep          `json:"dependencies,omitempty"`
 	GeneratedFiles  []store.GeneratedFile `json:"generated_files,omitempty"`
-	SystemPrompt    string              `json:"system_prompt"`
-	ResourcePrompt  string              `json:"resource_prompt"`
-	Wave            int                 `json:"wave"`
+	SystemPrompt    string                `json:"system_prompt"`
+	ResourcePrompt  string                `json:"resource_prompt"`
+	Wave            int                   `json:"wave"`
 }
 
 type InspectDep struct {
