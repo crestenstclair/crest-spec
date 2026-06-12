@@ -9,10 +9,12 @@ export const meta = {
 }
 
 // args: { sessionId: string, model?: string, maxRetries?: number }
-const sessionId = args.sessionId
+// Tolerate args arriving as a JSON-encoded string (harness serialization quirk).
+const input = typeof args === 'string' ? JSON.parse(args) : (args || {})
+const sessionId = input.sessionId
 if (!sessionId) throw new Error('spec-generate requires args.sessionId (run spec_begin first)')
-const model = args.model || 'sonnet'           // NEVER haiku
-const maxRetries = args.maxRetries ?? 3
+const model = input.model || 'sonnet'          // NEVER haiku
+const maxRetries = input.maxRetries ?? 3
 
 const WAVE_SCHEMA = {
   type: 'object',

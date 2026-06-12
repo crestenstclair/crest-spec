@@ -441,7 +441,7 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 	// Validation gate passed: amendments declaring a validation are VERIFIED.
 	s.markAmendmentVerification(resourceID, resource, true)
 
-	s.store.UpdateGeneration(genID, "", "success", "", 0, 0, 0, 0)
+	s.store.UpdateGeneration(genID, "", "accepted", "", 0, 0, 0, 0)
 
 	return &CommitResult{
 		Committed:   true,

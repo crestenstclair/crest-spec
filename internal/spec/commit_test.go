@@ -108,4 +108,24 @@ func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	if len(gens) == 0 {
 		t.Fatal("expected a generation record from commit")
 	}
+	// Outcome must round-trip through the DB CHECK constraint
+	// (outcome IN ('accepted','rejected')) — store errors are swallowed by
+	// convention, so a bad value silently leaves outcome NULL.
+	require.Equal(t, "accepted", gens[0].Outcome, "committed generation must record outcome 'accepted'")
+}
+
+func TestCommitRejectedGenerationOutcomeRoundTrips(t *testing.T) {
+	s, st := newTestSpecWithSession(t)
+	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
+		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
+		[]InvariantCheckInput{{Invariant: "no global state", Passed: false, Summary: "global var"}},
+		"claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	gens, _ := s.store.ListGenerations(st.resourceID, 10)
+	if len(gens) == 0 {
+		t.Fatal("expected a generation record from rejected commit")
+	}
+	require.Equal(t, "rejected", gens[0].Outcome, "rejected generation must record outcome 'rejected'")
 }
