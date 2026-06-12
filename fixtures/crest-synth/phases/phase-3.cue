@@ -47,6 +47,28 @@ project: assets: CpalAudioOutputAdapter: {
 	]
 }
 
+// ── Live MIDI playback (the spine, now through speakers) ───────────────
+// Same player as phase 1's midi_play, but live through the default output
+// device via the cpal AudioOutput adapter instead of rendering to WAV.
+
+project: assets: MidiPlayLiveMain: {
+	kind:        "rust-bin-target"
+	description: "src/bin/midi_play_live.rs: live MIDI-file player — streams a .mid (or built-in demo tune) through the default output device via cpal"
+	uses: ["asset.MidiFileLoader", "asset.CpalAudioOutputAdapter", "domainService.Synth.AudioRenderer", "aggregate.Synth.Voice"]
+	prompts: [
+		"File path: src/bin/midi_play_live.rs",
+		"CLI: `midi_play_live [FILE.mid] [--seconds N]`. If FILE is omitted, play the same built-in demo melody as midi_play. `--seconds N` optionally caps playback duration.",
+		"Load FILE (when given) with the MidiFileLoader module into the time-ordered (seconds, MidiEvent) timeline; otherwise use the built-in demo timeline.",
+		"Open the default output device through the CpalAudioOutput adapter (the Shell::AudioOutput port). Render the timeline through the phase-2/3 engine (Voice + AudioRenderer) in real time, writing rendered AudioFrames to the output stream as the wall clock advances; respect --seconds if set.",
+		"If NO output device is available, exit with a clear non-zero status and a human-readable stderr message (e.g. \"no default output device\") — never panic.",
+		"Print a startup line (device name, event count, duration) before streaming. Do NOT write a WAV file — this binary is for live audio only.",
+	]
+	validations: [
+		// compiles-only: validations must NEVER open an audio device.
+		{kind: "compiles", command: ["make", "build"], description: "live player compiles"},
+	]
+}
+
 // ── ToneTestMain validation ────────────────────────────
 // Lives in phase-3.override-ToneTestMain.cue so it can replace phase 1's
 // validation without a CUE list-unification conflict (see that file).
