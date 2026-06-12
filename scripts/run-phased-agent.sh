@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run crest-spec agent sessions through all 10 crest-synth phases.
-# Each phase gets its own interactive Claude session via `crest-spec run`.
+# Each phase gets its own interactive Claude session via `claude`.
 # State carries over between phases so the planner detects diffs.
 #
 # Usage: ./scripts/run-phased-agent.sh [start_phase] [end_phase]
@@ -15,14 +15,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 START=${1:-1}
 END=${2:-10}
 
-CLI="$REPO_ROOT/bin/crest-spec"
 PHASES_DIR="$REPO_ROOT/fixtures/crest-synth/phases"
 WORK_DIR="$REPO_ROOT/fixtures/crest-synth/workspace"
 SPEC_DIR="$WORK_DIR/spec"
 
 # Build the binary
 echo "Building crest-spec..."
-(cd "$REPO_ROOT" && make build)
+go build -o "$REPO_ROOT/bin/crest-spec" "$REPO_ROOT/cmd/crest-spec"
 echo ""
 
 # Clean up all generated artifacts so every run starts fresh
@@ -31,6 +30,13 @@ rm -rf "$WORK_DIR"
 mkdir -p "$SPEC_DIR"
 echo "Clean."
 echo ""
+
+# Ensure the spec-generate skill and workflow are available in the workspace's
+# .claude directory so the launched claude session can use them.
+WORK_CLAUDE_DIR="$WORK_DIR/.claude"
+mkdir -p "$WORK_CLAUDE_DIR/skills" "$WORK_CLAUDE_DIR/workflows"
+ln -sfn "$REPO_ROOT/.claude/skills/spec-generate" "$WORK_CLAUDE_DIR/skills/spec-generate"
+ln -sfn "$REPO_ROOT/.claude/workflows/spec-generate.js" "$WORK_CLAUDE_DIR/workflows/spec-generate.js"
 
 for phase in $(seq "$START" "$END"); do
   # Assemble spec dir: base.cue + phase-1 through phase-N
@@ -71,11 +77,12 @@ for phase in $(seq "$START" "$END"); do
   echo "══════════════════════════════════════════════════════"
   echo ""
 
-  # Launch generation session via crest-spec run, with Remote Control enabled so
+  # Launch generation session via claude directly, with Remote Control enabled so
   # the session can be monitored/driven from claude.ai or the Claude mobile app.
   # Each phase gets its own named Remote Control session for easy identification.
-  (cd "$WORK_DIR" && "$CLI" run --spec-dir "$SPEC_DIR" \
-    --remote-control --session-name "crest-synth phase ${phase}")
+  (cd "$WORK_DIR" && claude --permission-mode bypassPermissions \
+    --remote-control "crest-synth phase ${phase}" \
+    "Use the spec-generate skill to run a full crest-spec generation session for the spec in ${SPEC_DIR}. Work through every wave; do not stop for confirmation on destroys (this is a fixture run).")
 
   echo ""
   echo "Phase ${phase} complete."
