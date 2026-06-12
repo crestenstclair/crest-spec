@@ -74,7 +74,10 @@ Then run this loop (at most ${maxRetries + 1} attempts):
    files (UPDATE mode), and any prior failure context.
 2. Author the files the prompt asks for (full file contents, correct paths
    relative to the project root). Follow the prompt's folder structure and
-   style rules. Do NOT create files the prompt doesn't call for.
+   style rules. Do NOT create files the prompt doesn't call for. Before
+   committing, if the project has a formatter (cargo fmt, gofmt, prettier),
+   run it over your files and commit the formatted content — tree-wide
+   format checks run after the wave and a diff costs a full retry loop.
 3. Judge EACH invariant from the context against your files, producing
    {invariant, passed, summary} where "invariant" is the invariant's text
    field verbatim. Be honest — a wrong "passed" will fail wave validation
