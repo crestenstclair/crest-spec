@@ -102,6 +102,7 @@ for phase in $(seq "$START" "$END"); do
   # aborting the whole run. The lock is cleared between attempts.
   for attempt in 1 2 3; do
     if (cd "$WORK_DIR" && claude --remote-control "crest-synth phase ${phase}" \
+      --model "${CREST_ORCH_MODEL:-opus}" \
       --permission-mode bypassPermissions \
       "Use the spec-generate skill to run a full crest-spec generation session for the spec in ${SPEC_DIR}. Work through every wave; do not stop for confirmation on destroys (this is a fixture run)."); then
       break
