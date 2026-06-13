@@ -5,3 +5,8 @@
 
 - In `///` doc examples (doctests, compiled by `cargo test`), never declare a binding the example doesn't use — an unused `let x: Vec<_> = vec![]` fails to compile with E0282 (type annotations needed) and breaks the test suite. Either use every binding or omit it; pass empty literals like `&[]` directly to the call so element types infer from the signature.
   - Distilled from a crest-synth phase-4 soak run: PatchMixer's doc example declared `let patches: Vec<_> = vec![];`, never used it, and the doctest failed E0282 — which kept the wave's `cargo test` validation red.
+
+- Use `RangeInclusive::contains` for bounds checks, not manual comparisons: write `!(lo..=hi).contains(&value)` instead of `value < lo || value > hi` (clippy::manual_range_contains denies the manual form under -D warnings). Combine with NaN checks as `value.is_nan() || !(0.0..=1.0).contains(&value)`.
+  - Distilled from a crest-synth phase-1 soak: Velocity's bounds check churned 23 generation attempts against clippy::manual_range_contains.
+- Never call `.ok()` on a `Result` just to pattern-match the `Some` — use the `Result` directly: `if let Ok(x) = Type::try_new(...)`, not `if let Some(x) = Type::try_new(...).ok()` (clippy::match_result_ok denies the redundant `.ok()` under -D warnings).
+  - Distilled from the same run: MidiFileLoader churned on clippy::match_result_ok at three call sites.
