@@ -24,11 +24,19 @@ echo "Building crest-spec..."
 go build -o "$REPO_ROOT/bin/crest-spec" "$REPO_ROOT/cmd/crest-spec"
 echo ""
 
-# Clean up all generated artifacts so every run starts fresh
-echo "Cleaning workspace..."
-rm -rf "$WORK_DIR"
+# Clean up all generated artifacts so every run starts fresh — UNLESS resuming.
+# CREST_KEEP_WORKSPACE=1 preserves committed state (state.db + src) so you can
+# continue from a later start phase without redoing earlier phases, e.g.:
+#   CREST_KEEP_WORKSPACE=1 ./scripts/run-phased-agent.sh 5 9
+if [ "${CREST_KEEP_WORKSPACE:-0}" = "1" ] && [ -f "$WORK_DIR/.crest-spec/state.db" ]; then
+  echo "Keeping existing workspace (resume mode); preserving committed state."
+  rm -f "$SPEC_DIR"/*.cue
+else
+  echo "Cleaning workspace..."
+  rm -rf "$WORK_DIR"
+  echo "Clean."
+fi
 mkdir -p "$SPEC_DIR"
-echo "Clean."
 echo ""
 
 # Ensure the spec-generate skill and workflow are available in the workspace's
