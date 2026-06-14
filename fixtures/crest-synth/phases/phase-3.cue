@@ -41,9 +41,9 @@ project: assets: CpalAudioOutputAdapter: {
 		"File path: src/Shell/CpalAudioOutput.rs",
 		"Implement AudioOutput and AudioStream traits from Shell::AudioOutput",
 		"Use cpal::traits::{DeviceTrait, HostTrait, StreamTrait}",
-		"Use std::sync::mpsc::SyncSender to push AudioFrame data into the audio callback",
-		"write_buffer MUST use blocking send(), NOT try_send() — try_send silently drops frames",
-		"If the receiver is empty, fill with silence (0.0) to avoid underruns",
+		"Use an internal lock-free SPSC ring buffer (rtrb) of interleaved stereo f32: the producer half lives on the writing thread; the cpal data callback drains the consumer half, filling any shortfall with silence (0.0) so it never underruns or blocks.",
+		"Implement availableFrames() -> usize: return the number of whole STEREO FRAMES of FREE space currently in the ring buffer (i.e. producer free f32 slots / 2). Callers use this to render exactly what fits so the buffer never overflows. It must be cheap and non-blocking.",
+		"write_buffer(frames): push interleaved L,R into the ring. If the buffer is full, drop the excess SILENTLY — do NOT print to stderr per dropped frame (a paced caller that respects availableFrames never overflows; logging here just floods the console). At most, you may keep an internal dropped-frame counter, but emit nothing on the hot path.",
 	]
 }
 

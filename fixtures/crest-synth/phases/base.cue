@@ -53,7 +53,7 @@ project: contexts: Kernel: valueObjects: MidiEvent: {
 
 project: contexts: Shell: purpose: "application shell: wires audio output, MIDI input, and the window to the engine"
 
-project: contexts: Shell: ports: AudioOutput: contract:    {openStream: "SampleRate -> AudioStream", writeBuffer: "[AudioFrame] -> ()"}
+project: contexts: Shell: ports: AudioOutput: contract:    {openStream: "SampleRate -> AudioStream", writeBuffer: "[AudioFrame] -> ()", availableFrames: "() -> usize"}
 project: contexts: Shell: ports: MidiInput: contract:      {listPorts: "() -> Vec<MidiPortInfo>", connect: "MidiPortId -> MidiConnection", nextEvent: "() -> Option<RawMidiMessage>"}
 project: contexts: Shell: ports: MidiNormalizer: contract:  {normalize: "RawMidiMessage -> MidiEvent"}
 project: contexts: Shell: ports: AppWindow: contract:       {create: "WindowConfig -> Window", runLoop: "FrameCallback -> ()"}
