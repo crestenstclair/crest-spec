@@ -96,12 +96,21 @@ error (last validation message, if any), and the file paths you committed.`
 
 const triaged = []
 let waveCount = 0
-// Stall guard: 'rejected' is not a terminal state server-side, so if triage
-// fails to actually call spec_resolve/spec_skip, spec_next would re-serve the
-// same wave forever. After MAX_STALLS repeat passes, force-skip the stragglers.
+// Stall guard: 'rejected' is not a terminal state server-side, so if a wave's
+// post-verify keeps resetting resources to pending, spec_next would re-serve the
+// same wave forever. Two-tier escalation:
+//   - SOFT (stallCount > MAX_STALLS): skip ONLY genuine culprits — resources that
+//     have NEVER produced a committed file (zero generated_files). Resources that
+//     already committed and were merely reset as collateral are LEFT to regenerate;
+//     once the real culprit is skipped the wave converges. This is the fix for the
+//     long-standing over-skip bug where a healthy, already-committed resource
+//     (e.g. a port/aggregate that committed 3x) got force-skipped as collateral.
+//   - HARD (stallCount > MAX_STALLS_HARD): last resort — skip every remaining
+//     non-committed resource to guarantee the run terminates.
 let lastWaveIndex = -1
 let stallCount = 0
 const MAX_STALLS = 2
+const MAX_STALLS_HARD = 5
 
 while (true) {
   const wave = await agent(
@@ -115,14 +124,16 @@ while (true) {
   if (wave.wave_index === lastWaveIndex) {
     stallCount++
     if (stallCount > MAX_STALLS) {
-      for (const r of resources) {
-        await agent(
-          `Resource "${r.resource_id}" in crest-spec session ${sessionId} is stuck after ${stallCount} repeat passes of wave ${wave.wave_index}. Load ToolSearch "select:mcp__crest-spec__spec_skip" and call spec_skip with {session_id: "${sessionId}", resource_id: "${r.resource_id}", reason: "auto-skipped: unresolved after ${stallCount} triage passes"}. Confirm the call succeeded.`,
-          { label: `force-skip:${r.resource_id}`, phase: 'Triage' },
-        )
-        triaged.push({ resource_id: r.resource_id, action: 'force-skipped (stall guard)' })
-      }
-      log(`Wave ${wave.wave_index}: stall guard force-skipped ${resources.length} resource(s)`)
+      const hard = stallCount > MAX_STALLS_HARD
+      const verdict = await agent(
+        `Wave ${wave.wave_index} of crest-spec session ${sessionId} has repeated ${stallCount} times — some resource(s) won't converge. Load ToolSearch "select:mcp__crest-spec__spec_skip,mcp__crest-spec__spec_sql". The still-pending resources are: ${resources.map(r => r.resource_id).join(', ')}.\n\n` +
+        (hard
+          ? `This is the HARD last resort. spec_skip EVERY one of those resources (reason: "auto-skipped: wave unresolved after ${stallCount} passes") so the run can terminate. Report the skipped ids.`
+          : `Skip ONLY genuine culprits — resources that have never produced committed output. For EACH resource run spec_sql: SELECT COUNT(*) AS n FROM generated_files WHERE resource_id='<id>'. If n = 0 (never committed any file), spec_skip it (reason: "auto-skipped: no committed output after ${stallCount} passes"). If n > 0, DO NOT skip it — it already produced valid output and is only stuck as collateral; leave it pending so it regenerates once the real culprit is gone. Report which ids you skipped and which you left.`),
+        { label: `stall-guard:wave-${wave.wave_index}`, phase: 'Triage' },
+      )
+      triaged.push({ resource_id: `wave-${wave.wave_index}`, action: verdict })
+      log(`Wave ${wave.wave_index}: stall guard fired (pass ${stallCount}, ${hard ? 'HARD skip-all' : 'soft skip-culprits-only'})`)
       continue
     }
   } else {
