@@ -62,6 +62,10 @@ project: contexts: Synth: ports: SynthEngine: contract: {
 	noteOff:     "(Voice, NoteOff) -> Voice"
 	isFinished:  "Voice -> bool"
 }
+project: contexts: Synth: invariants: synthEngineTuning: [
+	{text: "note number maps to frequency by equal temperament: hz = 440 * 2^((note - 69)/12)", meta: rationale: "A4 (note 69) = 440 Hz; standard 12-TET"},
+	{text: "detune is expressed in SEMITONES and applied as a frequency ratio of 2^(semitones/12) — never 2^semitones; the per-sample oscillator phase increment is frequency_hz * 2^(detune/12) / sample_rate", meta: rationale: "omitting the /12 makes detune act in octaves, dropping pitch catastrophically (e.g. detune -2 → two octaves down)"},
+]
 
 project: contexts: Synth: domainServices: VoiceAllocator: {purpose: "assigns incoming notes to voices, stealing oldest/quietest when pool is full", uses: ["aggregate.Synth.Voice"]}
 project: contexts: Synth: domainServices: AudioRenderer:  {purpose: "iterates all active voices, renders each through the engine, mixes to output", uses: ["aggregate.Synth.Voice"]}
