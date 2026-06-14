@@ -1,0 +1,3 @@
+- [Subagent-driven preference](feedback_subagent_driven.md) — Always use subagent-driven dev, never ask which approach
+- [No unnecessary questions](feedback_no_questions.md) — When spec exists, just execute — never ask scoping/approach questions
+- [No haiku for codegen](feedback_no_haiku.md) — Haiku fails at crest-spec code generation; use sonnet default, opus for complex
