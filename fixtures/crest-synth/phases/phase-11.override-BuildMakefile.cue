@@ -46,7 +46,7 @@ project: assets: BuildMakefile: {
 		"play-samples: depends on demo-samples, then `afplay sample-demo.wav`.",
 		"play-effects: depends on demo-effects, then `afplay effects-demo.wav`.",
 		"play-presets: depends on demo-presets, then `afplay preset-demo.wav`.",
-		"ui: cargo run --bin synth_ui  — launches the standalone interactive eframe/egui window (patch list, on-screen note triggers, master gain, level meter) over the engine + cpal audio. Opens a real window and an audio device; human-only; no afplay; NEVER used by a validation.",
+		#"ui: cargo run --bin synth_ui -- --play "../../../midi/Corridors of Time - Chrono Trigger.mid"  — launches the standalone keyboard/gamepad parameter editor window over the engine + cpal audio, and auto-plays that MIDI file through the engine on launch so you hear the synth while editing (dev/audition convenience; external MIDI remains the primary note source). Quote the path — it contains spaces. The file lives in the repo's midi/ directory, which is ../../../midi/ relative to this workspace. Opens a real window and audio device; human-only; no afplay; NEVER used by a validation."#,
 		"Use cargo for all Rust operations. Declare .PHONY for all targets. afplay must appear ONLY in play-midi, play-voices, play-tone, play-patches, play-mod, play-samples, play-effects, and play-presets. demo-*, check-*, and *-smoke targets never use afplay and never open a device or window. The `ui` target opens a real window/device and is human-only, never used by a validation.",
 	]
 }
