@@ -149,4 +149,5 @@ project: invariants: standaloneEditor: [
 	{text: "the UI mutates state only by emitting EditorEvents applied to EditorState; egui draw code is a pure view", meta: rationale: "one-way data flow keeps state changes traceable and the control plane hermetically testable"},
 	{text: "the audio model consumes external MIDI plus a published ParameterSnapshot and never observes EditorEvents", meta: rationale: "keeps the engine host-agnostic and the realtime path decoupled from the UI event loop"},
 	{text: "the ui smoke path opens no window, no audio device, and no MIDI device; it only constructs state and drives the event loop", meta: rationale: "keeps the standalone app mechanically checkable with no display or hardware"},
+	{text: "the window backend must use a current eframe/egui (0.28+ on objc2 0.5+/winit 0.30+), never the 0.27 line that pulls icrate 0.0.4", meta: rationale: "eframe 0.27/objc2-0.3-beta/icrate-0.0.4 aborts at window creation on current macOS (NSScreen enumeration ABI panic); this is invisible to ui-smoke (no window) so it can only be prevented by the dependency pin, not the validation loop"},
 ]
