@@ -118,6 +118,7 @@ project: assets: StandaloneUiMain: {
 	prompts: [
 		"File path: src/bin/synth_ui.rs",
 		"This is the STANDALONE EDITOR app. It opens a real eframe/egui window AND hosts the live synth engine. It must build and run on macOS using eframe's default backend.",
+		"Target the CURRENT eframe/egui API (0.28 or newer — the version the manifest pins). Use that line's APIs: eframe::run_native taking a NativeOptions and an app-creator closure receiving &CreationContext returning Result<Box<dyn App>, _>, and the current egui Context/Ui calls. Do NOT use removed/renamed 0.27-era signatures. (The 0.27 line is forbidden because it aborts at window creation on current macOS via icrate 0.0.4.)",
 		"SCOPE: keep this MVP very simple. The goal is to prove the window, the keyboard/gamepad input, the one-way event loop, and the live-engine hosting all work end to end — NOT to build a full editor. A short fixed list of editable parameters is enough.",
 		"INPUT IS KEYBOARD + GAMEPAD ONLY. Do NOT implement any mouse or touch interaction — no clickable widgets, no draggable sliders, no hover behavior. (Mouse/touch may be added later; not now.)",
 		"This is an EDITOR, not a performance surface: there is NO on-screen keyboard and NO note triggering of any kind from the UI. All note performance comes from EXTERNAL MIDI hardware.",
