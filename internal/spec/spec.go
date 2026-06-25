@@ -69,6 +69,21 @@ type specStore interface {
 	ListAllAmendments() ([]store.Amendment, error)
 	UpdateAmendmentState(id, state, appliedSpecHash string, appliedAt, graduatedAt time.Time) error
 	DeleteAmendment(resourceID, name string) error
+	// Behavioral pipeline
+	UpsertDesign(contextName, specHash, contractJSON string) error
+	GetDesign(contextName string) (*store.Design, error)
+	ListDesigns() ([]store.Design, error)
+	InsertTask(id, resourceID, contextName, specHash, description string) error
+	GetTask(id string) (*store.BehavioralTask, error)
+	ListTasksByResource(resourceID string) ([]store.BehavioralTask, error)
+	SetTaskState(id, state string) error
+	InsertCheck(id, taskID, resourceID, behavior, checkJSON string) error
+	GetCheck(id string) (*store.BehavioralCheck, error)
+	ListChecksByTask(taskID string) ([]store.BehavioralCheck, error)
+	ListChecksByResource(resourceID string) ([]store.BehavioralCheck, error)
+	SetCheckState(id, state string) error
+	InsertVerification(id, checkID, resourceID, realObsJSON, stubObsJSON, reason string, passed, theater bool) error
+	ListVerificationsByCheck(checkID string) ([]store.Verification, error)
 }
 
 type Spec struct {
