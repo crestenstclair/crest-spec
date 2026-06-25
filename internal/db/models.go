@@ -69,10 +69,29 @@ type ApplyAction struct {
 	DoneAt     *string
 }
 
+type Check struct {
+	ID         string
+	TaskID     string
+	ResourceID string
+	Behavior   string
+	CheckJson  string
+	State      string
+	CreatedAt  string
+	UpdatedAt  string
+}
+
 type Dependency struct {
 	SourceID string
 	TargetID string
 	Kind     string
+}
+
+type Design struct {
+	ContextName  string
+	SpecHash     string
+	ContractJson string
+	CreatedAt    string
+	UpdatedAt    string
 }
 
 type GeneratedFile struct {
@@ -169,4 +188,27 @@ type SessionResource struct {
 	UpdatedAt    string
 	Phase        string
 	DispatchedAt string
+}
+
+type Task struct {
+	ID          string
+	ResourceID  string
+	ContextName string
+	SpecHash    string
+	Description string
+	State       string
+	CreatedAt   string
+	UpdatedAt   string
+}
+
+type Verification struct {
+	ID          string
+	CheckID     string
+	ResourceID  string
+	RealObsJson string
+	StubObsJson string
+	Passed      int64
+	Theater     int64
+	Reason      string
+	CreatedAt   string
 }
