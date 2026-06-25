@@ -129,6 +129,8 @@ The `spec-generate` skill and workflow ship in this repo under `.claude/`. Copy 
 
 ## How it works
 
+![The constraint loop: declare invariants in CUE, a sub-agent generates the code, the server validates against the invariants, and failures fold back into the next prompt to regenerate](docs/images/constraint-loop.svg)
+
 A plan/apply lifecycle: the **server** plans and checks; **Claude Code** fills.
 
 1. **Declare** — Write your domain as CUE in the spec directory: contexts, aggregates, value objects, domain/application services, repositories, ports, adapters, and assets. Each is a *resource*.
@@ -138,6 +140,10 @@ A plan/apply lifecycle: the **server** plans and checks; **Claude Code** fills.
 5. **Finish** (`spec/finish`) — Waves run until none remain, then the session is sealed. Optionally a reflection pass distils learnings via `spec/evolve` / `spec/record_learnings`.
 
 Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec drift, not wall-clock.
+
+![High-level flow: CUE spec files load into an in-memory resource registry, diff against SQLite state to produce a plan of waves, the orchestrator's sub-agents generate each resource, and the server's commit gate validates — passes are persisted, failures fold back into the next context and regenerate](docs/images/constraint-loop-flow.svg)
+
+<sub>The same loop in full, end to end: the **server** (pure state engine) loads and diffs the CUE spec to plan waves; **Claude Code**'s sub-agents fill each resource; the server's **commit gate** validates and either persists the result or rejects it, folding the failure back across the MCP boundary into the next `spec/context`.</sub>
 
 ### Key MCP tools
 

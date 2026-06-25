@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 1480" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="0%" r="100%">
+      <stop offset="0%" stop-color="#1b2230"/>
+      <stop offset="50%" stop-color="#11151d"/>
+      <stop offset="100%" stop-color="#0d1016"/>
+    </radialGradient>
+
+    <linearGradient id="specBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7C9EFF"/><stop offset="100%" stop-color="#5C7CFF"/></linearGradient>
+    <linearGradient id="regBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#5BD6CF"/><stop offset="100%" stop-color="#3FB8C8"/></linearGradient>
+    <linearGradient id="dbBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6FA8DC"/><stop offset="100%" stop-color="#5184C8"/></linearGradient>
+    <linearGradient id="planBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FFC061"/><stop offset="100%" stop-color="#FF9F45"/></linearGradient>
+    <linearGradient id="orchBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#C792EA"/><stop offset="100%" stop-color="#A86FE0"/></linearGradient>
+    <linearGradient id="gateBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FFC061"/><stop offset="100%" stop-color="#FF9F45"/></linearGradient>
+
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9FB6FF"/><stop offset="50%" stop-color="#C792EA"/><stop offset="100%" stop-color="#FFB454"/></linearGradient>
+
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="9" stdDeviation="15" flood-color="#000000" flood-opacity="0.45"/></filter>
+    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#FF7B72" flood-opacity="0.5"/></filter>
+
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="8" refY="5.5" orient="auto">
+      <path d="M1,1 L10,5.5 L1,10 Z" fill="#9AA7B8"/></marker>
+    <marker id="arrowPass" markerWidth="12" markerHeight="12" refX="8" refY="5.5" orient="auto">
+      <path d="M1,1 L10,5.5 L1,10 Z" fill="#6FD98A"/></marker>
+    <marker id="arrowFail" markerWidth="13" markerHeight="13" refX="9" refY="6" orient="auto">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#FF7B72"/></marker>
+  </defs>
+
+  <rect width="1320" height="1480" fill="url(#bgGlow)"/>
+
+  <!-- header -->
+  <text x="60" y="76" font-size="40" font-weight="700" fill="url(#titleGrad)" letter-spacing="0.4">High-level flow</text>
+  <text x="62" y="110" font-size="17" fill="#9AA7B8">The plan → generate → commit → retry loop — spanning the MCP boundary between the server and the orchestrator.</text>
+
+  <!-- ===== left lane rails + labels ===== -->
+  <rect x="298" y="150" width="3.5" height="636" rx="2" fill="#3a506b"/>
+  <text x="282" y="468" font-size="13" font-weight="700" fill="#6F8BB0" letter-spacing="2" text-anchor="middle" transform="rotate(-90 282 468)">SERVER · PURE STATE ENGINE</text>
+
+  <rect x="298" y="850" width="3.5" height="200" rx="2" fill="#7B59B8"/>
+  <text x="282" y="950" font-size="13" font-weight="700" fill="#A883D6" letter-spacing="2" text-anchor="middle" transform="rotate(-90 282 950)">ORCHESTRATOR · CLAUDE CODE</text>
+
+  <rect x="298" y="1112" width="3.5" height="320" rx="2" fill="#3a506b"/>
+  <text x="282" y="1272" font-size="13" font-weight="700" fill="#6F8BB0" letter-spacing="2" text-anchor="middle" transform="rotate(-90 282 1272)">SERVER · COMMIT GATE</text>
+
+  <!-- ===== MCP boundary dashed lines ===== -->
+  <line x1="120" y1="818" x2="1230" y2="818" stroke="#42506b" stroke-width="1.4" stroke-dasharray="7 6"/>
+  <text x="1230" y="812" font-size="12" font-weight="600" fill="#6F8BB0" letter-spacing="1.5" text-anchor="end">MCP BOUNDARY</text>
+  <line x1="120" y1="1078" x2="1230" y2="1078" stroke="#42506b" stroke-width="1.4" stroke-dasharray="7 6"/>
+  <text x="1230" y="1072" font-size="12" font-weight="600" fill="#6F8BB0" letter-spacing="1.5" text-anchor="end">MCP BOUNDARY</text>
+
+  <!-- ============ CARD 1 : Spec files ============ -->
+  <g transform="translate(320,148)">
+    <rect width="560" height="104" rx="16" fill="#161B24" stroke="#283143" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#specBar)"/>
+    <circle cx="40" cy="52" r="16" fill="#1f2a40" stroke="#7C9EFF" stroke-width="1.5"/>
+    <text x="40" y="57" font-size="13" font-weight="700" fill="#9FB6FF" text-anchor="middle">1</text>
+    <text x="70" y="44" font-size="19" font-weight="700" fill="#C9D6EE">Spec files <tspan fill="#7C9EFF">(.cue)</tspan></text>
+    <text x="70" y="66" font-size="13" fill="#8B98A9">declarative domain — the source of truth</text>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">
+      <text x="70" y="90" fill="#7C9EFF">project: contexts: Synth: aggregates: Voice: { … }</text>
+    </g>
+  </g>
+  <g stroke="#9AA7B8" stroke-width="2.4"><line x1="600" y1="256" x2="600" y2="312" marker-end="url(#arrow)"/></g>
+  <g transform="translate(600,284)"><rect x="-78" y="-13" width="156" height="26" rx="13" fill="#161B24" stroke="#2a3344"/><text x="0" y="5" font-size="12.5" fill="#AEBACC" text-anchor="middle">CUE load + unify</text></g>
+
+  <!-- ============ CARD 2 : Resource registry ============ -->
+  <g transform="translate(320,318)">
+    <rect width="560" height="104" rx="16" fill="#161B24" stroke="#283143" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#regBar)"/>
+    <circle cx="40" cy="52" r="16" fill="#13302e" stroke="#5BD6CF" stroke-width="1.5"/>
+    <text x="40" y="57" font-size="13" font-weight="700" fill="#5BD6CF" text-anchor="middle">2</text>
+    <text x="70" y="44" font-size="19" font-weight="700" fill="#C9D6EE">Resource registry</text>
+    <text x="70" y="66" font-size="13" fill="#8B98A9">in-memory dependency graph</text>
+    <text x="70" y="90" font-size="12.5" fill="#86C9C4">contexts · aggregates · value objects · ports · adapters · assets</text>
+  </g>
+  <g stroke="#9AA7B8" stroke-width="2.4"><line x1="600" y1="426" x2="600" y2="482" marker-end="url(#arrow)"/></g>
+  <g transform="translate(600,454)"><rect x="-92" y="-13" width="184" height="26" rx="13" fill="#161B24" stroke="#2a3344"/><text x="0" y="5" font-size="12.5" fill="#AEBACC" text-anchor="middle">diff against current state</text></g>
+
+  <!-- ============ CARD 3 : SQLite state ============ -->
+  <g transform="translate(320,488)">
+    <rect width="560" height="104" rx="16" fill="#161B24" stroke="#283143" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#dbBar)"/>
+    <circle cx="40" cy="52" r="16" fill="#1b2c40" stroke="#6FA8DC" stroke-width="1.5"/>
+    <text x="40" y="57" font-size="13" font-weight="700" fill="#6FA8DC" text-anchor="middle">3</text>
+    <text x="70" y="44" font-size="19" font-weight="700" fill="#C9D6EE">SQLite state database</text>
+    <text x="70" y="66" font-size="13" fill="#8B98A9">settled resources (hash unchanged) are skipped</text>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">
+      <text x="70" y="90" fill="#8FB6E0">effective_hash comparison → PlannedAction[]</text>
+    </g>
+  </g>
+  <g stroke="#9AA7B8" stroke-width="2.4"><line x1="600" y1="596" x2="600" y2="652" marker-end="url(#arrow)"/></g>
+  <g transform="translate(600,624)"><rect x="-148" y="-13" width="296" height="26" rx="13" fill="#161B24" stroke="#2a3344"/><text x="0" y="5" font-size="12.5" fill="#AEBACC" text-anchor="middle">spec/plan · spec/begin → waves + lock</text></g>
+
+  <!-- ============ CARD 4 : Plan ============ -->
+  <g transform="translate(320,658)">
+    <rect width="560" height="128" rx="16" fill="#1a1710" stroke="#4a3a1c" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#planBar)"/>
+    <circle cx="40" cy="46" r="16" fill="#3a2c12" stroke="#FFB454" stroke-width="1.5"/>
+    <text x="40" y="51" font-size="13" font-weight="700" fill="#FFB454" text-anchor="middle">4</text>
+    <text x="70" y="40" font-size="19" font-weight="700" fill="#F1E6CE">Plan</text>
+    <text x="70" y="60" font-size="13" fill="#B7A988">ordered into dependency waves</text>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5">
+      <text x="70" y="84"  fill="#86E48C">+ aggregate.Synth.Voice</text><text x="320" y="84"  fill="#7E8A9A">(new)</text>
+      <text x="70" y="102" fill="#FFB454">~ domainService.Synth.Allocator</text><text x="320" y="102" fill="#7E8A9A">(dependency changed)</text>
+      <text x="70" y="120" fill="#FF7B72">- aggregate.Audio.SineVoice</text><text x="320" y="120" fill="#7E8A9A">(removed)</text>
+    </g>
+  </g>
+  <g stroke="#9AA7B8" stroke-width="2.4"><line x1="600" y1="790" x2="600" y2="844" marker-end="url(#arrow)"/></g>
+  <g transform="translate(600,817)"><rect x="-150" y="-13" width="300" height="26" rx="13" fill="#171c26" stroke="#3a4356"/><text x="0" y="5" font-size="12.5" fill="#AEBACC" text-anchor="middle">Claude Code workflow · spec-generate.js</text></g>
+
+  <!-- ============ CARD 5 : Orchestrator ============ -->
+  <g transform="translate(320,848)">
+    <rect width="560" height="200" rx="16" fill="#181423" stroke="#3a2d52" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#orchBar)"/>
+    <circle cx="40" cy="48" r="16" fill="#2a2140" stroke="#C792EA" stroke-width="1.5"/>
+    <text x="40" y="53" font-size="13" font-weight="700" fill="#C792EA" text-anchor="middle">5</text>
+    <text x="70" y="42" font-size="19" font-weight="700" fill="#E6D7F4">Orchestrator</text>
+    <text x="70" y="63" font-size="13" fill="#A98FC4">per wave · resources in parallel · one sub-agent each (sonnet)</text>
+    <g font-size="13.5">
+      <circle cx="84" cy="92" r="11" fill="#2a2140" stroke="#C792EA" stroke-width="1.3"/><text x="84" y="96" font-size="11" font-weight="700" fill="#C792EA" text-anchor="middle">1</text>
+      <text x="106" y="96" fill="#D7C6EA"><tspan font-family="ui-monospace, Menlo, monospace" fill="#C792EA">spec/context</tspan>  → system prompt + prompt + invariants</text>
+
+      <circle cx="84" cy="121" r="11" fill="#2a2140" stroke="#C792EA" stroke-width="1.3"/><text x="84" y="125" font-size="11" font-weight="700" fill="#C792EA" text-anchor="middle">2</text>
+      <text x="106" y="125" fill="#D7C6EA">author files — full contents, correct paths</text>
+
+      <circle cx="84" cy="150" r="11" fill="#2a2140" stroke="#C792EA" stroke-width="1.3"/><text x="84" y="154" font-size="11" font-weight="700" fill="#C792EA" text-anchor="middle">3</text>
+      <text x="106" y="154" fill="#D7C6EA">judge each invariant → {invariant, passed, summary}</text>
+
+      <circle cx="84" cy="179" r="11" fill="#2a2140" stroke="#C792EA" stroke-width="1.3"/><text x="84" y="183" font-size="11" font-weight="700" fill="#C792EA" text-anchor="middle">4</text>
+      <text x="106" y="183" fill="#D7C6EA"><tspan font-family="ui-monospace, Menlo, monospace" fill="#C792EA">spec/commit</tspan>  → files + model + invariant_checks</text>
+    </g>
+  </g>
+  <g stroke="#9AA7B8" stroke-width="2.4"><line x1="600" y1="1052" x2="600" y2="1106" marker-end="url(#arrow)"/></g>
+  <g transform="translate(600,1078)"><rect x="-175" y="-13" width="350" height="26" rx="13" fill="#171c26" stroke="#3a4356"/><text x="0" y="5" font-size="12.5" fill="#AEBACC" text-anchor="middle">spec/commit — files + model + invariant verdicts</text></g>
+
+  <!-- ============ CARD 6 : Commit gate ============ -->
+  <g transform="translate(320,1110)">
+    <rect width="560" height="206" rx="16" fill="#1a1710" stroke="#4a3a1c" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="18" y="0" width="524" height="5" rx="2.5" fill="url(#gateBar)"/>
+    <circle cx="40" cy="48" r="16" fill="#3a2c12" stroke="#FFB454" stroke-width="1.5"/>
+    <text x="40" y="53" font-size="13" font-weight="700" fill="#FFB454" text-anchor="middle">6</text>
+    <text x="70" y="42" font-size="19" font-weight="700" fill="#F1E6CE">Commit gate</text>
+    <text x="70" y="63" font-size="13" fill="#B7A988">server validates — mechanical, no LLM</text>
+    <g font-size="13.5" fill="#E4D8C2">
+      <text x="70" y="96">›  write changed files <tspan fill="#9C8E72">(SHA256 per-file skip)</tspan></text>
+      <text x="70" y="124">›  run validations: <tspan fill="#C9D6EE">compile · test · integration · custom</tspan></text>
+      <text x="70" y="152">›  enforce supplied <tspan fill="#FFB454">invariant verdicts</tspan></text>
+    </g>
+    <line x1="70" y1="170" x2="490" y2="170" stroke="#3a2e16" stroke-width="1"/>
+    <text x="70" y="190" font-size="12.5" fill="#9C8E72">any failure rejects the commit — the failure is stored for the next context</text>
+  </g>
+
+  <!-- split to outcomes -->
+  <g stroke-width="2.4" fill="none">
+    <path d="M 560 1316 C 560 1344, 470 1346, 452 1372" stroke="#6FD98A" marker-end="url(#arrowPass)"/>
+    <path d="M 640 1316 C 640 1344, 730 1346, 748 1372" stroke="#FF7B72" marker-end="url(#arrowFail)"/>
+  </g>
+
+  <!-- pass chip -->
+  <g transform="translate(320,1374)">
+    <rect width="262" height="66" rx="14" fill="#101a14" stroke="#2c5a3c" stroke-width="1.5"/>
+    <text x="20" y="28" font-size="14.5" font-weight="700" fill="#86E48C">✓ pass</text>
+    <text x="20" y="48" font-size="12.5" fill="#9EB7A6">Committed = true · resource</text>
+    <text x="20" y="62" font-size="12.5" fill="#9EB7A6">persisted · Generation recorded</text>
+  </g>
+
+  <!-- fail chip -->
+  <g transform="translate(618,1374)">
+    <rect width="262" height="66" rx="14" fill="#1e1416" stroke="#7a3b38" stroke-width="1.5"/>
+    <text x="20" y="28" font-size="14.5" font-weight="700" fill="#FF7B72">✗ fail</text>
+    <text x="20" y="48" font-size="12.5" fill="#E3B4B0">Committed = false · state → rejected</text>
+    <text x="20" y="62" font-size="12.5" fill="#E3B4B0">failure stored for next context</text>
+  </g>
+
+  <!-- ============ FEEDBACK / RETRY LOOP ============ -->
+  <path d="M 880 1407 C 1276 1392, 1276 948, 884 948"
+        fill="none" stroke="#FF7B72" stroke-width="2.6" marker-end="url(#arrowFail)" filter="url(#softGlow)"/>
+
+  <!-- retry callout -->
+  <g transform="translate(922,1120)">
+    <rect width="312" height="150" rx="14" fill="#1c1417" stroke="#FF7B72" stroke-width="1.5"/>
+    <text x="20" y="32" font-size="15" font-weight="700" fill="#FF7B72">the retry loop</text>
+    <text x="20" y="58" font-size="12.5" fill="#E3B4B0">On rejection the failure folds into the</text>
+    <text x="20" y="76" font-size="12.5" fill="#E3B4B0">next <tspan font-family="ui-monospace, Menlo, monospace" fill="#FFB0AB">spec/context</tspan> — the sub-agent</text>
+    <text x="20" y="94" font-size="12.5" fill="#E3B4B0">regenerates &amp; re-commits, up to</text>
+    <text x="20" y="112" font-size="12.5" fill="#E3B4B0"><tspan font-family="ui-monospace, Menlo, monospace" fill="#FFB0AB">MaxRetries</tspan>. Then triage:</text>
+    <text x="20" y="134" font-size="12.5" fill="#E3B4B0"><tspan font-family="ui-monospace, Menlo, monospace" fill="#FFB0AB">spec/resolve</tspan> (guidance) or <tspan font-family="ui-monospace, Menlo, monospace" fill="#FFB0AB">spec/skip</tspan>.</text>
+  </g>
+</svg>
