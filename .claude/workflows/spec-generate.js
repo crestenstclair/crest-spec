@@ -136,6 +136,27 @@ const CHECK_VERIFY_SCHEMA = {
   required: ['check_id', 'passed'],
 }
 
+// Authoritative engine-state read for reconciliation. The workflow drives
+// pass/fail off THIS (the checks table), never off the verifier agent's word.
+const RECONCILE_SCHEMA = {
+  type: 'object',
+  properties: {
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          check_id: { type: 'string' },
+          state: { type: 'string' },
+          reason: { type: 'string' },
+        },
+        required: ['check_id'],
+      },
+    },
+  },
+  required: ['checks'],
+}
+
 // ─── Prompt builders ──────────────────────────────────────────────────────────
 
 function designPrompt(ctx) {
@@ -244,8 +265,9 @@ Steps:
    b. Make the identical measurements as the witness.
    c. Print exactly one line: CREST_STUB:{"field1":value1,"field2":value2,...}
    The stub must genuinely fail the behavioral check — if the stub also passes, the check is theater (non-discriminating).
-5. Run both programs and capture stdout. Extract the JSON from the CREST_OBS: and CREST_STUB: lines by stripping those prefixes and parsing the remainder.
-6. Call spec/verify with {check_id: "${checkId}", real_observation: <parsed CREST_OBS object>, stub_observation: <parsed CREST_STUB object>}.
+   IMPORTANT: CREST_STUB MUST contain the SAME predicate fields as CREST_OBS. spec/verify is strict and fail-closed: it REJECTS a verification whose stub_observation is empty or missing any predicate field (returns passed:false, reason contains "malformed verification"). A missing or malformed CREST_OBS / CREST_STUB line is a verification FAILURE, not a skip — never fabricate observations.
+5. Run both programs and capture stdout. Extract the JSON from the CREST_OBS: and CREST_STUB: lines by stripping those prefixes and parsing the remainder. If either line is absent or unparseable, do NOT invent values — the behavior is unverified and the check must fail; report passed:false and stop (the workflow reconciles against engine state and will regenerate).
+6. Call spec/verify with {check_id: "${checkId}", real_observation: <parsed CREST_OBS object>, stub_observation: <parsed CREST_STUB object>}. You MUST call spec/verify for the check to count — a self-reported pass without a real spec/verify call is treated as a failure by the workflow.
 7. If spec/verify returns passed=true: call spec/graduate with {check_id: "${checkId}"}.
    If passed=false or theater=true: do NOT graduate.
 8. Return: {check_id: "${checkId}", passed: <bool>, theater: <bool, default false>, reason: "<from spec/verify>", graduated: <true only if spec/graduate was called and succeeded>}.`
@@ -417,8 +439,13 @@ Return: {"checks": [{"check_id": string, "behavior": string, "check_json": strin
 
     log(`Wave ${wave.wave_index}: verifying ${checks.length} behavioral check(s) for ${committed.resource_id}`)
 
-    // Verifier agents run in parallel, independent of the generator that wrote the files.
-    const verifyResults = await parallel(checks.map(c => () =>
+    // Verifier agents run in parallel, independent of the generator that wrote
+    // the files. Their self-reported {passed, graduated} is NOT trusted for
+    // control flow — running the agent only triggers the witness/spec_verify
+    // work. A crashed/null/empty verifier result is intentionally NOT filtered
+    // away: its check simply stays `pending` server-side and is caught as a
+    // failure by the reconciliation below (I1).
+    await parallel(checks.map(c => () =>
       agent(verifierPrompt(committed.resource_id, c.check_id, c.behavior, c.check_json), {
         label: `verify:${c.check_id}`,
         phase: 'Verify',
@@ -427,14 +454,52 @@ Return: {"checks": [{"check_id": string, "behavior": string, "check_json": strin
       })
     ))
 
-    const passedChecks = verifyResults.filter(Boolean).filter(v => v.passed)
-    const failedChecks = verifyResults.filter(Boolean).filter(v => !v.passed)
+    // Reconcile against AUTHORITATIVE engine state (I2). Pass/fail is driven off
+    // the checks table, never off the verifier agent's word:
+    //   passed | graduated → success
+    //   failed | theater   → failure (regenerate)
+    //   pending | absent   → failure (regenerate) — the verifier never produced a
+    //                        real fail-closed verification: it crashed, skipped
+    //                        spec/verify, or spec/verify rejected a missing/
+    //                        malformed CREST_OBS/CREST_STUB ("malformed
+    //                        verification"). Either way the behavior is unverified.
+    const checkIdList = checks.map(c => `'${String(c.check_id).replace(/'/g, "''")}'`).join(', ')
+    const reconcile = await agent(
+      `ToolSearch "select:mcp__crest-spec__spec_sql"
+Read the AUTHORITATIVE state of these behavioral checks from the engine. Report exactly what the rows say — do not infer, alter, or fill in missing rows.
+Call spec_sql with query:
+  SELECT c.id AS check_id, c.state AS state,
+    (SELECT v.reason FROM verifications v WHERE v.check_id = c.id ORDER BY v.created_at DESC LIMIT 1) AS reason
+  FROM checks c
+  WHERE c.id IN (${checkIdList})
+Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
+      { label: `reconcile:${committed.resource_id}`, phase: 'Verify', schema: RECONCILE_SCHEMA }
+    )
+    const stateByCheck = {}
+    for (const r of (reconcile?.checks || []).filter(Boolean)) stateByCheck[r.check_id] = r
+
+    const passedChecks = []
+    const failedChecks = []
+    for (const c of checks) {
+      const row = stateByCheck[c.check_id]
+      const state = row?.state
+      if (state === 'passed' || state === 'graduated') {
+        passedChecks.push({ check_id: c.check_id, state })
+      } else if (state === 'theater') {
+        failedChecks.push({ check_id: c.check_id, theater: true, reason: row?.reason || 'theater: stub baseline also satisfied the check (non-discriminating predicate)' })
+      } else if (state === 'failed') {
+        failedChecks.push({ check_id: c.check_id, theater: false, reason: row?.reason || 'behavioral verification failed: real observation did not satisfy the check' })
+      } else {
+        // pending or absent — no authoritative fail-closed verification recorded.
+        failedChecks.push({ check_id: c.check_id, theater: false, reason: `check still '${state || 'absent'}' after its verifier ran — no fail-closed verification was recorded (verifier crashed, skipped spec/verify, or spec/verify rejected a missing/malformed witness). Behavior is UNVERIFIED; regenerating.` })
+      }
+    }
 
     if (passedChecks.length > 0) {
       for (const v of passedChecks) {
-        graduated.push({ resource_id: committed.resource_id, check_id: v.check_id, graduated: v.graduated })
+        graduated.push({ resource_id: committed.resource_id, check_id: v.check_id, state: v.state })
       }
-      log(`Wave ${wave.wave_index}: ${passedChecks.length}/${checks.length} behavioral check(s) passed for ${committed.resource_id}`)
+      log(`Wave ${wave.wave_index}: ${passedChecks.length}/${checks.length} behavioral check(s) verified via engine state for ${committed.resource_id}`)
     }
 
     if (failedChecks.length > 0) {

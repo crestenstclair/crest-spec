@@ -52,11 +52,23 @@ agent** per check (not the generator). The verifier:
 4. Runs both, parses the JSON lines, calls `spec/verify` with
    `{check_id, real_observation, stub_observation}`
 5. `spec/verify` is **fail-closed**: passes only when real passes AND stub fails
-   (theater = stub also passes → rejected as non-discriminating)
-6. On pass: calls `spec/graduate` — state transitions to `graduated` and the
-   structured check is returned for the orchestrator to surface
-7. On fail or theater: calls `spec_resolve` to inject failure guidance into the
-   resource's next generation context — the resource cycles back into the wave loop
+   (theater = stub also passes → rejected as non-discriminating). It is also
+   strict on the stub side — an empty or field-missing `stub_observation`, or a
+   missing/malformed `CREST_OBS`/`CREST_STUB` witness line, is rejected as a
+   "malformed verification" (passed:false), never a skip.
+6. On pass: calls `spec/graduate` — state transitions to `graduated`
+
+**The workflow does NOT trust the verifier agent's self-report.** After the
+verifier agents run, the workflow reads the **authoritative engine state** from
+the `checks` table (`spec_sql`) and drives pass/fail off that:
+
+- `passed` / `graduated` → success
+- `failed` / `theater` → failure → `spec_resolve` (regenerate)
+- `pending` / absent → failure → `spec_resolve` (regenerate). A check still
+  pending after its verifier ran means the verifier crashed, timed out, returned
+  null, skipped `spec/verify`, or `spec/verify` rejected a missing/malformed
+  witness — the behavior is unverified, so the resource regenerates. A
+  crashed/empty verifier is never silently dropped.
 
 Verifier agents run in parallel per check (within a resource). The stall guard
 bounds infinite cycles if behavioral checks never converge.
@@ -88,7 +100,7 @@ Use `args.model` to override the generation model. Never haiku.
 {
   "waves_processed": N,
   "triaged": [...],
-  "graduated": [{"resource_id": "...", "check_id": "...", "graduated": true}],
+  "graduated": [{"resource_id": "...", "check_id": "...", "state": "graduated"}],
   "behavioral_checks_total": N,
   "next_steps": "..."
 }
@@ -112,7 +124,11 @@ The verifier sub-agent is dispatched independently of the generator — it never
 sees the committed implementation files. The stub baseline must be a genuine
 no-op so that a trivially-passing check (theater) is caught and rejected.
 `spec/verify` enforces this server-side: real-pass + stub-fail = pass;
-any other combination = fail.
+any other combination (including empty/malformed stub) = fail. The orchestrator
+closes the last loophole by reconciling against engine check state rather than
+the verifier's self-report, so a verifier that crashes or lies about passing
+without recording a real verification leaves its check `pending` and is caught
+as a failure.
 
 ## Rules
 
