@@ -96,13 +96,40 @@ project: assets: VoiceDemoMain: {
 
 Writing good `prompts`:
 - Lead with the file path, then behavior, then constraints.
-- Make success **mechanically checkable** — have the binary print a verbatim
-  token (e.g. `steals=37`, `render non-silent: true`) and assert on it in a
-  `validations` entry. A behavior with no assertion is a behavior the loop can't
-  prove.
+- Make success **mechanically checkable on a MEASURED value** — the binary must
+  compute the real quantity, print it (`steals=37`, `audio peak: 0.52`,
+  `strips visible: 6`), assert IN CODE against it (exit non-zero on mismatch),
+  and a `validations` entry asserts on that printed measurement. Asserting
+  `stdout_contains` on a token the binary prints *unconditionally* (`ok`,
+  `: true`, a bare completion marker) is **validation theater**: it proves the
+  line printed, not that the behavior happened. The test is — a real run that
+  renders one channel or plays silence MUST fail. A behavior with no assertion
+  is a behavior the loop can't prove.
 - Encode hard-won rules in the prompt text (e.g. threading, units) rather than
   hoping the model infers them.
 - Use CUE raw strings `#"…"#` when the prompt contains quotes/backticks.
+
+## Where does intent belong? (`notes` is the last resort)
+
+Every rule has a structural home; `meta: notes` / `prompts` prose is the *small
+remainder*, not the default. Before writing prose, ask:
+
+- **Global / cross-cutting rule?** → ONE project-level `meta`/`invariants` entry,
+  or rely on the whole-tree gate. Never paste the same rule into N resources'
+  notes. If the gate already enforces it (clippy, fmt, build), do NOT restate it
+  per-resource at all.
+- **A checkable property?** → an `invariant` (the loop JUDGES it) or a
+  `validation` (the loop PROVES it) — not a sentence in notes.
+- **Domain logic?** → push it into `contract` / `commands` / `events` / `state`
+  + `invariants`. Do NOT spell a reducer/algorithm out as English pseudo-code;
+  that duplicates the structure and rots.
+- **Already encoded by a type/enum/contract?** → reference the type; don't
+  re-prose its variants or fields.
+- **An irreducible environmental fact?** (threading constraint, version pin,
+  units, a hardware gotcha) → THIS is what `notes` is for. Keep it short.
+
+The smell: if a bug becomes "another sentence in a note" instead of a new
+invariant/validation/type, the spec is growing prose, not getting better.
 
 ## The validation gate (the north star)
 
@@ -132,13 +159,33 @@ scope.
    edit touched; the loop validates the whole tree and commits.
 4. Commit the spec change + regenerated code together.
 
+**Code-neutral edits adopt without regenerating.** If an edit only cleans prose
+(deletes notes that duplicate invariants, references a type instead of re-prosing
+it) the generated files don't change — so re-baseline instead of regenerating:
+`spec_begin`, then `spec_commit` each changed resource with NO `files` (the server
+re-validates the on-disk code against the new spec and re-settles the hash). A
+strengthened `validation` that the existing code already passes also adopts this
+way; one it FAILS is the validation doing its job — that resource genuinely needs
+a regen (don't adopt a validation you never ran green).
+
 ## Anti-patterns (stop if you catch yourself)
 
 - Hand-writing `.rs` (or any target code). → Put intent in an asset `prompt`.
 - Re-introducing `phase-N.cue` / `override-*.cue`. → Group by domain instead.
 - Per-file resource→file mapping or scoping validations to one file. → The gate
   is whole-tree; leave it that way.
-- A new behavior with no assertion. → Add a printed token + a `validations` entry.
+- A new behavior with no assertion. → Add a `validations` entry that asserts a
+  measured value (not just that the binary printed a token).
+- A `validation` that asserts only a self-printed token (`stdout_contains: "ok"`
+  / `": true"` / a bare completion marker). → **Validation theater.** Assert a
+  MEASURED quantity the code computes and make the run exit non-zero when the
+  behavior is actually broken.
+- Pasting a cross-cutting rule into many resources' notes, or restating a
+  gate-enforced rule (clippy, fmt, build) per-resource. → ONE project-level home,
+  or lean on the gate.
+- Spelling a reducer/algorithm out as English pseudo-code in `meta: notes`. → It
+  belongs in `commands`/`events`/`state` + `invariants`.
+- Re-prosing what a type/enum/contract already defines. → Reference the type.
 - Narrating a prompt in chat as if you implemented it. → "I added an asset whose
   prompt asks for X," and link the `.cue`.
 - Static/mechanical generation of content the LLM could produce from a prompt. →
