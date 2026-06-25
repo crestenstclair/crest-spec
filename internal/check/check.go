@@ -65,6 +65,35 @@ func Evaluate(c Check, obs Observation) Result {
 	return res
 }
 
+// Verdict is the outcome of a falsification-gated check: the behavior must be
+// exhibited by the real observation AND absent from the stub observation.
+type Verdict struct {
+	Passed     bool
+	RealResult Result
+	StubResult Result
+	Theater    bool // true if the check also passed on the stub (no teeth)
+	Reason     string
+}
+
+// Verify gates c against both observations. A check that the stub passes is
+// theater and is rejected regardless of the real result.
+func Verify(c Check, real, stub Observation) Verdict {
+	rr := Evaluate(c, real)
+	sr := Evaluate(c, stub)
+	v := Verdict{RealResult: rr, StubResult: sr}
+	switch {
+	case sr.Passed:
+		v.Theater = true
+		v.Reason = "check passes on the stub observation: it has no teeth"
+	case !rr.Passed:
+		v.Reason = fmt.Sprintf("behavior not exhibited: %v", rr.Failures)
+	default:
+		v.Passed = true
+		v.Reason = "behavior exhibited; check rejects the stub"
+	}
+	return v
+}
+
 func evalPredicate(p Predicate, obs Observation) (bool, string) {
 	raw, ok := obs[p.Field]
 	if !ok {

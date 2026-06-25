@@ -92,3 +92,29 @@ func TestEvaluate_MonotonicAndSetContains(t *testing.T) {
 	assert.True(t, Evaluate(Check{Predicates: has}, waveforms).Passed)
 	assert.False(t, Evaluate(Check{Predicates: missing}, waveforms).Passed)
 }
+
+func TestVerify_FalsificationGate(t *testing.T) {
+	check := Check{
+		Behavior:   "past the polyphony limit, voice stealing occurs",
+		Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: 0}},
+	}
+	real := Observation{"steals": 4.0} // real impl steals
+	stub := Observation{"steals": 0.0} // no-op never steals
+
+	// Real exhibits the behavior; stub does not → genuine pass.
+	good := Verify(check, real, stub)
+	assert.True(t, good.Passed)
+	assert.False(t, good.Theater)
+
+	// Real fails to exhibit the behavior → fail (not theater).
+	notExhibited := Verify(check, Observation{"steals": 0.0}, stub)
+	assert.False(t, notExhibited.Passed)
+	assert.False(t, notExhibited.Theater)
+
+	// A toothless check the stub also passes → theater, rejected even though real passes.
+	toothless := Check{Predicates: []Predicate{{Field: "steals", Op: OpGte, Value: 0}}}
+	theater := Verify(toothless, real, stub)
+	assert.False(t, theater.Passed)
+	assert.True(t, theater.Theater)
+	assert.Contains(t, theater.Reason, "teeth")
+}
