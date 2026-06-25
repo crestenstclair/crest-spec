@@ -58,3 +58,23 @@ func TestEvaluate_Range(t *testing.T) {
 	}}, obs)
 	assert.False(t, fail.Passed)
 }
+
+func TestEvaluate_ListOps(t *testing.T) {
+	// "two different key/velocity inputs resolve to different sample zones"
+	differObs := Observation{"zone_ids": []any{"zoneA", "zoneB"}}
+	sameObs := Observation{"zone_ids": []any{"zoneA", "zoneA"}}
+
+	differ := []Predicate{{Field: "zone_ids", Op: OpDiffer}}
+	assert.True(t, Evaluate(Check{Predicates: differ}, differObs).Passed)
+	assert.False(t, Evaluate(Check{Predicates: differ}, sameObs).Passed)
+
+	distinct2 := []Predicate{{Field: "zone_ids", Op: OpDistinctCount, Value: 2}}
+	assert.True(t, Evaluate(Check{Predicates: distinct2}, differObs).Passed)
+	assert.False(t, Evaluate(Check{Predicates: distinct2}, sameObs).Passed)
+
+	count2 := []Predicate{{Field: "zone_ids", Op: OpCount, Value: 2}}
+	assert.True(t, Evaluate(Check{Predicates: count2}, sameObs).Passed)
+
+	notAList := Observation{"zone_ids": 3.0}
+	assert.False(t, Evaluate(Check{Predicates: differ}, notAList).Passed)
+}

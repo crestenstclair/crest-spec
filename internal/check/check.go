@@ -86,6 +86,33 @@ func evalPredicate(p Predicate, obs Observation) (bool, string) {
 			return false, fmt.Sprintf("range: %q=%v not in [%v,%v]", p.Field, n, p.Min, p.Max)
 		}
 		return true, ""
+	case OpCount:
+		l, ok := asList(raw)
+		if !ok {
+			return false, fmt.Sprintf("count: field %q is not a list", p.Field)
+		}
+		if float64(len(l)) != p.Value {
+			return false, fmt.Sprintf("count: %q has %d items, want %v", p.Field, len(l), p.Value)
+		}
+		return true, ""
+	case OpDistinctCount:
+		l, ok := asList(raw)
+		if !ok {
+			return false, fmt.Sprintf("distinct_count: field %q is not a list", p.Field)
+		}
+		if d := distinct(l); float64(d) < p.Value {
+			return false, fmt.Sprintf("distinct_count: %q has %d distinct, want >= %v", p.Field, d, p.Value)
+		}
+		return true, ""
+	case OpDiffer:
+		l, ok := asList(raw)
+		if !ok {
+			return false, fmt.Sprintf("differ: field %q is not a list", p.Field)
+		}
+		if distinct(l) < 2 {
+			return false, fmt.Sprintf("differ: %q values are all identical", p.Field)
+		}
+		return true, ""
 	default:
 		return false, fmt.Sprintf("unknown op %q", p.Op)
 	}
@@ -124,6 +151,19 @@ func asNumber(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func asList(v any) ([]any, bool) {
+	l, ok := v.([]any)
+	return l, ok
+}
+
+func distinct(l []any) int {
+	seen := map[string]struct{}{}
+	for _, e := range l {
+		seen[fmt.Sprintf("%v", e)] = struct{}{}
+	}
+	return len(seen)
 }
 
 // _ keeps math imported until range/monotonic ops land in later tasks.
