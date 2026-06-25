@@ -9,7 +9,7 @@ import (
 )
 
 func TestEvaluate_NumericOps(t *testing.T) {
-	obs := Observation{"steals": 3.0, "voices": 8.0}
+	obs := Observation{"steals": 3.0, "voices": 8.0, "label": "x"}
 
 	cases := []struct {
 		name string
@@ -23,7 +23,7 @@ func TestEvaluate_NumericOps(t *testing.T) {
 		{"lt pass", Predicate{Field: "steals", Op: OpLt, Value: 4}, true},
 		{"lte fail", Predicate{Field: "voices", Op: OpLte, Value: 7}, false},
 		{"absent field fails", Predicate{Field: "missing", Op: OpGt, Value: 0}, false},
-		{"non-numeric fails", Predicate{Field: "voices", Op: OpGt, Value: 0}, true},
+		{"non-numeric field fails", Predicate{Field: "label", Op: OpGt, Value: 0}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -136,4 +136,38 @@ func TestEvaluate_FromJSON(t *testing.T) {
 	}
 	res := Evaluate(c, obs)
 	assert.True(t, res.Passed, "json-decoded observation must evaluate like a native one: %v", res.Failures)
+}
+
+func TestEvaluate_TypeErrors(t *testing.T) {
+	obs := Observation{
+		"num":        3.0,
+		"str":        "hello",
+		"list":       []any{1.0, 2.0, 3.0},
+		"mixed_list": []any{1.0, "x"},
+		"short_list": []any{1.0},
+	}
+
+	cases := []struct {
+		name string
+		pred Predicate
+	}{
+		{"eq on string field", Predicate{Field: "str", Op: OpEq, Value: 0}},
+		{"range on string field", Predicate{Field: "str", Op: OpRange, Min: 0, Max: 10}},
+		{"count on non-list field", Predicate{Field: "num", Op: OpCount, Value: 1}},
+		{"distinct_count on non-list field", Predicate{Field: "num", Op: OpDistinctCount, Value: 1}},
+		{"differ on non-list field", Predicate{Field: "num", Op: OpDiffer}},
+		{"monotonic on non-list field", Predicate{Field: "num", Op: OpMonotonic}},
+		{"monotonic with non-numeric element in list", Predicate{Field: "mixed_list", Op: OpMonotonic}},
+		{"set_contains on non-list field", Predicate{Field: "num", Op: OpSetContains, Member: 1.0}},
+		{"count length mismatch", Predicate{Field: "short_list", Op: OpCount, Value: 5}},
+		{"unknown op", Predicate{Field: "num", Op: Op("bogus")}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := Evaluate(Check{Predicates: []Predicate{c.pred}}, obs)
+			assert.False(t, res.Passed, "expected predicate to fail")
+			require.NotEmpty(t, res.Failures, "a failing predicate must record a failure message")
+		})
+	}
 }
