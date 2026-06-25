@@ -11,39 +11,115 @@ spec-generate workflow. Default model: sonnet. Never haiku.
 
 ## Pipeline
 
-1. `spec_plan` — review what will change. If empty, report "up to date" and stop.
-2. `spec_begin` — returns session_id, plan, waves, PendingDestroys.
-3. If PendingDestroys is non-empty: show the list to the user and call
-   `spec_confirm_destroys` only for resources the user confirms (or all, if
-   the user pre-authorized destructive applies).
-4. Invoke the Workflow tool:
-   `Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>"}})`
-   (Use `args.model` to override the generation model; complex resources can
-   justify opus — never haiku.)
-5. When the workflow completes, review its `triaged` list and surface skips
-   to the user.
-6. `spec_finish` — if the result's `reflection_prompt` is non-empty, run it
-   with one sonnet sub-agent (Agent tool, general-purpose) and pass the raw
-   output to `spec_record_learnings` (with the session_id).
-7. Report: committed/skipped/errored counts, triage decisions, learnings added.
+The workflow runs four ordered stages per session:
+
+### Stage 1 — Design (pre-loop, once)
+One discovery agent groups all resources into bounded contexts (by naming
+convention + dependency graph). Then one design agent per context derives an
+**observable contract**: the public interface surface plus behavioral claims
+expressed as measurable predicates. Contracts are committed via `spec/design_commit`
+and stored in the `designs` table (keyed by spec_hash).
+
+Design agents run in parallel across contexts.
+
+### Stage 2 — Tasks (pre-loop, once)
+One tasks agent per resource reads the context contract and decomposes it into
+resource-level tasks, each carrying one or more **behavioral checks**. A check
+is `{ behavior: string, predicates: [{ field, op, value/min/max/member }] }`
+using the predicate vocabulary (eq, gt, gte, lt, lte, range, count,
+distinct_count, differ, monotonic, set_contains). Tasks are committed via
+`spec/tasks_commit` into the `tasks` and `checks` tables.
+
+Tasks agents run in parallel across resources.
+
+### Stage 3 — Generate (wave loop)
+The existing generation loop:
+- `spec_next` returns the next wave of resources (dependency order)
+- One generator agent per resource calls `spec_context → generate files → spec_commit`
+  with internal retry on rejection (up to maxRetries)
+- Generator agents within a wave run in parallel
+
+### Stage 4 — Verify (per check, after each wave's commits)
+After each wave's generators commit, for every committed resource the workflow
+lists its pending behavioral checks and runs a **separate, independent verifier
+agent** per check (not the generator). The verifier:
+
+1. Reads only the spec declaration (`spec_inspect`) — never the committed files
+2. Authors a **real witness harness** that calls the public interface and emits
+   `CREST_OBS:{...}` (measured field values) on stdout
+3. Authors a **stub baseline** (degenerate no-op implementation) that emits
+   `CREST_STUB:{...}` with the same measurements
+4. Runs both, parses the JSON lines, calls `spec/verify` with
+   `{check_id, real_observation, stub_observation}`
+5. `spec/verify` is **fail-closed**: passes only when real passes AND stub fails
+   (theater = stub also passes → rejected as non-discriminating)
+6. On pass: calls `spec/graduate` — state transitions to `graduated` and the
+   structured check is returned for the orchestrator to surface
+7. On fail or theater: calls `spec_resolve` to inject failure guidance into the
+   resource's next generation context — the resource cycles back into the wave loop
+
+Verifier agents run in parallel per check (within a resource). The stall guard
+bounds infinite cycles if behavioral checks never converge.
+
+### Post-wave: project-level verification
+After behavioral verify, `spec_verify_wave` runs compile/test/fmt checks.
+Failures are attributed to owning resources via `spec_sql` and fed back via
+`spec_resolve`. Both feedback types (behavioral + project) inject before the
+next `spec_next` call.
+
+## Invocation
+
+```
+1. spec_plan       — review what will change. If empty, stop.
+2. spec_begin      — returns session_id, plan, waves, PendingDestroys.
+3. spec_confirm_destroys — if PendingDestroys is non-empty, confirm first.
+4. Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>"}})
+5. Review triaged list; surface skips to user.
+6. spec_finish     — if reflection_prompt non-empty, run with sonnet → spec_record_learnings.
+7. Review graduated list — each entry is a confirmed behavioral check; use
+   spec-authoring skill to author them back into the spec invariants.
+```
+
+Use `args.model` to override the generation model. Never haiku.
+
+## Return value
+
+```json
+{
+  "waves_processed": N,
+  "triaged": [...],
+  "graduated": [{"resource_id": "...", "check_id": "...", "graduated": true}],
+  "behavioral_checks_total": N,
+  "next_steps": "..."
+}
+```
 
 ## Failure handling
 
-- The workflow retries each resource internally (server injects failure
-  context into the regenerated prompt) and triages persistent failures with
-  spec_resolve/spec_skip.
-- After each wave commits, the workflow verifies it with spec_verify_wave
-  (project type-check/tests + project validations) and routes attributed
-  failures back through spec_resolve to regenerate on the next pass.
-- If the whole workflow dies, `spec_status`/`spec_wave_status` show where it
-  stopped; re-invoking the workflow with the same sessionId resumes (spec_next
-  re-serves non-terminal resources).
-- A stale lock from a crashed session: `spec_unlock`, then `spec_begin` again.
+- Generator retries are bounded by maxRetries (default 3) inside the generator agent.
+- Behavioral check failures feed back via `spec_resolve` (same mechanism as
+  compile failures) — the resource cycles into the next wave pass with failure context.
+- The stall guard (MAX_STALLS=2, MAX_STALLS_HARD=5) terminates infinite cycles
+  by force-skipping culprit resources.
+- If the whole workflow dies: `spec_status`/`spec_wave_status` show where it
+  stopped; re-invoking with the same sessionId resumes (spec_next re-serves
+  non-terminal resources; design/tasks are idempotent via upsert).
+- Stale lock: `spec_unlock`, then `spec_begin` again.
+
+## Anti-theater guarantee
+
+The verifier sub-agent is dispatched independently of the generator — it never
+sees the committed implementation files. The stub baseline must be a genuine
+no-op so that a trivially-passing check (theater) is caught and rejected.
+`spec/verify` enforces this server-side: real-pass + stub-fail = pass;
+any other combination = fail.
 
 ## Rules
 
 - Never write generated-resource code in the main session — every file comes
-  from a sub-agent via spec_commit.
-- Waves are sequential; resources within a wave run in parallel (the workflow
-  handles this).
+  from a sub-agent via `spec_commit`.
+- Waves are sequential; resources within a wave run in parallel.
+- Design and tasks phases run once per session (before the wave loop).
+- Behavioral checks live only in sqlite (never in .cue files) until graduated
+  and manually authored into invariants by the spec-authoring skill.
 - Validation failures are signal, not noise: read them before retrying scope.
