@@ -184,6 +184,60 @@ func TestVerify_RealFail(t *testing.T) {
 	assert.Equal(t, "failed", bc.State)
 }
 
+// TestVerify_EmptyStubRejected asserts the stub side is fail-CLOSED: an empty
+// stub cannot falsify the behavior, so a passing real observation must NOT
+// graduate alone. (Regression for the stub fail-open hole.)
+func TestVerify_EmptyStubRejected(t *testing.T) {
+	s := newBehavioralSpec(t)
+
+	c := check.Check{
+		Behavior:   "latency under 200ms",
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+	}
+	checkID := commitTasksAndGetCheckID(t, s, c)
+
+	// real passes, but stub is empty → no falsification possible → rejected.
+	result, err := s.Verify(context.Background(), checkID,
+		map[string]any{"latency_ms": float64(50)},
+		map[string]any{},
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "a passing real observation must not pass with an empty stub")
+	assert.False(t, result.Theater)
+	assert.Contains(t, result.Reason, "malformed verification")
+
+	bc, err := s.store.GetCheck(checkID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", bc.State)
+}
+
+// TestVerify_StubMissingPredicateFieldRejected asserts that a stub which omits a
+// predicate field (so check.Verify would score it as "stub failed" for the wrong
+// reason) is rejected rather than letting the real observation pass alone.
+func TestVerify_StubMissingPredicateFieldRejected(t *testing.T) {
+	s := newBehavioralSpec(t)
+
+	c := check.Check{
+		Behavior:   "latency under 200ms",
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+	}
+	checkID := commitTasksAndGetCheckID(t, s, c)
+
+	// real passes; stub is non-empty but lacks latency_ms → not a real measurement.
+	result, err := s.Verify(context.Background(), checkID,
+		map[string]any{"latency_ms": float64(50)},
+		map[string]any{"unrelated": float64(1)},
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Passed)
+	assert.False(t, result.Theater)
+	assert.Contains(t, result.Reason, "latency_ms")
+
+	bc, err := s.store.GetCheck(checkID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", bc.State)
+}
+
 // TestVerify_PersistsVerification asserts that a Verification record is written.
 func TestVerify_PersistsVerification(t *testing.T) {
 	s := newBehavioralSpec(t)

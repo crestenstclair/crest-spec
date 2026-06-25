@@ -98,7 +98,19 @@ func (s *Spec) Verify(ctx context.Context, checkID string, real, stub map[string
 		return VerifyResult{}, fmt.Errorf("parse check_json: %w", err)
 	}
 
-	verdict := check.Verify(c, check.Observation(real), check.Observation(stub))
+	// Fail-closed stub guard. check.Verify reads an absent predicate field as
+	// "the stub fails the behavior" — good discrimination. That makes the stub
+	// side fail-OPEN: an empty or field-missing stub would let a passing real
+	// observation graduate alone, defeating the falsification gate. Require the
+	// stub to be a genuine measurement: non-empty, and carrying every predicate
+	// field that the real observation is judged on. A malformed stub is a
+	// rejection, not a pass.
+	var verdict check.Verdict
+	if malformed, reason := stubMalformed(c, real, stub); malformed {
+		verdict = check.Verdict{Passed: false, Theater: false, Reason: "malformed verification: " + reason}
+	} else {
+		verdict = check.Verify(c, check.Observation(real), check.Observation(stub))
+	}
 
 	// Serialize observations for storage.
 	realJSON, err := json.Marshal(real)
@@ -169,6 +181,28 @@ func (s *Spec) Graduate(ctx context.Context, checkID string) (GraduateResult, er
 		Behavior:   bc.Behavior,
 		Check:      c,
 	}, nil
+}
+
+// stubMalformed reports whether a verification's observations are unfit to
+// falsify the check. The stub must be a genuine measurement: non-empty, and
+// containing every predicate field that the behavior is judged on (the real
+// observation must too). If a predicate field is absent from the stub,
+// check.Verify would score the stub as "failed the behavior" for the wrong
+// reason — absence, not a measured no-op — and let the real observation pass
+// alone. Returns (true, reason) when the verification must be rejected.
+func stubMalformed(c check.Check, real, stub map[string]any) (bool, string) {
+	if len(stub) == 0 {
+		return true, "stub observation is empty; it cannot falsify the behavior"
+	}
+	for _, p := range c.Predicates {
+		if _, ok := stub[p.Field]; !ok {
+			return true, fmt.Sprintf("stub observation is missing predicate field %q; the stub is not a real measurement", p.Field)
+		}
+		if _, ok := real[p.Field]; !ok {
+			return true, fmt.Sprintf("real observation is missing predicate field %q", p.Field)
+		}
+	}
+	return false, ""
 }
 
 // GetDesign retrieves a design by context name.

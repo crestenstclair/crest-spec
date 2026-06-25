@@ -32,7 +32,7 @@ type Predicate struct {
 	Value  float64 `json:"value,omitempty"`  // eq/gt/gte/lt/lte/count/distinct_count
 	Min    float64 `json:"min,omitempty"`    // range
 	Max    float64 `json:"max,omitempty"`    // range
-	Member any     `json:"member,omitempty"` // set_contains
+	Member any     `json:"member"` // set_contains (no omitempty: a zero-valued member must survive round-trip)
 }
 
 // Check is a behavioral claim plus the predicates that must all hold for the

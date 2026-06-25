@@ -477,7 +477,7 @@ func (s *Server) registerSpecLifecycleTools() {
 		Name:        "spec/verify",
 		Description: "Run falsification-gated verification for a check. Requires real_observation and stub_observation. Fail-closed: theater (stub passes) and real-fail both reject.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string","description":"Check ID"},"real_observation":{"type":"object","description":"Measured values from the real system"},"stub_observation":{"type":"object","description":"Measured values from a no-op stub baseline"}},"required":["check_id","real_observation","stub_observation"]}`),
-	}, specTool("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
+	}, specToolStrict("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
 		return s.spec.Verify(ctx, a.CheckID, a.RealObservation, a.StubObservation)
 	}))
 
