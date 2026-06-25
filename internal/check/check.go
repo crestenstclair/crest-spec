@@ -113,6 +113,23 @@ func evalPredicate(p Predicate, obs Observation) (bool, string) {
 			return false, fmt.Sprintf("differ: %q values are all identical", p.Field)
 		}
 		return true, ""
+	case OpMonotonic:
+		l, ok := asList(raw)
+		if !ok {
+			return false, fmt.Sprintf("monotonic: field %q is not a list", p.Field)
+		}
+		return monotonicIncreasing(l, p.Field)
+	case OpSetContains:
+		l, ok := asList(raw)
+		if !ok {
+			return false, fmt.Sprintf("set_contains: field %q is not a list", p.Field)
+		}
+		for _, e := range l {
+			if equalValues(e, p.Member) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("set_contains: %q does not contain %v", p.Field, p.Member)
 	default:
 		return false, fmt.Sprintf("unknown op %q", p.Op)
 	}
@@ -166,5 +183,21 @@ func distinct(l []any) int {
 	return len(seen)
 }
 
-// _ keeps math imported until range/monotonic ops land in later tasks.
-var _ = math.Inf
+func monotonicIncreasing(l []any, field string) (bool, string) {
+	prev := math.Inf(-1)
+	for i, e := range l {
+		n, ok := asNumber(e)
+		if !ok {
+			return false, fmt.Sprintf("monotonic: %q[%d] is not numeric", field, i)
+		}
+		if n <= prev {
+			return false, fmt.Sprintf("monotonic: %q not strictly increasing at index %d (%v <= %v)", field, i, n, prev)
+		}
+		prev = n
+	}
+	return true, ""
+}
+
+func equalValues(a, b any) bool {
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}

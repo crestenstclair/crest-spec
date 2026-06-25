@@ -78,3 +78,17 @@ func TestEvaluate_ListOps(t *testing.T) {
 	notAList := Observation{"zone_ids": 3.0}
 	assert.False(t, Evaluate(Check{Predicates: differ}, notAList).Passed)
 }
+
+func TestEvaluate_MonotonicAndSetContains(t *testing.T) {
+	rising := Observation{"meter": []any{0.1, 0.4, 0.9}}
+	flat := Observation{"meter": []any{0.4, 0.4, 0.4}}
+	mono := []Predicate{{Field: "meter", Op: OpMonotonic}}
+	assert.True(t, Evaluate(Check{Predicates: mono}, rising).Passed)
+	assert.False(t, Evaluate(Check{Predicates: mono}, flat).Passed)
+
+	waveforms := Observation{"waveforms": []any{"sine", "saw", "square"}}
+	has := []Predicate{{Field: "waveforms", Op: OpSetContains, Member: "saw"}}
+	missing := []Predicate{{Field: "waveforms", Op: OpSetContains, Member: "noise"}}
+	assert.True(t, Evaluate(Check{Predicates: has}, waveforms).Passed)
+	assert.False(t, Evaluate(Check{Predicates: missing}, waveforms).Passed)
+}
