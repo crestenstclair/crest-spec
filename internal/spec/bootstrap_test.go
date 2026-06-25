@@ -174,6 +174,36 @@ func (s *stubStore) UpdateAmendmentState(id, state, appliedSpecHash string, appl
 }
 func (s *stubStore) DeleteAmendment(resourceID, name string) error { return nil }
 
+// Behavioral pipeline stubs
+func (s *stubStore) UpsertDesign(contextName, specHash, contractJSON string) error { return nil }
+func (s *stubStore) GetDesign(contextName string) (*store.Design, error)           { return nil, nil }
+func (s *stubStore) ListDesigns() ([]store.Design, error)                          { return nil, nil }
+func (s *stubStore) InsertTask(id, resourceID, contextName, specHash, description string) error {
+	return nil
+}
+func (s *stubStore) GetTask(id string) (*store.BehavioralTask, error)              { return nil, nil }
+func (s *stubStore) ListTasksByResource(resourceID string) ([]store.BehavioralTask, error) {
+	return nil, nil
+}
+func (s *stubStore) SetTaskState(id, state string) error { return nil }
+func (s *stubStore) InsertCheck(id, taskID, resourceID, behavior, checkJSON string) error {
+	return nil
+}
+func (s *stubStore) GetCheck(id string) (*store.BehavioralCheck, error)        { return nil, nil }
+func (s *stubStore) ListChecksByTask(taskID string) ([]store.BehavioralCheck, error) {
+	return nil, nil
+}
+func (s *stubStore) ListChecksByResource(resourceID string) ([]store.BehavioralCheck, error) {
+	return nil, nil
+}
+func (s *stubStore) SetCheckState(id, state string) error { return nil }
+func (s *stubStore) InsertVerification(id, checkID, resourceID, realObsJSON, stubObsJSON, reason string, passed, theater bool) error {
+	return nil
+}
+func (s *stubStore) ListVerificationsByCheck(checkID string) ([]store.Verification, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -138,6 +138,18 @@ func (f *fakeSpec) ListAmendments(ctx context.Context, resourceID, state string)
 func (f *fakeSpec) GraduateAmendment(ctx context.Context, resourceID, name string, apply bool) (*specmod.GraduationResult, error) {
 	return &specmod.GraduationResult{}, nil
 }
+func (f *fakeSpec) DesignCommit(ctx context.Context, contextName, contractJSON string) error {
+	return nil
+}
+func (f *fakeSpec) TasksCommit(ctx context.Context, resourceID string, tasks []specmod.TaskInput) error {
+	return nil
+}
+func (f *fakeSpec) Verify(ctx context.Context, checkID string, real, stub map[string]any) (specmod.VerifyResult, error) {
+	return specmod.VerifyResult{}, nil
+}
+func (f *fakeSpec) Graduate(ctx context.Context, checkID string) (specmod.GraduateResult, error) {
+	return specmod.GraduateResult{}, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers
