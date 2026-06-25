@@ -77,6 +77,15 @@ func evalPredicate(p Predicate, obs Observation) (bool, string) {
 			return false, fmt.Sprintf("%s: field %q is not numeric", p.Op, p.Field)
 		}
 		return cmpNumber(p.Op, n, p.Value)
+	case OpRange:
+		n, ok := asNumber(raw)
+		if !ok {
+			return false, fmt.Sprintf("range: field %q is not numeric", p.Field)
+		}
+		if n < p.Min || n > p.Max {
+			return false, fmt.Sprintf("range: %q=%v not in [%v,%v]", p.Field, n, p.Min, p.Max)
+		}
+		return true, ""
 	default:
 		return false, fmt.Sprintf("unknown op %q", p.Op)
 	}

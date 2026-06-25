@@ -45,3 +45,16 @@ func TestEvaluate_AggregatesAllPredicates(t *testing.T) {
 	assert.False(t, res.Passed)
 	assert.Len(t, res.Failures, 1)
 }
+
+func TestEvaluate_Range(t *testing.T) {
+	obs := Observation{"cutoff": 12000.0}
+	pass := Evaluate(Check{Predicates: []Predicate{
+		{Field: "cutoff", Op: OpRange, Min: 20, Max: 20000},
+	}}, obs)
+	assert.True(t, pass.Passed)
+
+	fail := Evaluate(Check{Predicates: []Predicate{
+		{Field: "cutoff", Op: OpRange, Min: 20, Max: 1000},
+	}}, obs)
+	assert.False(t, fail.Passed)
+}
