@@ -1,6 +1,7 @@
 package check
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,4 +118,22 @@ func TestVerify_FalsificationGate(t *testing.T) {
 	assert.False(t, theater.Passed)
 	assert.True(t, theater.Theater)
 	assert.Contains(t, theater.Reason, "teeth")
+}
+
+func TestEvaluate_FromJSON(t *testing.T) {
+	// Shape a witness would emit on stdout / in a file.
+	blob := []byte(`{"steals": 4, "zone_ids": ["a","b"], "meter": [0.1, 0.5, 0.9]}`)
+	var obs Observation
+	require.NoError(t, json.Unmarshal(blob, &obs))
+
+	c := Check{
+		Behavior: "stealing occurs, zones differ, meter rises",
+		Predicates: []Predicate{
+			{Field: "steals", Op: OpGt, Value: 0},
+			{Field: "zone_ids", Op: OpDiffer},
+			{Field: "meter", Op: OpMonotonic},
+		},
+	}
+	res := Evaluate(c, obs)
+	assert.True(t, res.Passed, "json-decoded observation must evaluate like a native one: %v", res.Failures)
 }
