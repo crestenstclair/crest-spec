@@ -97,6 +97,10 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/evolve", Description: "Build the reflection prompt from a session's failure history. Run the returned prompt with an LLM (sonnet), then submit the raw output to spec/record_learnings. Returns an empty prompt when there is nothing to learn from.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to reflect over"}},"required":["session_id"]}`)},
 		{Name: "spec/learnings", Description: "List craft-level learnings extracted by reflection. Filter by status (active, retired, promoted); defaults to active. Returns id, scope, text, confidence, status, and times_applied.", InputSchema: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","description":"Learning status filter (default: active)"}}}`)},
 		{Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.", InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`)},
+		{Name: "spec/design_commit", Description: "Commit a bounded-context design record.", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_name":{"type":"string"},"contract_json":{"type":"string"}},"required":["context_name","contract_json"]}`)},
+		{Name: "spec/tasks_commit", Description: "Commit behavioral tasks and checks for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"tasks":{"type":"array","items":{"type":"object"}}},"required":["resource_id","tasks"]}`)},
+		{Name: "spec/verify", Description: "Run falsification-gated verification for a check.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"},"real_observation":{"type":"object"},"stub_observation":{"type":"object"}},"required":["check_id","real_observation","stub_observation"]}`)},
+		{Name: "spec/graduate", Description: "Graduate a passed check to the graduated state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"]}`)},
 	}
 
 	for _, def := range stubs {
@@ -297,6 +301,26 @@ type specGraduateAmendmentArgs struct {
 	Apply      bool   `json:"apply"`
 }
 
+type specDesignCommitArgs struct {
+	ContextName  string `json:"context_name"`
+	ContractJSON string `json:"contract_json"`
+}
+
+type specTasksCommitArgs struct {
+	ResourceID string             `json:"resource_id"`
+	Tasks      []specmod.TaskInput `json:"tasks"`
+}
+
+type specVerifyArgs struct {
+	CheckID         string         `json:"check_id"`
+	RealObservation map[string]any `json:"real_observation"`
+	StubObservation map[string]any `json:"stub_observation"`
+}
+
+type specGraduateCheckArgs struct {
+	CheckID string `json:"check_id"`
+}
+
 // ---------------------------------------------------------------------------
 // registerSpecTools — compact registration table
 // ---------------------------------------------------------------------------
@@ -430,6 +454,39 @@ func (s *Server) registerSpecLifecycleTools() {
 			}
 		}
 		return out, nil
+	}))
+
+	// Behavioral pipeline tools
+	s.addTool(toolDef{
+		Name:        "spec/design_commit",
+		Description: "Commit a bounded-context design record. Upserts the contract for context_name.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"context_name":{"type":"string","description":"Bounded-context name"},"contract_json":{"type":"string","description":"JSON-encoded design contract"}},"required":["context_name","contract_json"]}`),
+	}, specToolErr("design_commit", map[string]bool{"committed": true}, func(ctx context.Context, a specDesignCommitArgs) error {
+		return s.spec.DesignCommit(ctx, a.ContextName, a.ContractJSON)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/tasks_commit",
+		Description: "Commit behavioral tasks and their falsification checks for a resource.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"tasks":{"type":"array","items":{"type":"object","properties":{"description":{"type":"string"},"checks":{"type":"array","items":{"type":"object","properties":{"behavior":{"type":"string"},"check":{"type":"object","properties":{"behavior":{"type":"string"},"predicates":{"type":"array","items":{"type":"object"}}}}}}}}}}},"required":["resource_id","tasks"]}`),
+	}, specToolErr("tasks_commit", map[string]bool{"committed": true}, func(ctx context.Context, a specTasksCommitArgs) error {
+		return s.spec.TasksCommit(ctx, a.ResourceID, a.Tasks)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/verify",
+		Description: "Run falsification-gated verification for a check. Requires real_observation and stub_observation. Fail-closed: theater (stub passes) and real-fail both reject.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string","description":"Check ID"},"real_observation":{"type":"object","description":"Measured values from the real system"},"stub_observation":{"type":"object","description":"Measured values from a no-op stub baseline"}},"required":["check_id","real_observation","stub_observation"]}`),
+	}, specTool("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
+		return s.spec.Verify(ctx, a.CheckID, a.RealObservation, a.StubObservation)
+	}))
+
+	s.addTool(toolDef{
+		Name:        "spec/graduate",
+		Description: "Graduate a passed check to the graduated state and return its structured claim for authoring into the spec. Only 'passed' checks can be graduated.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string","description":"Check ID to graduate"}},"required":["check_id"]}`),
+	}, specTool("graduate", func(ctx context.Context, a specGraduateCheckArgs) (any, error) {
+		return s.spec.Graduate(ctx, a.CheckID)
 	}))
 
 	s.addTool(toolDef{

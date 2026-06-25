@@ -109,6 +109,11 @@ type specHandler interface {
 	ApplyAmendments(ctx context.Context, resourceID string, proposals []specmod.ProposedAmendment, apply bool) (*specmod.AmendmentApplyResult, error)
 	ListAmendments(ctx context.Context, resourceID, state string) ([]storemod.Amendment, error)
 	GraduateAmendment(ctx context.Context, resourceID, name string, apply bool) (*specmod.GraduationResult, error)
+	// Behavioral pipeline
+	DesignCommit(ctx context.Context, contextName, contractJSON string) error
+	TasksCommit(ctx context.Context, resourceID string, tasks []specmod.TaskInput) error
+	Verify(ctx context.Context, checkID string, real, stub map[string]any) (specmod.VerifyResult, error)
+	Graduate(ctx context.Context, checkID string) (specmod.GraduateResult, error)
 }
 
 // ---------------------------------------------------------------------------
