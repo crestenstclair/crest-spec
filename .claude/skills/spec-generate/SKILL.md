@@ -27,8 +27,14 @@ One tasks agent per resource reads the context contract and decomposes it into
 resource-level tasks, each carrying one or more **behavioral checks**. A check
 is `{ behavior: string, predicates: [{ field, op, value/min/max/member }] }`
 using the predicate vocabulary (eq, gt, gte, lt, lte, range, count,
-distinct_count, differ, monotonic, set_contains). Tasks are committed via
+distinct_count, differ, monotonic, set_contains, equals). Tasks are committed via
 `spec/tasks_commit` into the `tasks` and `checks` tables.
+
+**Predicate typing rule** — each predicate's `field`/`op` MUST match the JSON type
+the witness will emit: numeric ops (eq, gt, gte, lt, lte, range) require a NUMBER
+field; `equals` is used for BOOLEAN, STRING, and ENUM fields (set `member` to the
+expected value — never use `eq` on a boolean or string); list ops (count,
+distinct_count, differ, set_contains) require a JSON ARRAY field.
 
 Tasks agents run in parallel across resources.
 
@@ -55,8 +61,14 @@ agent** per check (not the generator). The verifier:
    (theater = stub also passes → rejected as non-discriminating). It is also
    strict on the stub side — an empty or field-missing `stub_observation`, or a
    missing/malformed `CREST_OBS`/`CREST_STUB` witness line, is rejected as a
-   "malformed verification" (passed:false), never a skip.
+   "malformed verification" (passed:false), never a skip. Both CREST_OBS and
+   CREST_STUB must emit every predicate field with the correct JSON type (NUMBER
+   for numeric ops; JSON ARRAY for list ops; bool/string/number for `equals`).
 6. On pass: calls `spec/graduate` — state transitions to `graduated`
+7. CLEANUP: after capturing the two JSON lines the verifier deletes its witness
+   harness files and any compiled `crest_witness_*` binaries from /tmp so they
+   do not pollute the generated crate. Witness source is always written to /tmp
+   (never inside the project's src/ directory).
 
 **The workflow does NOT trust the verifier agent's self-report.** After the
 verifier agents run, the workflow reads the **authoritative engine state** from

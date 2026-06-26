@@ -173,7 +173,7 @@ Steps:
      "surfaces": [{"name": string, "kind": "func"|"method"|"type"|"endpoint", "signature": string}],
      "behaviors": [{
        "description": string,
-       "predicates": [{"field": string, "op": "eq"|"gt"|"gte"|"lt"|"lte"|"range"|"count"|"distinct_count"|"differ"|"monotonic"|"set_contains", "value"?: number, "min"?: number, "max"?: number, "member"?: any}]
+       "predicates": [{"field": string, "op": "eq"|"equals"|"gt"|"gte"|"lt"|"lte"|"range"|"count"|"distinct_count"|"differ"|"monotonic"|"set_contains", "value"?: number, "min"?: number, "max"?: number, "member"?: any}]
      }]
    }
    "field" is a quantity measurable by calling the surface (e.g. "return_value", "error", "item_count", "latency_ms").
@@ -204,7 +204,15 @@ Steps:
      }]
    }
    Field names must be quantities measurable from the resource's public interface.
-   Valid ops: eq, gt, gte, lt, lte, range, count, distinct_count, differ, monotonic, set_contains.
+   Valid ops: eq, equals, gt, gte, lt, lte, range, count, distinct_count, differ, monotonic, set_contains.
+
+TYPING RULES — the predicate field/op MUST match the JSON type the witness will measure:
+- Numeric ops (eq, gt, gte, lt, lte, range): field MUST be a NUMBER.
+- equals: use for BOOLEANS, STRINGS, and ENUM/variant fields (set "member" to the expected value). DO NOT use eq on booleans or strings — use equals.
+- count, distinct_count, differ, set_contains: field MUST be a JSON ARRAY/LIST. Never apply to a scalar.
+- monotonic: field MUST be a NUMBER (ordering/time-series check).
+Pick the field name and op so the witness can emit that field with the matching type. Prefer simple, directly measurable fields over derived or internal state.
+
 4. Call spec/tasks_commit with {resource_id: "${resourceId}", tasks: [...]}.
 5. Return: {resource_id: "${resourceId}", committed: true/false, task_count: N, check_count: N, error: "<if any>"}.`
 }
@@ -266,11 +274,13 @@ Steps:
    c. Print exactly one line: CREST_STUB:{"field1":value1,"field2":value2,...}
    The stub must genuinely fail the behavioral check — if the stub also passes, the check is theater (non-discriminating).
    IMPORTANT: CREST_STUB MUST contain the SAME predicate fields as CREST_OBS. spec/verify is strict and fail-closed: it REJECTS a verification whose stub_observation is empty or missing any predicate field (returns passed:false, reason contains "malformed verification"). A missing or malformed CREST_OBS / CREST_STUB line is a verification FAILURE, not a skip — never fabricate observations.
+   TYPING RULE: The CREST_OBS and CREST_STUB JSON MUST emit every predicate field with the type the predicate expects — a NUMBER for numeric ops (eq, gt, gte, lt, lte, range); a JSON ARRAY for list ops (count, distinct_count, differ, set_contains); a bool, string, or number for "equals". Both lines must use the same field names and compatible types — the engine rejects a stub missing any predicate field or emitting the wrong type.
 5. Run both programs and capture stdout. Extract the JSON from the CREST_OBS: and CREST_STUB: lines by stripping those prefixes and parsing the remainder. If either line is absent or unparseable, do NOT invent values — the behavior is unverified and the check must fail; report passed:false and stop (the workflow reconciles against engine state and will regenerate).
 6. Call spec/verify with {check_id: "${checkId}", real_observation: <parsed CREST_OBS object>, stub_observation: <parsed CREST_STUB object>}. You MUST call spec/verify for the check to count — a self-reported pass without a real spec/verify call is treated as a failure by the workflow.
 7. If spec/verify returns passed=true: call spec/graduate with {check_id: "${checkId}"}.
    If passed=false or theater=true: do NOT graduate.
-8. Return: {check_id: "${checkId}", passed: <bool>, theater: <bool, default false>, reason: "<from spec/verify>", graduated: <true only if spec/graduate was called and succeeded>}.`
+8. CLEANUP: Delete the witness harness directories and any compiled artifacts — remove /tmp/crest_witness_${checkId} and /tmp/crest_stub_${checkId} and any crest_witness_* binaries so they do not pollute the generated crate. Witness source files must NEVER be written inside the project's src/ directory — always use /tmp paths.
+9. Return: {check_id: "${checkId}", passed: <bool>, theater: <bool, default false>, reason: "<from spec/verify>", graduated: <true only if spec/graduate was called and succeeded>}.`
 }
 
 // ─── Phase 0: DESIGN ─────────────────────────────────────────────────────────
@@ -372,6 +382,14 @@ let lastWaveIndex = -1
 let stallCount = 0
 const MAX_STALLS = 2
 const MAX_STALLS_HARD = 5
+// spec_next serves resources concurrency-gated (often one at a time) and can
+// momentarily return zero while wave members are transiently locked/dispatched
+// — e.g. when resuming a session after an interrupted prior run. An empty serve
+// is NOT proof the session is drained (that case returns done=true). Re-poll a
+// bounded number of times before concluding the wave is genuinely empty, so a
+// transient gap can't terminate the loop with pending resources still unbuilt.
+let emptyPolls = 0
+const MAX_EMPTY_POLLS = 8
 
 while (true) {
   const wave = await agent(
@@ -380,7 +398,13 @@ while (true) {
   )
   if (!wave || wave.done) break
   const resources = (wave.resources || []).filter(Boolean)
-  if (resources.length === 0) break
+  if (resources.length === 0) {
+    emptyPolls++
+    if (emptyPolls > MAX_EMPTY_POLLS) break
+    log(`spec_next returned no resources (transient; poll ${emptyPolls}/${MAX_EMPTY_POLLS}) — re-polling`)
+    continue
+  }
+  emptyPolls = 0
 
   if (wave.wave_index === lastWaveIndex) {
     stallCount++
