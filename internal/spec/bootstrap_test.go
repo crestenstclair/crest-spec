@@ -203,6 +203,8 @@ func (s *stubStore) InsertVerification(id, checkID, resourceID, realObsJSON, stu
 func (s *stubStore) ListVerificationsByCheck(checkID string) ([]store.Verification, error) {
 	return nil, nil
 }
+func (s *stubStore) DeleteChecksByResource(resourceID string) error { return nil }
+func (s *stubStore) DeleteTasksByResource(resourceID string) error  { return nil }
 
 // ---------------------------------------------------------------------------
 // Tests

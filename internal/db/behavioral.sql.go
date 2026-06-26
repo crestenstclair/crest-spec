@@ -9,6 +9,24 @@ import (
 	"context"
 )
 
+const deleteChecksByResource = `-- name: DeleteChecksByResource :exec
+DELETE FROM checks WHERE resource_id = ?
+`
+
+func (q *Queries) DeleteChecksByResource(ctx context.Context, resourceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteChecksByResource, resourceID)
+	return err
+}
+
+const deleteTasksByResource = `-- name: DeleteTasksByResource :exec
+DELETE FROM tasks WHERE resource_id = ?
+`
+
+func (q *Queries) DeleteTasksByResource(ctx context.Context, resourceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTasksByResource, resourceID)
+	return err
+}
+
 const getCheck = `-- name: GetCheck :one
 SELECT id, task_id, resource_id, behavior, check_json, state, created_at, updated_at FROM checks WHERE id = ?
 `

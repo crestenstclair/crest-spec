@@ -88,6 +88,74 @@ func TestTasksCommit_RequiresResourceID(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTasksCommit_Idempotent(t *testing.T) {
+	s := newBehavioralSpec(t)
+
+	firstTasks := []TaskInput{
+		{
+			Description: "first task",
+			Checks: []CheckInput{
+				{
+					Behavior: "first check A",
+					Check: check.Check{
+						Behavior:   "first check A",
+						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+					},
+				},
+				{
+					Behavior: "first check B",
+					Check: check.Check{
+						Behavior:   "first check B",
+						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+					},
+				},
+			},
+		},
+	}
+
+	// First commit: 1 task, 2 checks
+	require.NoError(t, s.TasksCommit(context.Background(), "res-idem", firstTasks))
+
+	tasks, err := s.ListTasksByResource(context.Background(), "res-idem")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1, "first commit: expected 1 task")
+
+	checks, err := s.ListChecksByResource(context.Background(), "res-idem")
+	require.NoError(t, err)
+	require.Len(t, checks, 2, "first commit: expected 2 checks")
+
+	secondTasks := []TaskInput{
+		{
+			Description: "second task A",
+			Checks: []CheckInput{
+				{
+					Behavior: "second check A",
+					Check: check.Check{
+						Behavior:   "second check A",
+						Predicates: []check.Predicate{{Field: "rps", Op: check.OpGt, Value: 100}},
+					},
+				},
+			},
+		},
+		{
+			Description: "second task B",
+			Checks:      []CheckInput{},
+		},
+	}
+
+	// Second commit for SAME resource: 2 tasks, 1 check — must replace, not accumulate
+	require.NoError(t, s.TasksCommit(context.Background(), "res-idem", secondTasks))
+
+	tasks, err = s.ListTasksByResource(context.Background(), "res-idem")
+	require.NoError(t, err)
+	assert.Len(t, tasks, 2, "second commit: expected exactly 2 tasks (no accumulation)")
+
+	checks, err = s.ListChecksByResource(context.Background(), "res-idem")
+	require.NoError(t, err)
+	assert.Len(t, checks, 1, "second commit: expected exactly 1 check (no accumulation)")
+	assert.Equal(t, "second check A", checks[0].Behavior, "check must be from second commit")
+}
+
 // ---------------------------------------------------------------------------
 // Verify — fail-closed semantics
 // ---------------------------------------------------------------------------

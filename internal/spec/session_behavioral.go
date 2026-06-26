@@ -55,12 +55,22 @@ func (s *Spec) DesignCommit(ctx context.Context, contextName, contractJSON strin
 	return s.store.UpsertDesign(contextName, "", contractJSON)
 }
 
-// TasksCommit inserts a set of tasks and their associated behavioral checks
-// for the given resource. Existing tasks for the resource are NOT deleted —
-// each call appends new tasks. Task and check IDs are generated server-side.
+// TasksCommit replaces the set of tasks and their associated behavioral checks
+// for the given resource. Any prior tasks and checks for the resource are
+// deleted before the new ones are inserted, making repeated calls idempotent
+// (re-committing replaces, not appends). Task and check IDs are generated
+// server-side. Deletion order is checks first (they reference task_id), then
+// tasks. The delete + insert is sequential rather than transactional.
 func (s *Spec) TasksCommit(ctx context.Context, resourceID string, tasks []TaskInput) error {
 	if resourceID == "" {
 		return fmt.Errorf("resource_id is required")
+	}
+	// Delete existing checks first (FK dependency on task_id), then tasks.
+	if err := s.store.DeleteChecksByResource(resourceID); err != nil {
+		return fmt.Errorf("delete prior checks: %w", err)
+	}
+	if err := s.store.DeleteTasksByResource(resourceID); err != nil {
+		return fmt.Errorf("delete prior tasks: %w", err)
 	}
 	for _, t := range tasks {
 		taskID := uuid.New().String()

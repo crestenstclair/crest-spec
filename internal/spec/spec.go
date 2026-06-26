@@ -84,6 +84,8 @@ type specStore interface {
 	SetCheckState(id, state string) error
 	InsertVerification(id, checkID, resourceID, realObsJSON, stubObsJSON, reason string, passed, theater bool) error
 	ListVerificationsByCheck(checkID string) ([]store.Verification, error)
+	DeleteChecksByResource(resourceID string) error
+	DeleteTasksByResource(resourceID string) error
 }
 
 type Spec struct {

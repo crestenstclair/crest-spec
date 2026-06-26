@@ -47,3 +47,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListVerificationsByCheck :many
 SELECT * FROM verifications WHERE check_id = ? ORDER BY created_at ASC;
+
+-- name: DeleteChecksByResource :exec
+DELETE FROM checks WHERE resource_id = ?;
+
+-- name: DeleteTasksByResource :exec
+DELETE FROM tasks WHERE resource_id = ?;

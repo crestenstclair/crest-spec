@@ -255,6 +255,16 @@ func (s *Store) ListChecksByResource(resourceID string) ([]BehavioralCheck, erro
 	return out, nil
 }
 
+// DeleteChecksByResource deletes all checks for a resource.
+func (s *Store) DeleteChecksByResource(resourceID string) error {
+	return s.queries.DeleteChecksByResource(context.Background(), resourceID)
+}
+
+// DeleteTasksByResource deletes all tasks for a resource.
+func (s *Store) DeleteTasksByResource(resourceID string) error {
+	return s.queries.DeleteTasksByResource(context.Background(), resourceID)
+}
+
 // SetCheckState updates the state of a check.
 func (s *Store) SetCheckState(id, state string) error {
 	return s.queries.SetCheckState(context.Background(), db.SetCheckStateParams{
