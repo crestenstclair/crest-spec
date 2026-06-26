@@ -138,6 +138,48 @@ func TestEvaluate_FromJSON(t *testing.T) {
 	assert.True(t, res.Passed, "json-decoded observation must evaluate like a native one: %v", res.Failures)
 }
 
+func TestEvaluate_Equals(t *testing.T) {
+	obs := Observation{
+		"is_active":    true,
+		"return_value": "Ok",
+		"status":       200.0,
+	}
+
+	cases := []struct {
+		name string
+		pred Predicate
+		want bool
+	}{
+		{"bool true pass", Predicate{Field: "is_active", Op: OpEquals, Member: true}, true},
+		{"bool false fail", Predicate{Field: "is_active", Op: OpEquals, Member: false}, false},
+		{"string match pass", Predicate{Field: "return_value", Op: OpEquals, Member: "Ok"}, true},
+		{"string mismatch fail", Predicate{Field: "return_value", Op: OpEquals, Member: "Err"}, false},
+		{"numeric match pass", Predicate{Field: "status", Op: OpEquals, Member: 200.0}, true},
+		{"absent field fail", Predicate{Field: "missing", Op: OpEquals, Member: "x"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := Evaluate(Check{Predicates: []Predicate{c.pred}}, obs)
+			assert.Equal(t, c.want, res.Passed)
+			if !c.want {
+				require.NotEmpty(t, res.Failures, "a failing predicate must record a failure message")
+			}
+		})
+	}
+
+	// JSON-decoded case: bool and enum string from a JSON blob.
+	t.Run("json decoded bool and enum", func(t *testing.T) {
+		blob := []byte(`{"is_active": true, "code": "NoteOn"}`)
+		var jsonObs Observation
+		require.NoError(t, json.Unmarshal(blob, &jsonObs))
+		pass := Evaluate(Check{Predicates: []Predicate{
+			{Field: "is_active", Op: OpEquals, Member: true},
+			{Field: "code", Op: OpEquals, Member: "NoteOn"},
+		}}, jsonObs)
+		assert.True(t, pass.Passed, "json-decoded equals must work: %v", pass.Failures)
+	})
+}
+
 func TestEvaluate_TypeErrors(t *testing.T) {
 	obs := Observation{
 		"num":        3.0,

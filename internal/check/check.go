@@ -23,6 +23,7 @@ const (
 	OpDistinctCount Op = "distinct_count"
 	OpMonotonic     Op = "monotonic"
 	OpSetContains   Op = "set_contains"
+	OpEquals        Op = "equals"
 )
 
 // Predicate is one typed assertion over a named field of an Observation.
@@ -159,6 +160,20 @@ func evalPredicate(p Predicate, obs Observation) (bool, string) {
 			}
 		}
 		return false, fmt.Sprintf("set_contains: %q does not contain %v", p.Field, p.Member)
+	case OpEquals:
+		member := p.Member
+		nField, fieldIsNum := asNumber(raw)
+		nMember, memberIsNum := asNumber(member)
+		if fieldIsNum && memberIsNum {
+			if nField != nMember {
+				return false, fmt.Sprintf("equals: %q got %v, want %v", p.Field, raw, member)
+			}
+			return true, ""
+		}
+		if fmt.Sprintf("%v", raw) != fmt.Sprintf("%v", member) {
+			return false, fmt.Sprintf("equals: %q got %v, want %v", p.Field, raw, member)
+		}
+		return true, ""
 	default:
 		return false, fmt.Sprintf("unknown op %q", p.Op)
 	}
