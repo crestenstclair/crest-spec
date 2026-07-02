@@ -46,6 +46,36 @@ func TestBuildSystemPrompt_Minimal(t *testing.T) {
 	assert.NotContains(t, prompt, "# Avoid")
 }
 
+// The mission and the project-level architectural invariants are the context
+// every generator needs to make aligned decisions. They were previously
+// absent from the system prompt entirely (invariants only flowed out as a
+// separate list for self-judging; mission had no schema field at all).
+func TestBuildSystemPrompt_MissionAndInvariants(t *testing.T) {
+	project := &cuepkg.Project{
+		Name:    "crest-synth",
+		Mission: "A standalone, gamepad-friendly MIDI synthesizer with a hard real-time audio thread at its core.",
+		Meta:    cuepkg.Meta{Language: "rust"},
+		Invariants: cuepkg.FlexInvariants{
+			{Text: "the audio thread must never allocate heap memory",
+				Meta: cuepkg.Meta{Rationale: "the callback has a hard deadline"}},
+		},
+	}
+
+	prompt := BuildSystemPrompt(project)
+
+	assert.Contains(t, prompt, "# Project Mission")
+	assert.Contains(t, prompt, "gamepad-friendly MIDI synthesizer")
+	assert.Contains(t, prompt, "# Architectural Invariants")
+	assert.Contains(t, prompt, "the audio thread must never allocate heap memory")
+	assert.Contains(t, prompt, "the callback has a hard deadline")
+}
+
+func TestBuildSystemPrompt_NoMissionNoInvariantSections(t *testing.T) {
+	prompt := BuildSystemPrompt(&cuepkg.Project{Name: "minimal", Meta: cuepkg.Meta{}})
+	assert.NotContains(t, prompt, "# Project Mission")
+	assert.NotContains(t, prompt, "# Architectural Invariants")
+}
+
 func TestBuildSystemPrompt_RustLanguage(t *testing.T) {
 	project := &cuepkg.Project{
 		Name: "rust-project",

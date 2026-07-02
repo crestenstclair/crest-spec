@@ -12,8 +12,12 @@ type RuntimeContext struct {
 	DependencyFiles map[string]string
 	AgentNotes      map[string]string
 	Learnings       []string
-	WaveErrors      string
-	UserGuidance    string
+	// DesignContract is the observable contract committed for this resource's
+	// bounded context (spec/design_commit) — the behaviors the context must
+	// exhibit, which the generated code will be verified against.
+	DesignContract string
+	WaveErrors     string
+	UserGuidance   string
 	// ExistingFiles is the current committed implementation, keyed by path. When
 	// non-empty, the resource is regenerated in UPDATE mode (minimal diff).
 	ExistingFiles map[string]string
@@ -61,6 +65,10 @@ func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
 			b.WriteString(fmt.Sprintf("### %s\n\n%s\n\n", id, notes))
 		}
 		sections = append(sections, b.String())
+	}
+
+	if ctx.DesignContract != "" {
+		sections = append(sections, fmt.Sprintf("## Bounded-Context Design Contract\n\nThe observable contract this resource's bounded context must satisfy. Behavioral checks will verify the generated code against it.\n\n```json\n%s\n```\n", ctx.DesignContract))
 	}
 
 	if len(ctx.Learnings) > 0 {

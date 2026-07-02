@@ -29,6 +29,12 @@ func BuildSystemPrompt(project *cuepkg.Project) string {
 
 	b.WriteString(renderTemplate("role.md", lang, ext))
 	b.WriteString("\n")
+
+	if project.Mission != "" {
+		b.WriteString("# Project Mission\n\n")
+		b.WriteString(project.Mission + "\n\n")
+	}
+
 	b.WriteString(renderTemplate("output_format.md", lang, ext))
 	b.WriteString("\n")
 
@@ -59,6 +65,19 @@ func BuildSystemPrompt(project *cuepkg.Project) string {
 		b.WriteString("# Avoid\n\n")
 		for _, avoid := range project.Meta.Avoid {
 			b.WriteString("- " + avoid + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(project.Invariants) > 0 {
+		b.WriteString("# Architectural Invariants\n\n")
+		b.WriteString("Hard constraints on every resource in this project. Code that violates one is wrong even if it compiles and passes tests.\n\n")
+		for _, inv := range project.Invariants {
+			b.WriteString("- " + inv.Text)
+			if inv.Meta.Rationale != "" {
+				b.WriteString(" (why: " + inv.Meta.Rationale + ")")
+			}
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}

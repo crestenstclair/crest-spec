@@ -83,7 +83,11 @@ func (f *FlexContextMap) UnmarshalJSON(data []byte) error {
 }
 
 type Project struct {
-	Name        string               `json:"name"`
+	Name string `json:"name"`
+	// Mission is the project's why: what is being built, for whom, and the
+	// architectural intent. Injected into every generator's system prompt so
+	// leaf-level decisions are made against the whole, not in isolation.
+	Mission     string               `json:"mission,omitempty"`
 	Layers      []string             `json:"layers"`
 	LayerRules  map[string]LayerRule `json:"layerRules"`
 	Meta        Meta                 `json:"meta"`

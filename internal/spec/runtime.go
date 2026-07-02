@@ -60,6 +60,14 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 		}
 	}
 
+	// Inject the bounded context's committed design contract so the generator
+	// builds against the behaviors the code will be verified on.
+	if resource.ContextName != "" {
+		if d, err := s.store.GetDesign(resource.ContextName); err == nil && d != nil && d.ContractJSON != "" {
+			ctx.DesignContract = d.ContractJSON
+		}
+	}
+
 	// Inject craft-level learnings scoped to this language + resource kind.
 	const learningsInjectionCap = 10
 	lang := registry.Project.Meta.Language

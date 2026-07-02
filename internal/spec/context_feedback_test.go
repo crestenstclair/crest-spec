@@ -46,6 +46,21 @@ func TestContextInjectsOwnResolveGuidance(t *testing.T) {
 		"prompt must contain the resolve guidance verbatim")
 }
 
+func TestContextInjectsDesignContract(t *testing.T) {
+	s, st := newTestSpecWithSession(t)
+	ctx := context.Background()
+
+	contract := `{"behaviors":[{"description":"rejects out-of-range tones"}]}`
+	require.NoError(t, s.DesignCommit(ctx, "Audio", contract))
+
+	res, err := s.Context(ctx, st.sessionID, st.resourceID)
+	require.NoError(t, err)
+
+	require.Contains(t, res.Prompt, "## Bounded-Context Design Contract",
+		"the committed design contract for the resource's context must reach the generator")
+	require.Contains(t, res.Prompt, "rejects out-of-range tones")
+}
+
 func TestContextWithoutFailureHasNoErrorSection(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 
