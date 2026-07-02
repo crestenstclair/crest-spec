@@ -75,6 +75,17 @@ verifier agents run, the workflow reads the **authoritative engine state** from
 the `checks` table (`spec_sql`) and drives pass/fail off that:
 
 - `passed` / `graduated` → success
+- `malformed` → **QUARANTINE**, never regenerate. `spec/verify` sets this state
+  when a check's predicate is structurally invalid — a type mismatch (e.g. `eq`
+  against a string/bool field) or an unknown op — as opposed to `failed` (the
+  behavior simply isn't exhibited) or `theater` (non-discriminating). A
+  structurally broken check is the **check's fault, not the implementation's**:
+  no amount of regenerated code can ever satisfy a predicate that can't
+  type-check against the field it targets. The workflow does not call
+  `spec_resolve` for these — it never blocks the resource or counts as a
+  generation failure. Instead each malformed check is collected into a
+  `quarantined` list (`{resource_id, check_id, reason}`) for a human /
+  spec-author to fix the check definition itself.
 - `failed` / `theater` → failure → `spec_resolve` (regenerate)
 - `pending` / absent → failure → `spec_resolve` (regenerate). A check still
   pending after its verifier ran means the verifier crashed, timed out, returned
@@ -102,6 +113,9 @@ next `spec_next` call.
 6. spec_finish     — if reflection_prompt non-empty, run with sonnet → spec_record_learnings.
 7. Review graduated list — each entry is a confirmed behavioral check; use
    spec-authoring skill to author them back into the spec invariants.
+8. Review quarantined list — each entry is a check with a structurally invalid
+   predicate; it was never regenerated against, and needs a human/spec-author
+   fix to the check definition, not the resource code.
 ```
 
 Use `args.model` to override the generation model. Never haiku.
@@ -113,6 +127,7 @@ Use `args.model` to override the generation model. Never haiku.
   "waves_processed": N,
   "triaged": [...],
   "graduated": [{"resource_id": "...", "check_id": "...", "state": "graduated"}],
+  "quarantined": [{"resource_id": "...", "check_id": "...", "reason": "..."}],
   "behavioral_checks_total": N,
   "next_steps": "..."
 }
@@ -123,6 +138,10 @@ Use `args.model` to override the generation model. Never haiku.
 - Generator retries are bounded by maxRetries (default 3) inside the generator agent.
 - Behavioral check failures feed back via `spec_resolve` (same mechanism as
   compile failures) — the resource cycles into the next wave pass with failure context.
+- Malformed checks (structurally invalid predicate) are QUARANTINED, not fed
+  back via `spec_resolve` — they cannot converge through regeneration, so
+  looping them would stall the wave forever. They're reported for a human /
+  spec-author to fix instead.
 - The stall guard (MAX_STALLS=2, MAX_STALLS_HARD=5) terminates infinite cycles
   by force-skipping culprit resources.
 - If the whole workflow dies: `spec_status`/`spec_wave_status` show where it

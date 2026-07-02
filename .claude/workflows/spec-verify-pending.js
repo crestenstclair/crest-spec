@@ -61,6 +61,31 @@ const BREAKDOWN_SCHEMA = {
   required: ['states'],
 }
 
+// Authoritative per-check state read after verification, used only to detect
+// 'malformed' checks (structurally invalid predicate — quarantine, never
+// treated as a code defect). This workflow never regenerates on its own, so
+// there is no resolve/regenerate path to skip here; malformed checks are
+// simply pulled out and surfaced distinctly instead of being lumped in with
+// genuine failures.
+const RECONCILE_SCHEMA = {
+  type: 'object',
+  properties: {
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          check_id: { type: 'string' },
+          state: { type: 'string' },
+          reason: { type: 'string' },
+        },
+        required: ['check_id'],
+      },
+    },
+  },
+  required: ['checks'],
+}
+
 function verifierPrompt(resourceId, checkId, behavior, checkJson) {
   return `You are a crest-spec behavioral VERIFIER for check "${checkId}" on resource "${resourceId}" (session ${sessionId}).
 
@@ -129,7 +154,42 @@ Return: {"states": [{"state": string, "count": number}]}`,
   { label: 'final-breakdown', phase: 'Reconcile', schema: BREAKDOWN_SCHEMA }
 )
 
+// Pull out just-verified checks that landed in 'malformed' — a structurally
+// invalid predicate (type mismatch / unknown op) is the check's fault, not
+// the resource's. QUARANTINE: never fed back for regeneration (this workflow
+// has no resolve/regenerate path to begin with), just surfaced for a human /
+// spec-author to fix the check definition.
+const quarantined = []
+if (checks.length > 0) {
+  const checkIdList = checks.map(c => `'${String(c.check_id).replace(/'/g, "''")}'`).join(', ')
+  const reconcile = await agent(
+    `ToolSearch "select:mcp__crest-spec__spec_sql"
+Read the AUTHORITATIVE state of these behavioral checks from the engine. Report exactly what the rows say — do not infer, alter, or fill in missing rows.
+Call spec_sql with query:
+  SELECT c.id AS check_id, c.state AS state,
+    (SELECT v.reason FROM verifications v WHERE v.check_id = c.id ORDER BY v.created_at DESC LIMIT 1) AS reason
+  FROM checks c
+  WHERE c.id IN (${checkIdList})
+Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
+    { label: 'reconcile-malformed', phase: 'Reconcile', schema: RECONCILE_SCHEMA }
+  )
+  const byId = {}
+  for (const c of checks) byId[c.check_id] = c
+  for (const row of (reconcile?.checks || []).filter(Boolean)) {
+    if (row.state === 'malformed') {
+      const c = byId[row.check_id]
+      quarantined.push({
+        resource_id: c?.resource_id,
+        check_id: row.check_id,
+        reason: row.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op) against the field it targets',
+      })
+      log(`QUARANTINED check ${row.check_id} for ${c?.resource_id || '(unknown resource)'} — structurally malformed predicate, not a code defect; will NOT be regenerated: ${row.reason || ''}`)
+    }
+  }
+}
+
 return {
   pending_verified: checks.length,
   final_breakdown: breakdown?.states || [],
+  quarantined,
 }

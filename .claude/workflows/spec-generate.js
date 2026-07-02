@@ -366,6 +366,7 @@ if (Object.keys(designMap).length > 0) {
 
 const triaged = []
 const graduated = []
+const quarantined = []
 let waveCount = 0
 // Stall guard: 'rejected' is not a terminal state server-side, so if a wave's
 // post-verify keeps resetting resources to pending, spec_next would re-serve the
@@ -481,6 +482,14 @@ Return: {"checks": [{"check_id": string, "behavior": string, "check_json": strin
     // Reconcile against AUTHORITATIVE engine state (I2). Pass/fail is driven off
     // the checks table, never off the verifier agent's word:
     //   passed | graduated → success
+    //   malformed          → QUARANTINE, never regenerate. The check's predicate
+    //                        is structurally invalid (type mismatch against the
+    //                        field it targets, or an unknown op) — this is the
+    //                        check's fault, not the implementation's. Regenerating
+    //                        code can never make a structurally-broken predicate
+    //                        pass, so cycling it through spec_resolve would spin
+    //                        forever and block the wave. Collected for human/
+    //                        spec-author review instead.
     //   failed | theater   → failure (regenerate)
     //   pending | absent   → failure (regenerate) — the verifier never produced a
     //                        real fail-closed verification: it crashed, skipped
@@ -504,11 +513,17 @@ Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
 
     const passedChecks = []
     const failedChecks = []
+    const malformedChecks = []
     for (const c of checks) {
       const row = stateByCheck[c.check_id]
       const state = row?.state
       if (state === 'passed' || state === 'graduated') {
         passedChecks.push({ check_id: c.check_id, state })
+      } else if (state === 'malformed') {
+        // Structurally invalid predicate (type mismatch / unknown op) — the
+        // check itself is broken, not the implementation. Quarantine, do not
+        // regenerate.
+        malformedChecks.push({ check_id: c.check_id, reason: row?.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op) against the field it targets' })
       } else if (state === 'theater') {
         failedChecks.push({ check_id: c.check_id, theater: true, reason: row?.reason || 'theater: stub baseline also satisfied the check (non-discriminating predicate)' })
       } else if (state === 'failed') {
@@ -524,6 +539,13 @@ Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
         graduated.push({ resource_id: committed.resource_id, check_id: v.check_id, state: v.state })
       }
       log(`Wave ${wave.wave_index}: ${passedChecks.length}/${checks.length} behavioral check(s) verified via engine state for ${committed.resource_id}`)
+    }
+
+    if (malformedChecks.length > 0) {
+      for (const m of malformedChecks) {
+        quarantined.push({ resource_id: committed.resource_id, check_id: m.check_id, reason: m.reason })
+        log(`Wave ${wave.wave_index}: QUARANTINED check ${m.check_id} for ${committed.resource_id} — structurally malformed predicate, not a code defect; will NOT be regenerated: ${m.reason}`)
+      }
     }
 
     if (failedChecks.length > 0) {
@@ -585,6 +607,7 @@ return {
   waves_processed: waveCount,
   triaged,
   graduated,
+  quarantined,
   behavioral_checks_total: totalChecks,
-  next_steps: 'Call spec_finish (main session). If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit the output via spec_record_learnings. Review the "graduated" list — each entry is a behavioral check the engine confirmed; author the checks back into the spec invariants via the spec-authoring skill.',
+  next_steps: 'Call spec_finish (main session). If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit the output via spec_record_learnings. Review the "graduated" list — each entry is a behavioral check the engine confirmed; author the checks back into the spec invariants via the spec-authoring skill. Review the "quarantined" list — each entry is a check whose predicate is structurally invalid (type mismatch / unknown op); it was NEVER regenerated against and needs a human/spec-author to fix the check definition itself, not the resource code.',
 }
