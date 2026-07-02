@@ -378,6 +378,18 @@ func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*Cont
 	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
 
 	runtimeCtx, _ := s.buildRuntimeContext(resource, planResult.Registry, sess.ApplyID)
+
+	// Feed the retry loop: a rejected/errored attempt leaves its failure on the
+	// session resource, and spec/resolve leaves triage guidance as a note on the
+	// resource itself. Both MUST reach the next generation prompt — without
+	// them a retry is a blind re-roll of the attempt that already failed.
+	if sr != nil && sr.LastError != "" {
+		runtimeCtx.WaveErrors = sr.LastError
+	}
+	if guidance, err := s.store.GetNote(resourceID, sess.ApplyID); err == nil && guidance != "" {
+		runtimeCtx.UserGuidance = guidance
+	}
+
 	fullPrompt := promptpkg.InjectRuntimeContext(resourcePrompt, runtimeCtx)
 
 	var invariants []InvariantInfo

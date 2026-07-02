@@ -28,7 +28,7 @@ func TestInjectRuntimeContext_AllFields(t *testing.T) {
 	assert.Contains(t, result, "Used builder pattern for state")
 	assert.Contains(t, result, "Previous Errors")
 	assert.Contains(t, result, "cannot find value")
-	assert.Contains(t, result, "User Guidance")
+	assert.Contains(t, result, "## Guidance")
 	assert.Contains(t, result, "try_send")
 }
 
@@ -53,7 +53,7 @@ func TestInjectRuntimeContext_PartialFields(t *testing.T) {
 	assert.NotContains(t, result, "Existing Dependencies")
 	assert.NotContains(t, result, "Notes from Dependencies")
 	assert.NotContains(t, result, "Previous Errors")
-	assert.NotContains(t, result, "User Guidance")
+	assert.NotContains(t, result, "## Guidance")
 }
 
 func TestInjectRuntimeContext_Learnings(t *testing.T) {

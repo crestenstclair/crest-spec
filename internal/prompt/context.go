@@ -91,11 +91,11 @@ func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
 	}
 
 	if ctx.WaveErrors != "" {
-		sections = append(sections, fmt.Sprintf("## Previous Errors\n\nThe previous generation caused build errors. Fix these errors in your output.\n\n%s", ctx.WaveErrors))
+		sections = append(sections, fmt.Sprintf("## Previous Errors\n\nThe previous attempt was rejected with the failure below. Your output MUST address it — do not resubmit the same approach.\n\n%s", ctx.WaveErrors))
 	}
 
 	if ctx.UserGuidance != "" {
-		sections = append(sections, fmt.Sprintf("## User Guidance\n\n%s", ctx.UserGuidance))
+		sections = append(sections, fmt.Sprintf("## Guidance\n\nTriage guidance recorded for this resource. Follow it.\n\n%s", ctx.UserGuidance))
 	}
 
 	if len(sections) == 0 {
