@@ -462,6 +462,13 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		// Validation gate failed: amendments declaring a validation are FAILED.
 		s.store.UpdateGeneration(genID, "", "rejected", firstFailureMessage(rejected.Validations), 0, 0, 0, 0)
 		s.markAmendmentVerification(resourceID, resource, false)
+		// Iterate, don't regenerate: record the attempted files (they are on
+		// disk) so the next spec/context serves them in UPDATE mode with the
+		// failure alongside. The retry then FIXES the minor bug in place
+		// instead of rewriting the resource from scratch. Upsert only — a
+		// rejected UPDATE of an already-committed resource must not lose
+		// track of its other files.
+		s.recordAttemptFiles(resourceID, resource, files)
 		return rejected, nil
 	}
 
@@ -476,6 +483,37 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		Committed:   true,
 		Validations: validationResults,
 	}, nil
+}
+
+// recordAttemptFiles upserts the files of a rejected attempt into
+// generated_files. writeChangedFiles already put them on disk; recording them
+// lets buildRuntimeContext feed the attempt back as ExistingFiles (UPDATE
+// mode) so retries iterate on the previous code rather than starting over.
+func (s *Spec) recordAttemptFiles(resourceID string, resource cuepkg.Resource, files []CommitFile) {
+	// generated_files references resources(id): a never-committed resource
+	// needs a stub row first. Empty hashes keep the planner treating it as
+	// work-in-progress ("declaration changed"), never as settled.
+	if _, err := s.store.GetResource(resourceID); err != nil {
+		s.store.SetResource(store.Resource{
+			ID:          resourceID,
+			Kind:        resource.Kind,
+			ContextName: resource.ContextName,
+			Model:       s.cfg.GenerateModel,
+			SettledAt:   time.Now().UTC(),
+		})
+	}
+	for _, f := range files {
+		if f.Path == "" || f.Content == "" {
+			continue
+		}
+		s.store.SetGeneratedFile(store.GeneratedFile{
+			Path:        f.Path,
+			ResourceID:  resourceID,
+			ContentHash: fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content))),
+			Model:       s.cfg.GenerateModel,
+			CreatedAt:   time.Now().UTC(),
+		})
+	}
 }
 
 // firstFailureMessage returns the message of the first failed validation

@@ -61,6 +61,43 @@ func TestContextInjectsDesignContract(t *testing.T) {
 	require.Contains(t, res.Prompt, "rejects out-of-range tones")
 }
 
+// Iterate, don't regenerate: after a REJECTED commit, the next spec/context
+// must serve the previous attempt's files in UPDATE mode so the generator
+// fixes the minor bug in place instead of rewriting the resource from
+// scratch. (UPDATE mode previously activated only for successfully-committed
+// resources — a new resource's retry loop was blind to its own last attempt.)
+func TestContextServesRejectedAttemptForIteration(t *testing.T) {
+	const cueWithFailingValidation = `package crestsynth
+
+project: name: "rt"
+project: meta: language: "go"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	validations: [{kind: "custom", command: ["false"]}]
+}
+`
+	s, st := newTestSpecWithSessionCUE(t, cueWithFailingValidation)
+	ctx := context.Background()
+
+	outDir := t.TempDir()
+	attempt := "package out\n\nfunc Tone() float64 { return 44O.0 } // typo: letter O\n"
+	res, err := s.Commit(ctx, st.sessionID, st.resourceID,
+		[]CommitFile{{Path: outDir + "/tone.go", Content: attempt}}, "", "claude-sonnet-5")
+	require.NoError(t, err)
+	require.False(t, res.Committed, "the validation must reject this commit")
+
+	ctxRes, err := s.Context(ctx, st.sessionID, st.resourceID)
+	require.NoError(t, err)
+
+	require.Contains(t, ctxRes.Prompt, "UPDATE MODE",
+		"a retry after rejection must run in UPDATE mode — iterate on the attempt, not regenerate")
+	require.Contains(t, ctxRes.Prompt, "typo: letter O",
+		"the previous attempt's actual code must be in the retry prompt")
+	require.Contains(t, ctxRes.Prompt, "## Previous Errors",
+		"the failure must accompany the code so the fix is targeted")
+}
+
 func TestContextWithoutFailureHasNoErrorSection(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 

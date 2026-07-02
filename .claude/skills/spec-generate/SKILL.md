@@ -140,8 +140,10 @@ Use `args.model` to override the generation model. Never haiku.
 ## Failure handling
 
 - Generator retries are bounded by maxRetries (default 3) inside the generator
-  agent. `spec_context` injects the prior failure (`## Previous Errors`) and
-  any triage guidance (`## Guidance`) into every retry prompt.
+  agent. `spec_context` injects the prior failure (`## Previous Errors`), any
+  triage guidance (`## Guidance`), AND the previous attempt's files (UPDATE
+  mode) into every retry prompt — retries iterate on existing code with a
+  minimal fix; they never start over because of a minor bug.
 - Behavioral check failures feed back via `spec_resolve` (same mechanism as
   compile failures) — the resource cycles into the next wave pass with failure context.
 - Malformed checks (structurally invalid predicate) are RE-AUTHORED once via

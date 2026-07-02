@@ -169,7 +169,7 @@ crest-spec deliberately does **not**:
 - **Generate from prose.** Resources are declared in CUE with DDD structure (contexts, aggregates, value objects, ports…), not free-form feature descriptions.
 - **Pin a language or framework.** `meta.language` and the asset kinds in your spec decide the target; the engine is language-agnostic. The reference fixture (`fixtures/crest-synth`) targets Rust; the e2e spec targets Go.
 - **Judge correctness on your behalf.** It runs the mechanical validations *you* declare (compile/test/custom) and mechanically enforces the behavioral falsification gate (`spec/verify`: real witness passes, stub baseline fails). It never grades semantics itself — and neither does the generator: there are no self-judged verdicts anywhere in the loop.
-- **Edit code in place.** A changed declaration regenerates the whole resource body; crest-spec is not a refactoring or patch tool.
+- **Start from scratch when code exists.** Once a resource has code — a committed implementation or even a rejected attempt — regeneration runs in UPDATE mode: the existing files are served back with the failure or the changed requirement, and the generator makes the minimal edit. Iteration is the default; a blank-slate rewrite happens only for brand-new resources.
 
 ## Configuration
 

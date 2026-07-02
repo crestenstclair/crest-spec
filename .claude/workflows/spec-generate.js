@@ -230,8 +230,10 @@ Then run this loop (at most ${maxRetries + 1} attempts):
    exactly — it contains the mission, the resource declaration, dependencies,
    the bounded context's design contract, existing files (UPDATE mode), and —
    on retries — the sections "## Previous Errors" and "## Guidance".
-2. On a retry, address "## Previous Errors" FIRST: your new output must fix
-   that specific failure. Resubmitting the same approach wastes the attempt.
+2. On a retry the context serves your PREVIOUS ATTEMPT'S files in UPDATE
+   mode alongside "## Previous Errors". ITERATE: keep the working code and
+   make the minimal edit that fixes that specific failure — never rewrite
+   the resource from scratch over a minor bug.
 3. Author the files the prompt asks for (full file contents, correct paths
    relative to the project root). Honor every invariant as a hard constraint —
    verification is independent (behavioral checks), so a violation WILL be
