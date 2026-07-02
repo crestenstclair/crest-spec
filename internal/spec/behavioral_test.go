@@ -328,6 +328,60 @@ func TestVerify_PersistsVerification(t *testing.T) {
 	assert.True(t, verifications[0].Passed)
 }
 
+// TestVerify_StructuralPredicateMarkedMalformed asserts that a structurally
+// invalid predicate (eq on a non-numeric field with no member to compare
+// against) is classified as 'malformed', not 'failed' — regenerating the
+// implementation can never make this predicate pass, so it must be
+// quarantined rather than cycled through the verify→regenerate loop forever.
+func TestVerify_StructuralPredicateMarkedMalformed(t *testing.T) {
+	s := newBehavioralSpec(t)
+
+	c := check.Check{
+		Behavior:   "error field equals expected value",
+		Predicates: []check.Predicate{{Field: "error", Op: check.OpEq, Value: 0}},
+	}
+	checkID := commitTasksAndGetCheckID(t, s, c)
+
+	result, err := s.Verify(context.Background(), checkID,
+		map[string]any{"error": "boom"},
+		map[string]any{"error": "boom"},
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Passed)
+	assert.True(t, result.Malformed)
+	assert.Contains(t, result.Reason, "malformed check:")
+
+	bc, err := s.store.GetCheck(checkID)
+	require.NoError(t, err)
+	assert.Equal(t, "malformed", bc.State)
+}
+
+// TestVerify_StubMalformedStaysFailedNotMalformed asserts the pre-existing
+// stubMalformed guard (empty/incomplete stub) keeps rejecting into 'failed',
+// not the new 'malformed' state — that path is about a bad verification
+// call, not a structurally broken predicate.
+func TestVerify_StubMalformedStaysFailedNotMalformed(t *testing.T) {
+	s := newBehavioralSpec(t)
+
+	c := check.Check{
+		Behavior:   "latency under 200ms",
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+	}
+	checkID := commitTasksAndGetCheckID(t, s, c)
+
+	result, err := s.Verify(context.Background(), checkID,
+		map[string]any{"latency_ms": float64(50)},
+		map[string]any{},
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Passed)
+	assert.False(t, result.Malformed)
+
+	bc, err := s.store.GetCheck(checkID)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", bc.State)
+}
+
 // ---------------------------------------------------------------------------
 // Graduate
 // ---------------------------------------------------------------------------

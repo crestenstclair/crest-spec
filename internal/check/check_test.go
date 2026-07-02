@@ -180,6 +180,101 @@ func TestEvaluate_Equals(t *testing.T) {
 	})
 }
 
+func TestEvaluate_EqTypeTolerant(t *testing.T) {
+	obs := Observation{
+		"result": "Ok",
+		"active": true,
+		"count":  3.0,
+	}
+
+	// Numeric eq is unchanged.
+	res := Evaluate(Check{Predicates: []Predicate{{Field: "count", Op: OpEq, Value: 3}}}, obs)
+	assert.True(t, res.Passed)
+	assert.Empty(t, res.StructuralFailures)
+
+	// Non-numeric field WITH a Member falls back to equals-style comparison.
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Member: "Ok"}}}, obs)
+	assert.True(t, res.Passed, "eq on string field with matching member must pass")
+	assert.Empty(t, res.StructuralFailures)
+
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Member: "Err"}}}, obs)
+	assert.False(t, res.Passed, "eq on string field with mismatched member must fail")
+	require.NotEmpty(t, res.Failures)
+	assert.Empty(t, res.StructuralFailures, "a value mismatch is behavioral, not structural")
+
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "active", Op: OpEq, Member: true}}}, obs)
+	assert.True(t, res.Passed, "eq on bool field with matching member must pass")
+
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "active", Op: OpEq, Member: false}}}, obs)
+	assert.False(t, res.Passed, "eq on bool field with mismatched member must fail")
+	assert.Empty(t, res.StructuralFailures)
+
+	// Non-numeric field with NO Member cannot ever be compared: structural.
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: 0}}}, obs)
+	assert.False(t, res.Passed)
+	require.NotEmpty(t, res.Failures)
+	require.NotEmpty(t, res.StructuralFailures, "eq on non-numeric field with no member must be structural")
+	assert.Contains(t, res.StructuralFailures[0], "structural")
+}
+
+func TestEvaluate_StructuralClassification(t *testing.T) {
+	obs := Observation{
+		"num":        3.0,
+		"str":        "hello",
+		"list":       []any{1.0, 2.0, 3.0},
+		"mixed_list": []any{1.0, "x"},
+		"short_list": []any{1.0},
+	}
+
+	structuralCases := []Predicate{
+		{Field: "str", Op: OpGt, Value: 0},
+		{Field: "str", Op: OpRange, Min: 0, Max: 10},
+		{Field: "num", Op: OpCount, Value: 1},
+		{Field: "num", Op: OpDistinctCount, Value: 1},
+		{Field: "num", Op: OpDiffer},
+		{Field: "num", Op: OpMonotonic},
+		{Field: "mixed_list", Op: OpMonotonic},
+		{Field: "num", Op: OpSetContains, Member: 1.0},
+		{Field: "num", Op: Op("bogus")},
+		{Field: "str", Op: OpEq, Value: 0},
+	}
+	for _, p := range structuralCases {
+		t.Run(string(p.Op)+" structural", func(t *testing.T) {
+			res := Evaluate(Check{Predicates: []Predicate{p}}, obs)
+			assert.False(t, res.Passed)
+			assert.NotEmpty(t, res.StructuralFailures, "expected structural classification for %+v", p)
+		})
+	}
+
+	behavioralCases := []Predicate{
+		{Field: "short_list", Op: OpCount, Value: 5},
+		{Field: "list", Op: OpDistinctCount, Value: 99},
+	}
+	for _, p := range behavioralCases {
+		t.Run(string(p.Op)+" behavioral", func(t *testing.T) {
+			res := Evaluate(Check{Predicates: []Predicate{p}}, obs)
+			assert.False(t, res.Passed)
+			assert.Empty(t, res.StructuralFailures, "expected behavioral (non-structural) classification for %+v", p)
+		})
+	}
+}
+
+func TestVerify_StructuralVerdict(t *testing.T) {
+	c := Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: 0}}}
+	real := Observation{"result": "Ok"}
+	stub := Observation{"result": "Ok"}
+
+	v := Verify(c, real, stub)
+	assert.False(t, v.Passed)
+	assert.True(t, v.Structural, "eq on non-numeric field with no member must mark the verdict structural")
+}
+
+func TestVerify_NonStructuralVerdictUnaffected(t *testing.T) {
+	c := Check{Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: 0}}}
+	v := Verify(c, Observation{"steals": 0.0}, Observation{"steals": 0.0})
+	assert.False(t, v.Structural)
+}
+
 func TestEvaluate_TypeErrors(t *testing.T) {
 	obs := Observation{
 		"num":        3.0,

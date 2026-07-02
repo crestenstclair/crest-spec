@@ -29,9 +29,10 @@ type TaskInput struct {
 
 // VerifyResult is the outcome of running Verify on a single check.
 type VerifyResult struct {
-	Passed bool   `json:"passed"`
-	Theater bool   `json:"theater"`
-	Reason string `json:"reason"`
+	Passed    bool   `json:"passed"`
+	Theater   bool   `json:"theater"`
+	Malformed bool   `json:"malformed"`
+	Reason    string `json:"reason"`
 }
 
 // GraduateResult is the outcome of graduating a check: the structured claim
@@ -144,10 +145,20 @@ func (s *Spec) Verify(ctx context.Context, checkID string, real, stub map[string
 	}
 
 	// Transition check state (fail-closed: theater and real-fail both reject).
+	// A structural verdict (the predicate can never pass regardless of
+	// implementation — e.g. eq on a non-numeric field with no member) is
+	// quarantined as 'malformed' rather than 'failed', so the orchestrator
+	// does not cycle it through the verify->regenerate loop forever. The
+	// pre-existing stubMalformed guard above is unaffected: it sets
+	// verdict.Structural=false, so it still lands on 'failed'.
 	var newState string
+	reason := verdict.Reason
 	switch {
 	case verdict.Theater:
 		newState = "theater"
+	case verdict.Structural:
+		newState = "malformed"
+		reason = "malformed check: " + verdict.Reason
 	case !verdict.Passed:
 		newState = "failed"
 	default:
@@ -158,9 +169,10 @@ func (s *Spec) Verify(ctx context.Context, checkID string, real, stub map[string
 	}
 
 	return VerifyResult{
-		Passed:  verdict.Passed,
-		Theater: verdict.Theater,
-		Reason:  verdict.Reason,
+		Passed:    verdict.Passed,
+		Theater:   verdict.Theater,
+		Malformed: newState == "malformed",
+		Reason:    reason,
 	}, nil
 }
 
