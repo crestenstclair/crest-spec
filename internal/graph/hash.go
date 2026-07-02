@@ -2,7 +2,6 @@ package graph
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -32,7 +31,10 @@ func ComputeEffectiveHashes(
 			continue
 		}
 
-		declJSON, _ := json.Marshal(r.Declaration)
+		// Structural JSON only: guidance edits (prompts, descriptions) must
+		// not cascade regeneration through dependents. The planner's separate
+		// declaration hash still catches them for the edited resource itself.
+		declJSON := StructuralJSON(r.Declaration)
 
 		var depHashes []string
 		for _, e := range r.Dependencies {
