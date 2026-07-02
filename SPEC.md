@@ -6,7 +6,9 @@ crest-spec is a **declarative, domain-driven code generation system**. You descr
 
 The mental model is **Terraform for code generation**: you declare what your system *should* look like, the tool plans what needs to change, and then applies those changes — with dependency ordering, retry loops, and verification gates.
 
-**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, enforces orchestrator-supplied invariant verdicts, and records history. **It never calls an LLM and never spawns subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent pulls a scoped prompt + invariants from `spec/context`, authors files, judges each invariant, and submits the result to `spec/commit`. The core validation loop survives at that commit boundary (see §4 and §8).
+**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent pulls a scoped prompt (mission + declaration + design contract + invariants-as-constraints + any prior failure and guidance) from `spec/context`, authors files, and submits them to `spec/commit`. Verification is never self-judged: mechanical validations gate the commit, independent behavioral checks (`spec/verify`, falsification-gated) gate the wave, and `spec/finish` refuses to finalize while any check is unresolved.
+
+> **Gate-hardening revision (2026-07-02).** Following the verification-theater audit ("1617 invariant checks, zero failures"), orchestrator-supplied invariant verdicts (`invariant_checks` on `spec/commit`) were **removed** — any older text in this document describing generator-judged invariants is superseded. In the same revision: `spec/context` now injects the resource's own `last_error` and resolve guidance on retries; a validation that cannot launch rejects the commit (fail closed); `spec/finish` blocks on unresolved behavioral checks (pending/failed/theater/malformed) unless explicitly forced; the effective hash covers only the **structural** declaration (guidance fields — prompts, descriptions, notes — no longer cascade regeneration to dependents); `spec/plan` reports **drift** (generated files edited out-of-band); and `project.mission` plus project invariants and the bounded context's design contract are injected into generation prompts.
 
 > **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or subprocess; Claude Code is the orchestrator. Tombstones throughout this document mark the removed surfaces.
 
@@ -499,7 +501,7 @@ project: invariants: [
 ]
 ```
 
-Invariants are checked structurally at plan time, and against generated code at commit time by the **orchestrator's** verdict (`spec/commit`'s `invariant_checks`), which the server enforces but does not itself judge (§4). The `rationale` is injected into the `spec/context` prompt so the sub-agent judges against *why* the rule exists, not just the rule.
+Invariants are checked structurally at plan time and injected into every generation prompt (system prompt + `spec/context`'s `Invariants`) as hard constraints, `rationale` included, so the sub-agent builds against *why* the rule exists, not just the rule. Verification against generated code is independent: the behavioral pipeline's falsification-gated checks (§ gate-hardening revision), never a generator's own verdict.
 
 Since CUE unifies all files in the package, invariants declared in any file apply to the entire spec — no need to redeclare them.
 
@@ -628,10 +630,10 @@ sql/queries/    sqlc query definitions (source for internal/db)
 
 ### 2.2 How the Layers Connect
 
-There is no server-internal generation path. The connection between the spec engine and the LLM is the **prompt-out / verdict-in** contract across the MCP tool boundary (see §4):
+There is no server-internal generation path. The connection between the spec engine and the LLM is the **prompt-out / files-in** contract across the MCP tool boundary (see §4):
 
-- **Prompt out**: `spec/context` returns the system prompt, the scoped resource prompt, and the project invariants (each `{text, rationale}`) for a resource. The orchestrator hands those to a sub-agent it spawns itself.
-- **Files + verdict in**: `spec/commit` accepts the generated files, the model label, and the orchestrator's per-invariant verdicts (`invariant_checks`). The server writes the files, runs the resource's **mechanical** validations (compile / test / custom), and enforces the supplied invariant verdicts. Any failure rejects the commit and feeds the failure into the next `spec/context`.
+- **Prompt out**: `spec/context` returns the system prompt (mission, style, architectural invariants), the scoped resource prompt (declaration, dependencies, design contract, prior failure + guidance on retries), and the project invariants (each `{text, rationale}`, as constraints for the generator). The orchestrator hands those to a sub-agent it spawns itself.
+- **Files in**: `spec/commit` accepts the generated files and the model label. The server writes the files and runs the resource's **mechanical** validations (compile / test / custom). Any failure — including a validation that cannot launch — rejects the commit and feeds the failure into the next `spec/context`. There are no self-judged verdicts; behavior is verified independently via `spec/verify`.
 - **Reflection out / learnings in**: `spec/evolve` (and `spec/finish`, per `CREST_SPEC_EVOLVE`) returns a reflection prompt built from the session's failure history; the orchestrator runs it and submits the raw output to `spec/record_learnings`.
 
 ### 2.3 Dependency Injection / Interfaces
@@ -682,12 +684,12 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 
 > **Tombstone.** This section previously documented the `internal/agent` CLI wrapper and the `internal/engine` sub-agent dispatch layer (`Generate` / `Review` / `CodeReview` / `Bugbot`). Both packages were deleted in the native-workflow pivot. The server no longer generates code, runs reviews, or spawns processes. What follows is the contract that replaced them.
 
-The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **prompt-out / verdict-in**: the server emits prompts and ingests verdicts, but never judges generated content itself.
+The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **prompt-out / files-in**: the server emits prompts and validates results mechanically; nobody grades their own work.
 
 **The contract:**
 
-- **`spec/context` (prompt out)** — given `{session_id, resource_id}`, returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`). The prompt carries the resource declaration, dependency declarations, dependency notes, existing files (in UPDATE mode), and any prior commit failure for this resource. The orchestrator hands these to a sub-agent it spawns itself.
-- **`spec/commit` (files + verdicts in)** — given `{session_id, resource_id, files:[{path,content}], notes, model, invariant_checks:[{invariant, passed, summary}]}`, the server writes the changed files (per-file SHA256 skip), runs the resource's **mechanical** validations (`compiles` / `test` / `integration` / `custom`) plus any amendment validations, and enforces the supplied invariant verdicts. **Any failing validation or any `passed:false` invariant verdict rejects the commit** (`Committed:false`, state → rejected). The server records a `Generation` row labelled with `model` (or the configured `GenerateModel` if omitted) and the invariant verdicts as `invariant_checks` rows. It never re-judges an invariant — the orchestrator's verdict is authoritative.
+- **`spec/context` (prompt out)** — given `{session_id, resource_id}`, returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`, constraints for the generator). The system prompt carries the project mission, style, and architectural invariants. The resource prompt carries the declaration, dependency declarations, dependency notes, the bounded context's committed design contract, existing files (in UPDATE mode), and — on retries — the resource's own last failure (`## Previous Errors`) and any resolve guidance (`## Guidance`). The orchestrator hands these to a sub-agent it spawns itself.
+- **`spec/commit` (files in)** — given `{session_id, resource_id, files:[{path,content}], notes, model}`, the server writes the changed files (per-file SHA256 skip) and runs the resource's **mechanical** validations (`compiles` / `test` / `integration` / `custom`) plus any amendment validations. **Any failing validation rejects the commit** (`Committed:false`, state → rejected) — and a validation that cannot launch is a failed validation, not a skipped gate. The server records a `Generation` row labelled with `model` (or the configured `GenerateModel` if omitted). Semantic/behavioral verification is not part of the commit: it belongs to the behavioral pipeline (`spec/design_commit` → `spec/tasks_commit` → `spec/verify` → `spec/graduate`), whose falsification gate (real witness passes AND stub baseline fails) is enforced server-side, and whose unresolved checks block `spec/finish`.
 - **`spec/evolve` (reflection out)** — given `{session_id}`, returns `{reflection_prompt}` built from the session's failure history (empty when there is nothing to learn). The orchestrator runs the prompt with a sub-agent.
 - **`spec/record_learnings` (learnings in)** — given `{session_id, output}` (the raw reflection output), persists the distilled learnings and returns `{learnings_added}`.
 - **`spec/finish`** — finalizes the session and, when `CREST_SPEC_EVOLVE` is `finish`/`all`, also returns a `reflection_prompt` so reflection can run without a separate `spec/evolve` call.
@@ -753,7 +755,7 @@ The apply phase is driven by Claude Code through the spec-generate skill/workflo
 
 1. **`spec/begin`** runs the planner, acquires the SQLite session lock, computes dependency waves, and returns `{session_id, plan, waves, PendingDestroys}`.
 2. **`spec/confirm_destroys`** (when `PendingDestroys` is non-empty) deletes files and state for removed resources — only for the resource IDs the operator confirms.
-3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → author files → judge invariants → `spec/commit`. The server writes files (per-file SHA256 skip — files whose content already matches on disk are not rewritten), runs the resource's mechanical validations, enforces the invariant verdicts, and records everything in SQLite. On rejection the sub-agent re-pulls `spec/context` (now carrying the failure) and retries, up to `MaxRetries`.
+3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → author files → `spec/commit`. The server writes files (per-file SHA256 skip — files whose content already matches on disk are not rewritten), runs the resource's mechanical validations (fail-closed: a validation that cannot launch is a failure), and records everything in SQLite. On rejection the sub-agent re-pulls `spec/context` (now carrying the failure and any guidance) and retries, up to `MaxRetries`.
 4. Persistent failures are triaged with `spec/resolve` or `spec/skip`; the wave advances when every resource is committed, skipped, or terminally rejected.
 5. **`spec/finish`** releases the lock and returns the session summary (and a `reflection_prompt` when `EVOLVE` is `finish`/`all`).
 
@@ -936,14 +938,14 @@ Single `Store` struct exposes all operations:
 |         Orchestrator (per wave, resources in parallel)      |
 |  For each resource in the wave -> one sub-agent:            |
 |    1. spec/context  -> SystemPrompt + Prompt + Invariants   |
+|       (mission, design contract, prior failure + guidance)  |
 |    2. author files (sub-agent, full file contents)         |
-|    3. judge each invariant -> {invariant, passed, summary}  |
-|    4. spec/commit  -> files + model + invariant_checks      |
+|    3. spec/commit  -> files + model                         |
 +-------------+-----------------------------------------------+
               | spec/commit (server side)
               v
 +-------------------------------------------------------------+
-|         Commit Gate (server — mechanical + verdicts)        |
+|         Commit Gate (server — mechanical, fail-closed)      |
 |    write changed files (per-file SHA256 skip)              |
 |    run resource validations:                               |
 |      compiles / test / integration / custom                |
@@ -985,9 +987,9 @@ The validation loop is the core of crest-spec's reliability, and it lives at `sp
 
    If a resource declares no `validations`, this step falls back to the global `TypeCheckCommand` / `TestCommand` from config (if configured). Amendment validations (§8A) run here too.
 
-4. **Invariant Verdicts (server enforces, does not judge)**: The server does **not** check invariants against the code — it has no LLM. It enforces the `invariant_checks` the orchestrator supplied: any verdict with `passed:false` rejects the commit. The verdicts are recorded as `invariant_checks` rows (prompt-out / verdict-in). Each invariant's `text` and `meta.rationale` were already in the `spec/context` prompt, so the sub-agent judged against both the rule and why it exists.
+4. **No self-judged verdicts.** Generator-supplied invariant verdicts were removed in the 2026-07-02 gate-hardening revision — the recorded history showed 1,617 self-judged checks with zero failures, i.e. pure theater. Invariants still reach the generator (system prompt + `Invariants` on `spec/context`) as constraints; verification is independent: the behavioral pipeline's falsification-gated `spec/verify`, whose unresolved checks block `spec/finish`. The historical `invariant_checks` table is retained read-only.
 
-**Outcome.** If every validation passes and no invariant verdict is false, the commit succeeds (`Committed:true`), the resource is persisted, the `Generation` row is marked `success` (labelled with the supplied `model`), and amendment validations are marked `VERIFIED`. Otherwise the commit is rejected (`Committed:false`, state → `rejected`), the `Generation` row is marked `rejected` with the first failure message, amendment validations are marked `FAILED`, and the failure is stored so the next `spec/context` for this resource includes it.
+**Outcome.** If every validation passes, the commit succeeds (`Committed:true`), the resource is persisted, the `Generation` row is marked `success` (labelled with the supplied `model`), and amendment validations are marked `VERIFIED`. Otherwise — including when a validation command cannot launch — the commit is rejected (`Committed:false`, state → `rejected`), the `Generation` row is marked `rejected` with the first failure message, amendment validations are marked `FAILED`, and the failure is stored so the next `spec/context` for this resource includes it under `## Previous Errors`.
 
 **On retry**, the regenerated `spec/context` prompt carries:
 - The original resource prompt (full requirements from the DSL)
@@ -1097,7 +1099,7 @@ Resolution (from any failure state):
 | `pending` | In the plan, awaiting (re)generation. `spec/next` serves pending resources; `spec/resolve`/`spec/amend` reset a failed resource back here. |
 | `completed` | `spec/commit` wrote files; validation in progress (transient). |
 | `committed` | Files passed the commit gate and were recorded in state DB (terminal). |
-| `rejected` | The commit gate failed (validation or a `passed:false` invariant verdict). The failure is stored for the next `spec/context`. **Not terminal** — the workflow retries, then triages. |
+| `rejected` | The commit gate failed (a mechanical validation failed or could not launch). The failure is stored and injected into the next `spec/context`. **Not terminal** — the workflow retries, then triages. |
 | `errored` | Generation failed before a clean commit (e.g., the sub-agent could not produce parseable files). |
 | `blocked` / `timed_out` | Legacy failure states retained in the enum; the native workflow folds these into the rejected/errored retry+triage path. |
 | `skipped` | Explicitly skipped (operator, triage agent, or stall guard); wave proceeds without it (terminal). |
@@ -1389,7 +1391,7 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/context` | Get the scoped generation prompt for a resource. Returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`), including any prior commit failure. |
 | `spec/validate-resource` | Run invariant checks and optional type check/tests against files on disk for a specific resource. |
 | `spec/note` | Save a design decision note for a resource. Notes are injected into downstream prompts. |
-| `spec/commit` | Commit a resource: writes `files`, runs the resource's mechanical validations + amendment validations, and enforces the supplied `invariant_checks` verdicts. Any failure rejects the commit. Records a `Generation` labelled with `model`. See §4, §8.2. |
+| `spec/commit` | Commit a resource: writes `files`, then runs the resource's mechanical validations + amendment validations. Any failure — including a validation that cannot launch — rejects the commit. No self-judged verdicts. Records a `Generation` labelled with `model`. See §4, §8.2. |
 | `spec/resolve` | Provide guidance for a failed resource; resets it to `pending` so the next wave pass regenerates with the guidance injected. See §8.6. |
 | `spec/amend` | Signal that the CUE spec has been updated for a resource. Re-loads spec, re-computes hashes, updates the plan, resets for regeneration. See §8.6. |
 | `spec/skip` | Skip a failed resource. Transitions to `skipped` (terminal); wave proceeds without it. See §8.6. |
@@ -1440,8 +1442,8 @@ Tool calls are handled synchronously in `handleToolCall`: dispatch to the tool's
 The protocol the orchestrator follows is delivered three ways, all consistent: the `initialize` response `instructions`, the `about` tool, and the `orchestrator_instructions` MCP prompt. In summary:
 
 - **You are the orchestrator, not the server.** The server runs no LLM; you spawn the sub-agents.
-- For each resource: call `spec/context` to get `SystemPrompt` + `Prompt` + `Invariants`, generate with a sub-agent (sonnet, never haiku), judge each invariant, and call `spec/commit` with `files` + `model` + `invariant_checks`.
-- On `Committed=false`, call `spec/context` again (it now includes the failure) and retry up to `MaxRetries`, then `spec/resolve` or `spec/skip`.
+- For each resource: call `spec/context` to get `SystemPrompt` + `Prompt` + `Invariants` (constraints, not a grading sheet), generate with a sub-agent (sonnet, never haiku), and call `spec/commit` with `files` + `model`.
+- On `Committed=false`, call `spec/context` again (it now carries the failure under `## Previous Errors` and any triage guidance under `## Guidance`) and retry up to `MaxRetries`, then `spec/resolve` or `spec/skip` (skip only for a provably contradictory spec).
 - Resources within a wave run in parallel (the spec-generate workflow's `parallel(...)`); waves are sequential.
 - Never write generated-resource code in the orchestrator's own context — every file comes from a sub-agent via `spec/commit`.
 

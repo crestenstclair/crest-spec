@@ -10,7 +10,7 @@ You write the *declaration*; crest-spec coordinates the *fill*. State lives in S
 
 ## The declare → fill loop
 
-A value object in the `Kernel` bounded context, declared in CUE (`fixtures/crest-synth/phases/phase-2.cue`):
+A value object in the `Kernel` bounded context, declared in CUE (`fixtures/crest-synth/spec/kernel.cue`):
 
 ```cue
 project: contexts: Kernel: valueObjects: Frequency: {
@@ -63,7 +63,7 @@ The invariant `"must be positive"` in the spec becomes the `value <= 0.0` guard 
 
 crest-spec runs as an **MCP server that is a pure spec state engine**. It plans, tracks resource state in SQLite, runs mechanical validations (compile / test / custom) at commit time, and records history. It never calls an LLM and never spawns subprocesses.
 
-Claude Code is the orchestrator. It runs the bundled `spec-generate` skill/workflow, which spawns one sub-agent per resource per wave to generate files, judge each invariant, and commit through the server's validation gate. The server is the quality gate; Claude does the writing.
+Claude Code is the orchestrator. It runs the bundled `spec-generate` skill/workflow, which spawns one sub-agent per resource per wave to generate files and commit through the server's validation gate. The server is the quality gate; Claude does the writing — and never grades its own work: mechanical validations gate the commit, independent falsification-gated behavioral checks gate the wave, and `spec/finish` refuses to seal a session while any check is unresolved.
 
 ## Prerequisites
 
@@ -135,11 +135,11 @@ A plan/apply lifecycle: the **server** plans and checks; **Claude Code** fills.
 
 1. **Declare** — Write your domain as CUE in the spec directory: contexts, aggregates, value objects, domain/application services, repositories, ports, adapters, and assets. Each is a *resource*.
 2. **Coordinate** (`spec/plan`, `spec/begin`) — The server diffs the CUE spec against SQLite state by declaration hash, computes a dependency graph, and returns an execution plan ordered into waves, plus any pending destroys for removed resources.
-3. **Fill** (`spec/next` → `spec/context` → `spec/commit`) — For each resource in a wave, a sub-agent fetches a scoped prompt plus the resource's invariants from `spec/context`, authors the files, judges each invariant against what it wrote, and commits.
-4. **Check** — On `spec/commit` the server writes the files, runs the resource's mechanical validations, and enforces the invariant verdicts. Any failure rejects the commit; the failure detail is folded into the next `spec/context` and the resource is regenerated, up to `CREST_SPEC_MAX_RETRIES`. Persistent failures are triaged with `spec/resolve` or `spec/skip`.
-5. **Finish** (`spec/finish`) — Waves run until none remain, then the session is sealed. Optionally a reflection pass distils learnings via `spec/evolve` / `spec/record_learnings`.
+3. **Fill** (`spec/next` → `spec/context` → `spec/commit`) — For each resource in a wave, a sub-agent fetches a scoped prompt from `spec/context` — the project mission, the declaration, its bounded context's design contract, the invariants to honor, and (on retries) the previous failure and any triage guidance — authors the files, and commits.
+4. **Check** — On `spec/commit` the server writes the files and runs the resource's mechanical validations, fail-closed (a validation that cannot launch is a failure). Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`: a real witness must pass AND a degenerate stub must fail). Any failure rejects/regenerates with the detail folded into the next `spec/context`, up to `CREST_SPEC_MAX_RETRIES`. Persistent failures are triaged with `spec/resolve`, or `spec/skip` when the spec itself is provably contradictory.
+5. **Finish** (`spec/finish`) — Waves run until none remain. Finish refuses while behavioral checks are unresolved (`force` is an explicit override). Optionally a reflection pass distils learnings via `spec/evolve` / `spec/record_learnings`.
 
-Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec drift, not wall-clock.
+Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec drift, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. `spec/plan` also reports generated files edited out-of-band (drift) — visible, never silently absorbed.
 
 ![High-level flow: CUE spec files load into an in-memory resource registry, diff against SQLite state to produce a plan of waves, the orchestrator's sub-agents generate each resource, and the server's commit gate validates — passes are persisted, failures fold back into the next context and regenerate](docs/images/constraint-loop-flow.svg)
 
@@ -168,7 +168,7 @@ crest-spec deliberately does **not**:
 - **Call an LLM or spawn subprocesses.** The server is a state engine. All generation is driven by Claude Code's own sub-agents — there are no `run_prompt` / `code_review` / `dispatch` tools, and no `spec/apply` / `spec/run_wave`.
 - **Generate from prose.** Resources are declared in CUE with DDD structure (contexts, aggregates, value objects, ports…), not free-form feature descriptions.
 - **Pin a language or framework.** `meta.language` and the asset kinds in your spec decide the target; the engine is language-agnostic. The reference fixture (`fixtures/crest-synth`) targets Rust; the e2e spec targets Go.
-- **Judge correctness on your behalf.** It runs the mechanical validations *you* declare on each resource (compile/test/custom). Semantic review is the sub-agent's invariant judgement plus your own review before committing.
+- **Judge correctness on your behalf.** It runs the mechanical validations *you* declare (compile/test/custom) and mechanically enforces the behavioral falsification gate (`spec/verify`: real witness passes, stub baseline fails). It never grades semantics itself — and neither does the generator: there are no self-judged verdicts anywhere in the loop.
 - **Edit code in place.** A changed declaration regenerates the whole resource body; crest-spec is not a refactoring or patch tool.
 
 ## Configuration
