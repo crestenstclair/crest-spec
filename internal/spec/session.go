@@ -72,10 +72,27 @@ type CommitResult struct {
 }
 
 type FinishResult struct {
-	Committed        int
-	Skipped          int
-	Errored          int
-	ReflectionPrompt string `json:"reflection_prompt,omitempty"`
+	Committed int
+	Skipped   int
+	Errored   int
+	// Blocked is set when the session cannot finalize because behavioral
+	// checks are unresolved. The session stays open; BlockingChecks lists
+	// what must be resolved. force=true is the only override, and it is an
+	// explicit, human-visible decision — there is no quiet path past the gate.
+	Blocked          bool            `json:"blocked,omitempty"`
+	BlockingChecks   []BlockingCheck `json:"blocking_checks,omitempty"`
+	ReflectionPrompt string          `json:"reflection_prompt,omitempty"`
+}
+
+// BlockingCheck is a behavioral check that prevents spec/finish from
+// finalizing. State semantics: pending = never verified, failed/theater =
+// verified and rejected (regenerate the resource), malformed = the check
+// itself is structurally broken (re-run the tasks stage to re-author it).
+type BlockingCheck struct {
+	CheckID    string `json:"check_id"`
+	ResourceID string `json:"resource_id"`
+	Behavior   string `json:"behavior"`
+	State      string `json:"state"`
 }
 
 func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) {
@@ -641,6 +658,26 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 		}
 	}
 
+	// Behavioral gate: the session does not finalize while any of its
+	// resources carry unresolved checks. Everything that is not proven
+	// (passed/graduated) blocks — including 'malformed', which means the
+	// check itself needs re-authoring, not that it may be waved through.
+	if !force {
+		blocking, err := s.unresolvedChecks(allResources)
+		if err != nil {
+			return nil, fmt.Errorf("finish gate: %w", err)
+		}
+		if len(blocking) > 0 {
+			return &FinishResult{
+				Committed:      committed,
+				Skipped:        skipped,
+				Errored:        errored,
+				Blocked:        true,
+				BlockingChecks: blocking,
+			}, nil
+		}
+	}
+
 	status := "completed"
 	if errored > 0 {
 		status = "failed"
@@ -665,6 +702,32 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 		Errored:          errored,
 		ReflectionPrompt: reflectionPrompt,
 	}, nil
+}
+
+// unresolvedChecks returns every behavioral check attached to the given
+// session resources that is not in a proven state. Errors fail closed: if the
+// checks cannot be listed, finish is refused rather than waved through.
+func (s *Spec) unresolvedChecks(resources []store.SessionResource) ([]BlockingCheck, error) {
+	var blocking []BlockingCheck
+	for _, r := range resources {
+		checks, err := s.store.ListChecksByResource(r.ResourceID)
+		if err != nil {
+			return nil, fmt.Errorf("list checks for %s: %w", r.ResourceID, err)
+		}
+		for _, c := range checks {
+			switch c.State {
+			case "passed", "graduated":
+			default:
+				blocking = append(blocking, BlockingCheck{
+					CheckID:    c.ID,
+					ResourceID: c.ResourceID,
+					Behavior:   c.Behavior,
+					State:      c.State,
+				})
+			}
+		}
+	}
+	return blocking, nil
 }
 
 type WaveVerifyResult struct {
