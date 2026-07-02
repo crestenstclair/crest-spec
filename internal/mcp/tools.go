@@ -654,7 +654,10 @@ func (s *Server) handleSpecPlan(ctx context.Context, _ json.RawMessage) toolResu
 	if err != nil {
 		return errorResult(fmt.Sprintf("plan: %v", err))
 	}
-	return jsonResult(result.Actions)
+	return jsonResult(map[string]any{
+		"actions": result.Actions,
+		"drift":   result.Drift,
+	})
 }
 
 func (s *Server) handleSpecValidate(ctx context.Context, _ json.RawMessage) toolResult {
