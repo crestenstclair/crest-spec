@@ -211,7 +211,7 @@ make fmt          # go fmt ./...
 make lint         # golangci-lint run
 ```
 
-See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth` for the reference spec. Its `spec/` directory is the whole-picture design (domain-grouped, one file per bounded context); `phases/phase-1/` through `phases/phase-10/` are complete, standalone snapshots of the same design as it evolves (per `DESIGN.md`) — point `CREST_SPEC_SPEC_DIR` at any phase to build that stage, then at the next one and the planner regenerates exactly the delta. `phases/phase-10` always equals `spec/` (enforced by test; regenerate with `scripts/build-phases.py`).
+See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth` for the reference spec. Its `spec/` directory is the whole-picture design (domain-grouped, one file per bounded context); `phases/phase-1/` through `phases/phase-11/` are the original phased spec hydrated into standalone directories — each holds `base.cue`, the cumulative phase files, and the resolved winning overrides for that stage. Point `CREST_SPEC_SPEC_DIR` at any phase to replay that stage of the evolving design, then at the next one and the planner regenerates exactly the delta.
 
 ## Status
 

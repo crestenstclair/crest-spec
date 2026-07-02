@@ -29,15 +29,17 @@ unified together (`load.Instances`, `Dir: specDir`). So:
 - Co-locate an **adapter** with the context whose port it implements, and a
   **demo/binary asset** with the domain it exercises.
 
-**Phases are snapshot directories, not overlay files.** The evolving design is
-tracked as `phases/phase-N/` subdirectories, each a COMPLETE, standalone,
-copy-paste-able spec (point `CREST_SPEC_SPEC_DIR` at any one of them to build
-that stage; move it to the next phase and the planner diffs the evolution).
-The whole-picture `spec/` directory is the authoritative current design and
-must equal the highest phase. The OLD form — single `phase-N.cue` files
-unified with `override-*.cue` patches in one directory — stays dead: a phase
-is a full spec, never a diff. Within any one directory each asset has exactly
-one declaration.
+**Phases are hydrated snapshot directories.** The iterative design history
+lives in `phases/phase-N/` subdirectories: each holds the original phased
+spec RESOLVED for that stage — `base.cue`, the cumulative `phase-1..N.cue`
+files, and the single winning `override-<Asset>.cue` per asset (no
+override-number resolution left to do in your head). Every directory is
+standalone and copy-paste-able: point `CREST_SPEC_SPEC_DIR` at any phase to
+build that stage; move it to the next and the planner regenerates the delta.
+The whole-picture `spec/` directory is the current domain-grouped design.
+When authoring NEW work, work in `spec/` (or the current project's domain
+files) — a new phase snapshot is a directory holding the complete spec of
+that stage, never a loose overlay file dropped next to other phases.
 
 ## The CUE shape
 

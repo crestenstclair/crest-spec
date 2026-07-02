@@ -49,48 +49,27 @@ func TestFixtureLoadsAndResolves(t *testing.T) {
 	require.NoError(t, err, "every cross-reference in the fixture must resolve")
 }
 
-// TestPhasesLoadAndResolve: each phases/phase-N/ directory is a COMPLETE,
-// standalone snapshot of the evolving design. Every one must load as a CUE
-// package and resolve every cross-reference — a phase you cannot point the
-// engine at is not a phase.
+// TestPhasesLoadAndResolve: phases/phase-N/ are the ORIGINAL phased spec,
+// hydrated — each directory holds base.cue + the cumulative phase files +
+// the winning override per asset, resolved (what the retired
+// assemblePhaseDir helper used to build in a temp dir). Every directory is
+// standalone: it must load as one CUE package and resolve every
+// cross-reference, so any phase can be pointed at directly with
+// CREST_SPEC_SPEC_DIR to replay that stage of the design.
 func TestPhasesLoadAndResolve(t *testing.T) {
 	base := filepath.Join(fixtureSpecDir(), "..", "phases")
 	if _, err := os.Stat(base); err != nil {
 		t.Skipf("phases fixture not present: %v", err)
 	}
-	for n := 1; n <= 10; n++ {
-		t.Run(filepath.Base(fmt.Sprintf("phase-%d", n)), func(t *testing.T) {
+	for n := 1; n <= 11; n++ {
+		t.Run(fmt.Sprintf("phase-%d", n), func(t *testing.T) {
 			dir := filepath.Join(base, fmt.Sprintf("phase-%d", n))
 			proj, err := Load(dir)
 			require.NoError(t, err, "phase %d must load standalone", n)
 			require.Equal(t, "crest-synth", proj.Name)
-			require.NotEmpty(t, proj.Mission)
 			_, err = NewRegistry(proj)
 			require.NoError(t, err, "phase %d cross-references must resolve", n)
 		})
-	}
-}
-
-// TestPhaseTenMatchesSpec: the highest phase IS the whole-picture spec. Any
-// divergence means the snapshots have drifted from the authoritative design —
-// re-run scripts/build-phases.py after editing spec/.
-func TestPhaseTenMatchesSpec(t *testing.T) {
-	specDir := fixtureSpecDir()
-	phaseDir := filepath.Join(specDir, "..", "phases", "phase-10")
-	if _, err := os.Stat(phaseDir); err != nil {
-		t.Skipf("phases fixture not present: %v", err)
-	}
-	entries, err := os.ReadDir(specDir)
-	require.NoError(t, err)
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".cue") {
-			continue
-		}
-		want, err := os.ReadFile(filepath.Join(specDir, e.Name()))
-		require.NoError(t, err)
-		got, err := os.ReadFile(filepath.Join(phaseDir, e.Name()))
-		require.NoError(t, err, "phase-10 must contain %s", e.Name())
-		require.Equal(t, string(want), string(got), "phase-10/%s must equal spec/%s", e.Name(), e.Name())
 	}
 }
 
