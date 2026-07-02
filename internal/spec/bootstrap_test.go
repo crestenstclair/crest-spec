@@ -139,7 +139,6 @@ func (s *stubStore) UpdateSessionResourceState(sessionID, resourceID, state, las
 	return nil
 }
 func (s *stubStore) GetGeneration(id string) (*store.Generation, error) { return nil, nil }
-func (s *stubStore) RecordInvariantCheck(ic store.InvariantCheck) error { return nil }
 func (s *stubStore) ListInvariantChecks(applyID string) ([]store.InvariantCheck, error) {
 	return nil, nil
 }

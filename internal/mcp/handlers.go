@@ -43,16 +43,16 @@ group by domain; never hand-write target code). To RUN generation, use the
 4. spec/next            → next wave of resources (dependency order)
 5. For each resource in the wave (parallelize across the wave):
    a. spec/context      → scoped prompt + system_prompt + project invariants
+                          (constraints for the generator to honor)
    b. Generate with a sub-agent (sonnet) using that prompt
-   c. Judge each returned invariant against the generated files (pass/fail + summary)
-   d. spec/commit       → files + notes + model + invariant_checks
+   c. spec/commit       → files + notes + model
                           The server writes files and runs the resource's
                           mechanical validations (compile/test/custom).
-                          A failed validation or a failed invariant verdict
-                          rejects the commit.
-   e. If Committed=false: call spec/context again (it now includes the
-      failure), regenerate, re-commit — up to max_retries. Then
-      spec/resolve (guidance) or spec/skip.
+                          Any failure — including a validation that cannot
+                          run — rejects the commit.
+   d. If Committed=false: call spec/context again (it now carries the failure
+      and any triage guidance), regenerate, re-commit — up to max_retries.
+      Then spec/resolve (guidance) or spec/skip.
 6. Repeat from step 4 until spec/next returns done=true
 7. spec/finish          → finalize; if reflection_prompt is non-empty, run it
                           with a sub-agent and submit via spec/record_learnings
@@ -260,7 +260,7 @@ func (s *Server) handlePromptsGet(ctx context.Context, id any, params json.RawMe
 		}}
 
 	case "orchestrator_instructions":
-		instructions := "You are the orchestrator. For each resource: spec/context → generate with a sub-agent (sonnet) → judge the returned invariants → spec/commit with files + invariant_checks. On Committed=false, re-call spec/context (it includes the failure) and retry."
+		instructions := "You are the orchestrator. For each resource: spec/context → generate with a sub-agent (sonnet) → spec/commit with files. The server's mechanical validations gate the commit; behavioral checks (spec/verify) gate the wave. On Committed=false, re-call spec/context (it now carries the failure and any triage guidance) and retry."
 		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"messages": []map[string]string{{"role": "user", "content": instructions}},
 		}}

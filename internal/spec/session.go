@@ -53,20 +53,12 @@ type ContextResult struct {
 	Invariants   []InvariantInfo
 }
 
-// InvariantInfo is a project invariant surfaced to the orchestrator so it can
-// judge the generated files against it and supply a verdict at commit.
+// InvariantInfo is a project invariant surfaced to the generator as a
+// constraint to honor. Enforcement is NOT self-judged: mechanical validations
+// gate the commit, and behavioral checks (spec/verify) gate the wave/finish.
 type InvariantInfo struct {
 	Text      string `json:"text"`
 	Rationale string `json:"rationale,omitempty"`
-}
-
-// InvariantCheckInput is an orchestrator-supplied verdict for one project
-// invariant, judged against the files being committed. The server records and
-// enforces it; the LLM judgment happens outside the server.
-type InvariantCheckInput struct {
-	Invariant string `json:"invariant"`
-	Passed    bool   `json:"passed"`
-	Summary   string `json:"summary"`
 }
 
 type CommitFile struct {
@@ -405,7 +397,7 @@ func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*Cont
 	}, nil
 }
 
-func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string, invariantChecks []InvariantCheckInput, model string) (*CommitResult, error) {
+func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string, model string) (*CommitResult, error) {
 	sess, err := s.store.GetSession(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
@@ -448,7 +440,7 @@ func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files [
 		ID: genID, ApplyID: sess.ApplyID, ResourceID: resourceID, Model: model,
 	})
 
-	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, planResult, invariantChecks, currentAttempts)
+	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, currentAttempts)
 	if rejected != nil {
 		// Validation gate failed: amendments declaring a validation are FAILED.
 		s.store.UpdateGeneration(genID, "", "rejected", firstFailureMessage(rejected.Validations), 0, 0, 0, 0)
@@ -526,8 +518,6 @@ func (s *Spec) runCommitValidations(
 	sess *store.Session,
 	sessionID, resourceID string,
 	resource cuepkg.Resource,
-	planResult *PlanResult,
-	invariantChecks []InvariantCheckInput,
 	attempts int,
 ) ([]ValidationResult, *CommitResult) {
 	var validationResults []ValidationResult
@@ -552,39 +542,7 @@ func (s *Spec) runCommitValidations(
 		}
 	}
 
-	if len(invariantChecks) > 0 {
-		invariantResults := s.ingestInvariantChecks(sess.ApplyID, resourceID, invariantChecks)
-		if rejection := s.checkForFailure(invariantResults, sess.ApplyID, sessionID, resourceID, "invariant", attempts); rejection != nil {
-			rejection.Validations = append(validationResults, invariantResults...)
-			return nil, rejection
-		}
-		validationResults = append(validationResults, invariantResults...)
-	}
-
 	return validationResults, nil
-}
-
-// ingestInvariantChecks converts orchestrator-supplied verdicts into
-// ValidationResults and persists them for the audit trail / reflection.
-func (s *Spec) ingestInvariantChecks(applyID, resourceID string, checks []InvariantCheckInput) []ValidationResult {
-	results := make([]ValidationResult, 0, len(checks))
-	for _, c := range checks {
-		s.store.RecordInvariantCheck(store.InvariantCheck{
-			ID:         uuid.NewString(),
-			ApplyID:    applyID,
-			ResourceID: resourceID,
-			CheckType:  c.Invariant,
-			Passed:     c.Passed,
-			Output:     c.Summary,
-			CreatedAt:  time.Now().UTC(),
-		})
-		r := ValidationResult{Kind: "invariant", Passed: c.Passed}
-		if !c.Passed {
-			r.Message = fmt.Sprintf("Invariant violated: %s\n%s", c.Invariant, c.Summary)
-		}
-		results = append(results, r)
-	}
-	return results
 }
 
 func (s *Spec) checkForFailure(results []ValidationResult, applyID, sessionID, resourceID, actionKind string, attempts int) *CommitResult {
@@ -948,15 +906,16 @@ Default generation model: sonnet.
 4. spec/next            → next wave of resources (dependency order)
 5. For each resource in the wave (parallelize across the wave):
    a. spec/context      → scoped prompt + system_prompt + project invariants
+                          (constraints to honor, not to self-grade)
    b. Generate with a sub-agent (sonnet) using that prompt
-   c. Judge each returned invariant against the generated files (pass/fail + summary)
-   d. spec/commit       → files + notes + model + invariant_checks
+   c. spec/commit       → files + notes + model
                           The server writes files and runs the resource's
                           mechanical validations (compile/test/custom).
-                          A failed validation or a failed invariant verdict
-                          rejects the commit.
-   e. If Committed=false: call spec/context again (it now includes the
-      failure), regenerate, re-commit — up to max_retries. Then
+                          Any failure — including a validation that cannot
+                          run — rejects the commit.
+   d. If Committed=false: call spec/context again (it now carries the
+      failure under '## Previous Errors' and any triage guidance under
+      '## Guidance'), regenerate, re-commit — up to max_retries. Then
       spec/resolve (guidance) or spec/skip.
 6. Repeat from step 4 until spec/next returns done=true
 7. spec/finish          → finalize; if reflection_prompt is non-empty, run it
@@ -978,11 +937,12 @@ func dispatchInstructions(resourceID string) string {
 	return fmt.Sprintf(`Generate code for %s with a sub-agent (sonnet by default).
 
 1. Give the sub-agent the system_prompt and prompt from this result.
-2. The sub-agent produces the files (path + full content).
-3. Judge each invariant in this result against the files (passed + summary).
-4. Call spec/commit with session_id, resource_id, files, model, and
-   invariant_checks. The server runs mechanical validations and rejects on
-   any failure.
-5. If Committed=false, call spec/context again — the failure context is
-   injected into the new prompt — and retry (respect max_retries).`, resourceID)
+2. The sub-agent produces the files (path + full content), honoring the
+   invariants in this result as hard constraints.
+3. Call spec/commit with session_id, resource_id, files, model. The server
+   runs mechanical validations and rejects on any failure. Verification of
+   behavior belongs to behavioral checks (spec/verify), not self-judgment.
+4. If Committed=false, call spec/context again — the failure and any triage
+   guidance are injected into the new prompt — and retry (respect
+   max_retries).`, resourceID)
 }

@@ -28,12 +28,11 @@ import (
 // tools. Methods return zero values unless a test needs otherwise; the Commit
 // method captures its arguments so tests can assert forwarding.
 type fakeSpec struct {
-	lastFiles           []specmod.CommitFile
-	lastNotes           string
-	lastModel           string
-	lastInvariantChecks []specmod.InvariantCheckInput
-	lastVerifySession   string
-	lastVerifyWave      int
+	lastFiles         []specmod.CommitFile
+	lastNotes         string
+	lastModel         string
+	lastVerifySession string
+	lastVerifyWave    int
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -51,11 +50,10 @@ func (f *fakeSpec) Next(ctx context.Context, sessionID string) (*specmod.NextRes
 func (f *fakeSpec) Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error) {
 	return &specmod.ContextResult{}, nil
 }
-func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, invariantChecks []specmod.InvariantCheckInput, model string) (*specmod.CommitResult, error) {
+func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error) {
 	f.lastFiles = files
 	f.lastNotes = notes
 	f.lastModel = model
-	f.lastInvariantChecks = invariantChecks
 	return &specmod.CommitResult{}, nil
 }
 func (f *fakeSpec) Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error) {
@@ -259,14 +257,11 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	}
 }
 
-func TestCommitToolForwardsInvariantChecks(t *testing.T) {
+func TestCommitToolForwardsArgs(t *testing.T) {
 	fake := &fakeSpec{}
 	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
-	args := json.RawMessage(`{"session_id":"s","resource_id":"r","files":[{"path":"a.go","content":"x"}],"model":"claude-sonnet-4-6","invariant_checks":[{"invariant":"no globals","passed":false,"summary":"global var"}]}`)
+	args := json.RawMessage(`{"session_id":"s","resource_id":"r","files":[{"path":"a.go","content":"x"}],"model":"claude-sonnet-4-6"}`)
 	srv.toolFns["spec/commit"](context.Background(), args)
-	if len(fake.lastInvariantChecks) != 1 || fake.lastInvariantChecks[0].Passed {
-		t.Fatal("invariant_checks not forwarded to spec.Commit")
-	}
 	assert.Equal(t, "claude-sonnet-4-6", fake.lastModel)
 	require.Len(t, fake.lastFiles, 1)
 	assert.Equal(t, "a.go", fake.lastFiles[0].Path)

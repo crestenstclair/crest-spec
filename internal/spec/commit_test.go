@@ -12,8 +12,8 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
-// commitTestSpecCUE declares one value object with no resource-level validation,
-// so the only thing that can gate a commit is a supplied invariant verdict.
+// commitTestSpecCUE declares one value object with no resource-level
+// validation, so a commit against it exercises the no-gate path.
 const commitTestSpecCUE = `package crestsynth
 
 project: name: "rt"
@@ -77,7 +77,7 @@ project: contexts: Audio: valueObjects: Tone: {
 	s, st := newTestSpecWithSessionCUE(t, cueWithBrokenValidation)
 	res, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
-		nil, "claude-sonnet-4-6")
+		"claude-sonnet-4-6")
 	require.NoError(t, err)
 	require.False(t, res.Committed,
 		"a validation that cannot run must reject the commit (fail closed), not skip the gate")
@@ -86,51 +86,10 @@ project: contexts: Audio: valueObjects: Tone: {
 	require.Contains(t, res.Validations[0].Message, "could not run")
 }
 
-func TestCommitRejectsOnFailedInvariantVerdict(t *testing.T) {
-	s, st := newTestSpecWithSession(t)
-	res, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
-		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
-		[]InvariantCheckInput{{Invariant: "no global state", Passed: false, Summary: "uses a package-level var"}},
-		"claude-sonnet-4-6")
-	if err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if res.Committed {
-		t.Fatal("commit should be rejected when a supplied invariant verdict failed")
-	}
-	found := false
-	for _, v := range res.Validations {
-		if v.Kind == "invariant" && !v.Passed {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expected a failed invariant ValidationResult")
-	}
-}
-
-func TestCommitRecordsInvariantVerdict(t *testing.T) {
-	s, st := newTestSpecWithSession(t)
-	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
-		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
-		[]InvariantCheckInput{{Invariant: "no global state", Passed: true, Summary: "clean"}},
-		"claude-sonnet-4-6")
-	if err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	sess, err := s.store.GetSession(st.sessionID)
-	require.NoError(t, err)
-	checks, err := s.store.ListInvariantChecks(sess.ApplyID)
-	require.NoError(t, err)
-	if len(checks) == 0 {
-		t.Fatal("expected the supplied invariant verdict to be recorded")
-	}
-}
-
 func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
-		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", nil, "claude-sonnet-4-6")
+		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -145,10 +104,19 @@ func TestCommitRecordsGenerationOutcome(t *testing.T) {
 }
 
 func TestCommitRejectedGenerationOutcomeRoundTrips(t *testing.T) {
-	s, st := newTestSpecWithSession(t)
+	const cueWithFailingValidation = `package crestsynth
+
+project: name: "rt"
+project: meta: language: "go"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	validations: [{kind: "custom", command: ["false"]}]
+}
+`
+	s, st := newTestSpecWithSessionCUE(t, cueWithFailingValidation)
 	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
-		[]InvariantCheckInput{{Invariant: "no global state", Passed: false, Summary: "global var"}},
 		"claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("commit: %v", err)

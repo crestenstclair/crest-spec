@@ -67,7 +67,7 @@ func commitResource(t *testing.T, s *Spec, sessionID, resourceID string) {
 	t.Helper()
 	_, err := s.Commit(context.Background(), sessionID, resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "out.go"), Content: "package out\n"}},
-		"", nil, "claude-sonnet-4-6")
+		"", "claude-sonnet-4-6")
 	require.NoError(t, err)
 }
 

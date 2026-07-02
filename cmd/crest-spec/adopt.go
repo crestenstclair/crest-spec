@@ -71,7 +71,7 @@ func cmdAdopt() {
 			}
 			attempted[r.ResourceID] = true
 			progressed = true
-			res, err := sp.Commit(ctx, begin.SessionID, r.ResourceID, nil, "adopted from existing on-disk code", nil, "")
+			res, err := sp.Commit(ctx, begin.SessionID, r.ResourceID, nil, "adopted from existing on-disk code", "")
 			switch {
 			case err != nil:
 				fmt.Printf("  ERROR    %s: %v\n", r.ResourceID, err)

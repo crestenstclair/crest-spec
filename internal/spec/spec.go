@@ -53,7 +53,6 @@ type specStore interface {
 	UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error
 	SetSessionResourceDispatched(sessionID, resourceID string) error
 	GetGeneration(id string) (*store.Generation, error)
-	RecordInvariantCheck(ic store.InvariantCheck) error
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)
 	ReadOnlyQuery(query string) ([]map[string]interface{}, error)

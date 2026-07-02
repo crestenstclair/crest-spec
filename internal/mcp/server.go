@@ -78,7 +78,7 @@ type specHandler interface {
 	ConfirmDestroys(ctx context.Context, sessionID string, resourceIDs []string) ([]specmod.DestroyedResource, error)
 	Next(ctx context.Context, sessionID string) (*specmod.NextResult, error)
 	Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error)
-	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, invariantChecks []specmod.InvariantCheckInput, model string) (*specmod.CommitResult, error)
+	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
 	Note(ctx context.Context, sessionID, resourceID, content string) error

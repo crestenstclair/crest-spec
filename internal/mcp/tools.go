@@ -69,7 +69,7 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/context", Description: "Step 3: Get the generation prompt for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`)},
 		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
-		{Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files, runs the resource's mechanical validations, and enforces the supplied invariant verdicts — any failure rejects the commit. Pass invariant_checks judged against the invariants returned by spec/context.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"},"invariant_checks":{"type":"array","description":"Orchestrator-judged verdicts for the project invariants returned by spec/context. A failed verdict rejects the commit.","items":{"type":"object","properties":{"invariant":{"type":"string"},"passed":{"type":"boolean"},"summary":{"type":"string"}},"required":["invariant","passed"]}}},"required":["session_id","resource_id"]}`)},
+		{Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files and runs the resource's mechanical validations — any failure, including a validation that cannot run, rejects the commit. There are no self-judged verdicts: behavioral verification happens via spec/verify.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"}},"required":["session_id","resource_id"]}`)},
 		{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`)},
 		{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/skip", Description: "Skip a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
@@ -206,9 +206,8 @@ type specCommitArgs struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"files"`
-	Notes           string                        `json:"notes"`
-	Model           string                        `json:"model"`
-	InvariantChecks []specmod.InvariantCheckInput `json:"invariant_checks"`
+	Notes string `json:"notes"`
+	Model string `json:"model"`
 }
 
 type specResolveArgs struct {
@@ -380,8 +379,8 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files, runs the resource's mechanical validations, and enforces the supplied invariant verdicts — any failure rejects the commit. Pass invariant_checks judged against the invariants returned by spec/context.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"},"invariant_checks":{"type":"array","description":"Orchestrator-judged verdicts for the project invariants returned by spec/context. A failed verdict rejects the commit.","items":{"type":"object","properties":{"invariant":{"type":"string"},"passed":{"type":"boolean"},"summary":{"type":"string"}},"required":["invariant","passed"]}}},"required":["session_id","resource_id"]}`),
+		Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files and runs the resource's mechanical validations — any failure, including a validation that cannot run, rejects the commit. There are no self-judged verdicts: behavioral verification happens via spec/verify.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"}},"required":["session_id","resource_id"]}`),
 	}, s.handleSpecCommit)
 
 	s.addTool(toolDef{
@@ -673,7 +672,7 @@ func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage) too
 	for i, f := range p.Files {
 		files[i] = specmod.CommitFile{Path: f.Path, Content: f.Content}
 	}
-	result, err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes, p.InvariantChecks, p.Model)
+	result, err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes, p.Model)
 	if err != nil {
 		return errorResult(fmt.Sprintf("commit: %v", err))
 	}
