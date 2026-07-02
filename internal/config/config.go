@@ -11,7 +11,7 @@ import (
 type Config struct {
 	HTTPAddr string `envconfig:"HTTP_ADDR"`
 
-	GenerateModel    string `envconfig:"GENERATE_MODEL" default:"claude-sonnet-4-6"`
+	GenerateModel    string `envconfig:"GENERATE_MODEL" default:"claude-sonnet-5"`
 	MaxRetries       int    `envconfig:"MAX_RETRIES" default:"3"`
 	WaveMaxRetries   int    `envconfig:"WAVE_MAX_RETRIES" default:"2"`
 	SpecDir          string `envconfig:"SPEC_DIR" default:"./spec"`

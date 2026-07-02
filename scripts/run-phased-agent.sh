@@ -55,7 +55,7 @@ cat > "$WORK_DIR/.mcp.json" <<EOF
       "command": "$REPO_ROOT/bin/crest-spec",
       "env": {
         "CREST_SPEC_SPEC_DIR": "$SPEC_DIR",
-        "CREST_SPEC_GENERATE_MODEL": "claude-sonnet-4-6",
+        "CREST_SPEC_GENERATE_MODEL": "claude-sonnet-5",
         "CREST_SPEC_MAX_RETRIES": "3"
       }
     }

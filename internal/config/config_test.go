@@ -12,7 +12,7 @@ func TestNew_Defaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "default", cfg.Mode)
-	assert.Equal(t, "claude-sonnet-4-6", cfg.GenerateModel)
+	assert.Equal(t, "claude-sonnet-5", cfg.GenerateModel)
 	assert.Equal(t, 3, cfg.MaxRetries)
 	assert.Equal(t, 2, cfg.WaveMaxRetries)
 	assert.Equal(t, "./spec", cfg.SpecDir)
