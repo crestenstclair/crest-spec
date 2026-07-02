@@ -32,13 +32,17 @@ type commitTestSession struct {
 // newTestSpecWithSession builds a Spec over a real store + minimal spec and
 // starts a session, returning the session and a generatable resource ID.
 func newTestSpecWithSession(t *testing.T) (*Spec, commitTestSession) {
+	return newTestSpecWithSessionCUE(t, commitTestSpecCUE)
+}
+
+func newTestSpecWithSessionCUE(t *testing.T, specCUE string) (*Spec, commitTestSession) {
 	t.Helper()
 	st, err := store.New(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(commitTestSpecCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(specCUE), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "claude-sonnet-4-6", MaxRetries: 3}
 	s := New(st, OSFileSystem{}, cfg)
@@ -54,6 +58,32 @@ func newTestSpecWithSession(t *testing.T) (*Spec, commitTestSession) {
 	require.NotEmpty(t, next.Resources, "expected a generatable resource")
 
 	return s, commitTestSession{sessionID: begin.SessionID, resourceID: next.Resources[0].ResourceID}
+}
+
+// A validation that cannot LAUNCH (missing binary, bad path) must reject the
+// commit, not skip the gate. This pins the fail-closed contract: an unrunnable
+// gate is a failed gate.
+func TestCommitRejectsWhenValidationCannotRun(t *testing.T) {
+	const cueWithBrokenValidation = `package crestsynth
+
+project: name: "rt"
+project: meta: language: "go"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	validations: [{kind: "custom", command: ["/nonexistent-crest-validator-xyz"]}]
+}
+`
+	s, st := newTestSpecWithSessionCUE(t, cueWithBrokenValidation)
+	res, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
+		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
+		nil, "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.False(t, res.Committed,
+		"a validation that cannot run must reject the commit (fail closed), not skip the gate")
+	require.NotEmpty(t, res.Validations, "the rejection must carry a validation result explaining the launch failure")
+	require.False(t, res.Validations[0].Passed)
+	require.Contains(t, res.Validations[0].Message, "could not run")
 }
 
 func TestCommitRejectsOnFailedInvariantVerdict(t *testing.T) {

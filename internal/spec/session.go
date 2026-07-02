@@ -536,11 +536,19 @@ func (s *Spec) runCommitValidations(
 	if len(validations) > 0 {
 		cwd := filepath.Dir(s.cfg.SpecDir)
 		results, err := RunValidations(ctx, validations, cwd)
-		if err == nil {
-			validationResults = results
-			if rejection := s.checkForFailure(validationResults, sess.ApplyID, sessionID, resourceID, "validate", attempts); rejection != nil {
-				return nil, rejection
-			}
+		if err != nil {
+			// Fail closed: a gate that cannot run is a failed gate. Silently
+			// skipping here would commit unvalidated code whenever a validation
+			// command is missing or misconfigured.
+			results = []ValidationResult{{
+				Kind:    "validation",
+				Passed:  false,
+				Message: fmt.Sprintf("validation could not run: %v", err),
+			}}
+		}
+		validationResults = results
+		if rejection := s.checkForFailure(validationResults, sess.ApplyID, sessionID, resourceID, "validate", attempts); rejection != nil {
+			return nil, rejection
 		}
 	}
 
