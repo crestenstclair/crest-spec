@@ -123,23 +123,27 @@ Then run this loop (at most ${maxRetries + 1} attempts):
 1. Call spec_context with {session_id: "${sessionId}", resource_id: "${resourceId}"}.
    It returns SystemPrompt, Prompt, and Invariants (each invariant is
    {text, rationale}). Treat SystemPrompt as your role and follow Prompt
-   exactly — it contains the resource declaration, dependencies, existing
-   files (UPDATE mode), and any prior failure context.
-2. Author the files the prompt asks for (full file contents, correct paths
-   relative to the project root). Follow the prompt's folder structure and
-   style rules. Do NOT create files the prompt doesn't call for. Before
-   committing, if the project has a formatter (cargo fmt, gofmt, prettier),
-   run it over your files and commit the formatted content — tree-wide
-   format checks run after the wave and a diff costs a full retry loop.
-3. Judge EACH invariant from the context against your files, producing
-   {invariant, passed, summary} where "invariant" is the invariant's text
-   field verbatim. Be honest — a wrong "passed" will fail wave validation
-   later and cost another round trip.
+   exactly — it contains the mission, the resource declaration, dependencies,
+   the bounded context's design contract, existing files (UPDATE mode), and —
+   on retries — the sections "## Previous Errors" and "## Guidance".
+2. On a retry, address "## Previous Errors" FIRST: your new output must fix
+   that specific failure. Resubmitting the same approach wastes the attempt.
+3. Author the files the prompt asks for (full file contents, correct paths
+   relative to the project root). Honor every invariant as a hard constraint —
+   verification is independent (behavioral checks), so a violation WILL be
+   caught after commit and cost a full regeneration. Follow the prompt's
+   folder structure and style rules. Do NOT create files the prompt doesn't
+   call for. Before committing, if the project has a formatter (cargo fmt,
+   gofmt, prettier), run it over your files and commit the formatted content —
+   tree-wide format checks run after the wave and a diff costs a full retry loop.
 4. Call spec_commit with {session_id, resource_id, files: [{path, content}],
-   model: "${model}", notes: <one-line design note>, invariant_checks: [...]}.
+   model: "${model}", notes: <one-line design note>}. spec_commit is the ONLY
+   way files enter the project: never write into the project tree with your
+   own file tools — out-of-band writes show up as drift in spec_plan and are
+   treated as a defect.
 5. If the result has Committed=true → stop, report outcome "committed".
    If Committed=false → read result.Validations for the failure, go back to
-   step 1 (the new context includes the failure) and fix the actual problem.
+   step 1 (the new context carries the failure) and fix the actual problem.
 6. If still rejected after ${maxRetries + 1} attempts, report outcome
    "rejected" with the final error message. Do not call spec_skip yourself.
 
@@ -181,11 +185,12 @@ Steps:
 
 const triaged = []
 const graduated = []
+const blocked = []
+const unresolved = []
 let waveCount = 0
 let lastWaveIndex = -1
 let stallCount = 0
-const MAX_STALLS = 2
-const MAX_STALLS_HARD = 5
+const MAX_STALLS = 3
 // spec_next serves resources concurrency-gated (often one at a time) and can
 // momentarily return zero while wave members are transiently locked/dispatched.
 // An empty serve is NOT proof the session is drained (that case returns
@@ -212,17 +217,13 @@ while (true) {
   if (wave.wave_index === lastWaveIndex) {
     stallCount++
     if (stallCount > MAX_STALLS) {
-      const hard = stallCount > MAX_STALLS_HARD
-      const verdict = await agent(
-        `Wave ${wave.wave_index} of crest-spec session ${sessionId} has repeated ${stallCount} times — some resource(s) won't converge. Load ToolSearch "select:mcp__crest-spec__spec_skip,mcp__crest-spec__spec_sql". The still-pending resources are: ${resources.map(r => r.resource_id).join(', ')}.\n\n` +
-        (hard
-          ? `This is the HARD last resort. spec_skip EVERY one of those resources (reason: "auto-skipped: wave unresolved after ${stallCount} passes") so the run can terminate. Report the skipped ids.`
-          : `Skip ONLY genuine culprits — resources that have never produced committed output. For EACH resource run spec_sql: SELECT COUNT(*) AS n FROM generated_files WHERE resource_id='<id>'. If n = 0 (never committed any file), spec_skip it (reason: "auto-skipped: no committed output after ${stallCount} passes"). If n > 0, DO NOT skip it — it already produced valid output and is only stuck as collateral; leave it pending so it regenerates once the real culprit is gone. Report which ids you skipped and which you left.`),
-        { label: `stall-guard:wave-${wave.wave_index}`, phase: 'Triage' },
-      )
-      triaged.push({ resource_id: `wave-${wave.wave_index}`, action: verdict })
-      log(`Wave ${wave.wave_index}: stall guard fired (pass ${stallCount}, ${hard ? 'HARD skip-all' : 'soft skip-culprits-only'})`)
-      continue
+      // LOUD HALT — no auto-skip. spec_skip is a human-level decision
+      // (contradictory spec), not a convergence-failure escape hatch.
+      for (const r of resources) {
+        unresolved.push({ resource_id: r.resource_id, attempts: r.attempts, last_error: r.last_error || '' })
+      }
+      log(`Wave ${wave.wave_index}: HALTED after ${stallCount} passes — ${resources.length} resource(s) did not converge: ${resources.map(r => r.resource_id).join(', ')}. Nothing was auto-skipped; resolve or skip explicitly and re-run.`)
+      break
     }
   } else {
     lastWaveIndex = wave.wave_index
@@ -292,6 +293,13 @@ Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
       const state = row?.state
       if (state === 'passed' || state === 'graduated') {
         passedChecks.push({ check_id: c.check_id, state })
+      } else if (state === 'malformed') {
+        // The CHECK is structurally broken (predicate typing), not the code.
+        // Resume has no design contracts in scope to re-author from, so this
+        // is a BLOCKER: spec_finish refuses while it exists. Re-author the
+        // resource's checks via the full spec-generate tasks stage.
+        blocked.push({ resource_id: committed.resource_id, check_id: c.check_id, reason: row?.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op)' })
+        log(`BLOCKER: check ${c.check_id} for ${committed.resource_id} is structurally malformed — spec_finish will refuse until the check is re-authored (run the spec-generate tasks stage)`)
       } else if (state === 'theater') {
         failedChecks.push({ check_id: c.check_id, theater: true, reason: row?.reason || 'theater: stub baseline also satisfied the check (non-discriminating predicate)' })
       } else if (state === 'failed') {
@@ -348,7 +356,7 @@ Report: resolved=true/false.`,
   const failed = outcomes.filter(Boolean).filter(o => o.outcome !== 'committed')
   for (const f of failed) {
     const verdict = await agent(
-      `Resource "${f.resource_id}" in crest-spec session ${sessionId} failed generation after ${f.attempts ?? '?'} attempts. Last error:\n${f.error || '(none reported)'}\n\nLoad tools: ToolSearch "select:mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_skip,mcp__crest-spec__spec_history"\n\nInspect spec_history for the resource if helpful. If the failure looks fixable with concrete guidance (a specific API misuse, a missing import pattern, a misread of the spec), call spec_resolve with {session_id: "${sessionId}", resource_id: "${f.resource_id}", guidance: <specific, actionable guidance>} — this resets the resource to pending so the next wave pass retries it. If it looks structurally impossible (contradictory spec, missing dependency), call spec_skip with a reason. You MUST actually invoke exactly one of spec_resolve or spec_skip before finishing — a prose verdict alone leaves the resource stuck. Report which you chose and why.`,
+      `Resource "${f.resource_id}" in crest-spec session ${sessionId} failed generation after ${f.attempts ?? '?'} attempts. Last error:\n${f.error || '(none reported)'}\n\nLoad tools: ToolSearch "select:mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_skip,mcp__crest-spec__spec_history,mcp__crest-spec__spec_inspect"\n\nInspect spec_history for the resource if helpful. Default to spec_resolve: if the failure is fixable with concrete guidance (a specific API misuse, a missing import pattern, a misread of the spec), call spec_resolve with {session_id: "${sessionId}", resource_id: "${f.resource_id}", guidance: <specific, actionable guidance>} — this resets the resource to pending so the next wave pass retries it.\n\nspec_skip is reserved for the SPEC being wrong, never for the work being hard. Before you may call spec_skip you must: (1) call spec_inspect for the resource, (2) QUOTE the two contradictory declarations or name the dependency that does not exist in the spec, verbatim, in your skip reason. "Keeps failing", "too complex", or "won't converge" are NOT skip reasons — if you cannot quote a contradiction, you must spec_resolve instead. You MUST actually invoke exactly one of spec_resolve or spec_skip before finishing — a prose verdict alone leaves the resource stuck. Report which you chose and why.`,
       { label: `triage:${f.resource_id}`, phase: 'Triage' },
     )
     triaged.push({ resource_id: f.resource_id, action: verdict })
@@ -360,5 +368,7 @@ return {
   triaged,
   graduated,
   graduated_count: graduated.length,
-  next_steps: 'Call spec_finish (main session). If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit via spec_record_learnings.',
+  blocked,
+  unresolved,
+  next_steps: 'Call spec_finish (main session). It REFUSES (Blocked=true) while any behavioral check is pending, failed, theater, or malformed — force=true is an explicit human decision, never the default. If "unresolved" is non-empty the run HALTED without auto-skipping: fix the spec or guidance and re-run, or spec_skip explicitly with the contradiction quoted. "blocked" lists structurally malformed checks — re-author them via the spec-generate tasks stage. If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit via spec_record_learnings.',
 }

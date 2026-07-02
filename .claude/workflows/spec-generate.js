@@ -227,23 +227,27 @@ Then run this loop (at most ${maxRetries + 1} attempts):
 1. Call spec_context with {session_id: "${sessionId}", resource_id: "${resourceId}"}.
    It returns SystemPrompt, Prompt, and Invariants (each invariant is
    {text, rationale}). Treat SystemPrompt as your role and follow Prompt
-   exactly — it contains the resource declaration, dependencies, existing
-   files (UPDATE mode), and any prior failure context.
-2. Author the files the prompt asks for (full file contents, correct paths
-   relative to the project root). Follow the prompt's folder structure and
-   style rules. Do NOT create files the prompt doesn't call for. Before
-   committing, if the project has a formatter (cargo fmt, gofmt, prettier),
-   run it over your files and commit the formatted content — tree-wide
-   format checks run after the wave and a diff costs a full retry loop.
-3. Judge EACH invariant from the context against your files, producing
-   {invariant, passed, summary} where "invariant" is the invariant's text
-   field verbatim. Be honest — a wrong "passed" will fail wave validation
-   later and cost another round trip.
+   exactly — it contains the mission, the resource declaration, dependencies,
+   the bounded context's design contract, existing files (UPDATE mode), and —
+   on retries — the sections "## Previous Errors" and "## Guidance".
+2. On a retry, address "## Previous Errors" FIRST: your new output must fix
+   that specific failure. Resubmitting the same approach wastes the attempt.
+3. Author the files the prompt asks for (full file contents, correct paths
+   relative to the project root). Honor every invariant as a hard constraint —
+   verification is independent (behavioral checks), so a violation WILL be
+   caught after commit and cost a full regeneration. Follow the prompt's
+   folder structure and style rules. Do NOT create files the prompt doesn't
+   call for. Before committing, if the project has a formatter (cargo fmt,
+   gofmt, prettier), run it over your files and commit the formatted content —
+   tree-wide format checks run after the wave and a diff costs a full retry loop.
 4. Call spec_commit with {session_id, resource_id, files: [{path, content}],
-   model: "${model}", notes: <one-line design note>, invariant_checks: [...]}.
+   model: "${model}", notes: <one-line design note>}. spec_commit is the ONLY
+   way files enter the project: never write into the project tree with your
+   own file tools — out-of-band writes show up as drift in spec_plan and are
+   treated as a defect.
 5. If the result has Committed=true → stop, report outcome "committed".
    If Committed=false → read result.Validations for the failure, go back to
-   step 1 (the new context includes the failure) and fix the actual problem.
+   step 1 (the new context carries the failure) and fix the actual problem.
 6. If still rejected after ${maxRetries + 1} attempts, report outcome
    "rejected" with the final error message. Do not call spec_skip yourself.
 
@@ -281,6 +285,80 @@ Steps:
    If passed=false or theater=true: do NOT graduate.
 8. CLEANUP: Delete the witness harness directories and any compiled artifacts — remove /tmp/crest_witness_${checkId} and /tmp/crest_stub_${checkId} and any crest_witness_* binaries so they do not pollute the generated crate. Witness source files must NEVER be written inside the project's src/ directory — always use /tmp paths.
 9. Return: {check_id: "${checkId}", passed: <bool>, theater: <bool, default false>, reason: "<from spec/verify>", graduated: <true only if spec/graduate was called and succeeded>}.`
+}
+
+// ─── Verify helpers ───────────────────────────────────────────────────────────
+
+// listPendingChecks reads the authoritative pending-check set for a resource.
+async function listPendingChecks(resourceId) {
+  const checksResult = await agent(
+    `ToolSearch "select:mcp__crest-spec__spec_sql"
+Call spec_sql with query:
+  SELECT c.id AS check_id, c.behavior, c.check_json
+  FROM checks c
+  JOIN tasks t ON c.task_id = t.id
+  WHERE t.resource_id = '${resourceId}' AND c.state = 'pending'
+If the checks or tasks table does not exist (behavioral pipeline tables not yet migrated), return {"checks": []}.
+Return: {"checks": [{"check_id": string, "behavior": string, "check_json": string}]}`,
+    { label: `list-checks:${resourceId}`, phase: 'Verify', schema: CHECKS_SCHEMA }
+  )
+  return (checksResult?.checks || []).filter(Boolean)
+}
+
+// verifyChecks fans out one independent verifier per check, then reconciles
+// against AUTHORITATIVE engine state (the checks table) — never the verifier
+// agents' word. Returns {passed, failed, malformed} buckets.
+//   passed | graduated → success
+//   malformed          → the CHECK's predicate is structurally invalid (type
+//                        mismatch / unknown op). The check gets re-authored —
+//                        it is never waved through and never silently dropped.
+//   failed | theater   → failure (regenerate the resource)
+//   pending | absent   → failure (regenerate) — the verifier never produced a
+//                        real fail-closed verification.
+async function verifyChecks(resourceId, checks) {
+  await parallel(checks.map(c => () =>
+    agent(verifierPrompt(resourceId, c.check_id, c.behavior, c.check_json), {
+      label: `verify:${c.check_id}`,
+      phase: 'Verify',
+      model,
+      schema: CHECK_VERIFY_SCHEMA,
+    })
+  ))
+
+  const checkIdList = checks.map(c => `'${String(c.check_id).replace(/'/g, "''")}'`).join(', ')
+  const reconcile = await agent(
+    `ToolSearch "select:mcp__crest-spec__spec_sql"
+Read the AUTHORITATIVE state of these behavioral checks from the engine. Report exactly what the rows say — do not infer, alter, or fill in missing rows.
+Call spec_sql with query:
+  SELECT c.id AS check_id, c.state AS state,
+    (SELECT v.reason FROM verifications v WHERE v.check_id = c.id ORDER BY v.created_at DESC LIMIT 1) AS reason
+  FROM checks c
+  WHERE c.id IN (${checkIdList})
+Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
+    { label: `reconcile:${resourceId}`, phase: 'Verify', schema: RECONCILE_SCHEMA }
+  )
+  const stateByCheck = {}
+  for (const r of (reconcile?.checks || []).filter(Boolean)) stateByCheck[r.check_id] = r
+
+  const passed = []
+  const failed = []
+  const malformed = []
+  for (const c of checks) {
+    const row = stateByCheck[c.check_id]
+    const state = row?.state
+    if (state === 'passed' || state === 'graduated') {
+      passed.push({ check_id: c.check_id, state })
+    } else if (state === 'malformed') {
+      malformed.push({ check_id: c.check_id, reason: row?.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op) against the field it targets' })
+    } else if (state === 'theater') {
+      failed.push({ check_id: c.check_id, theater: true, reason: row?.reason || 'theater: stub baseline also satisfied the check (non-discriminating predicate)' })
+    } else if (state === 'failed') {
+      failed.push({ check_id: c.check_id, theater: false, reason: row?.reason || 'behavioral verification failed: real observation did not satisfy the check' })
+    } else {
+      failed.push({ check_id: c.check_id, theater: false, reason: `check still '${state || 'absent'}' after its verifier ran — no fail-closed verification was recorded (verifier crashed, skipped spec/verify, or spec/verify rejected a missing/malformed witness). Behavior is UNVERIFIED; regenerating.` })
+    }
+  }
+  return { passed, failed, malformed }
 }
 
 // ─── Phase 0: DESIGN ─────────────────────────────────────────────────────────
@@ -359,6 +437,15 @@ if (Object.keys(designMap).length > 0) {
   log('Tasks phase: skipped (no committed design contracts)')
 }
 
+// resource_id → {context_name, contract_json}, for re-authoring malformed checks.
+const resourceDesign = {}
+for (const ctx of contexts) {
+  if (!designMap[ctx.name]) continue
+  for (const rid of ctx.resources) {
+    resourceDesign[rid] = { context_name: ctx.name, contract_json: designMap[ctx.name] }
+  }
+}
+
 // ─── Phase 2 + 3: GENERATE + VERIFY (wave loop) ──────────────────────────────
 // Standard wave loop: spec_next → parallel generate → behavioral verify →
 // project-level verify → triage. Behavioral verify uses SEPARATE verifier
@@ -366,23 +453,19 @@ if (Object.keys(designMap).length > 0) {
 
 const triaged = []
 const graduated = []
-const quarantined = []
+const blocked = []
+const unresolved = []
 let waveCount = 0
 // Stall guard: 'rejected' is not a terminal state server-side, so if a wave's
-// post-verify keeps resetting resources to pending, spec_next would re-serve the
-// same wave forever. Two-tier escalation:
-//   - SOFT (stallCount > MAX_STALLS): skip ONLY genuine culprits — resources that
-//     have NEVER produced a committed file (zero generated_files). Resources that
-//     already committed and were merely reset as collateral are LEFT to regenerate;
-//     once the real culprit is skipped the wave converges. This is the fix for the
-//     long-standing over-skip bug where a healthy, already-committed resource
-//     (e.g. a port/aggregate that committed 3x) got force-skipped as collateral.
-//   - HARD (stallCount > MAX_STALLS_HARD): last resort — skip every remaining
-//     non-committed resource to guarantee the run terminates.
+// post-verify keeps resetting resources to pending, spec_next would re-serve
+// the same wave forever. When a wave repeats past MAX_STALLS passes, the run
+// HALTS LOUDLY with the unresolved resources listed. Nothing is auto-skipped:
+// spec_skip is a human-level decision (contradictory spec), not a
+// convergence-failure escape hatch — auto-skipping converted persistent
+// defects into silently missing resources.
 let lastWaveIndex = -1
 let stallCount = 0
-const MAX_STALLS = 2
-const MAX_STALLS_HARD = 5
+const MAX_STALLS = 3
 // spec_next serves resources concurrency-gated (often one at a time) and can
 // momentarily return zero while wave members are transiently locked/dispatched
 // — e.g. when resuming a session after an interrupted prior run. An empty serve
@@ -410,17 +493,14 @@ while (true) {
   if (wave.wave_index === lastWaveIndex) {
     stallCount++
     if (stallCount > MAX_STALLS) {
-      const hard = stallCount > MAX_STALLS_HARD
-      const verdict = await agent(
-        `Wave ${wave.wave_index} of crest-spec session ${sessionId} has repeated ${stallCount} times — some resource(s) won't converge. Load ToolSearch "select:mcp__crest-spec__spec_skip,mcp__crest-spec__spec_sql". The still-pending resources are: ${resources.map(r => r.resource_id).join(', ')}.\n\n` +
-        (hard
-          ? `This is the HARD last resort. spec_skip EVERY one of those resources (reason: "auto-skipped: wave unresolved after ${stallCount} passes") so the run can terminate. Report the skipped ids.`
-          : `Skip ONLY genuine culprits — resources that have never produced committed output. For EACH resource run spec_sql: SELECT COUNT(*) AS n FROM generated_files WHERE resource_id='<id>'. If n = 0 (never committed any file), spec_skip it (reason: "auto-skipped: no committed output after ${stallCount} passes"). If n > 0, DO NOT skip it — it already produced valid output and is only stuck as collateral; leave it pending so it regenerates once the real culprit is gone. Report which ids you skipped and which you left.`),
-        { label: `stall-guard:wave-${wave.wave_index}`, phase: 'Triage' },
-      )
-      triaged.push({ resource_id: `wave-${wave.wave_index}`, action: verdict })
-      log(`Wave ${wave.wave_index}: stall guard fired (pass ${stallCount}, ${hard ? 'HARD skip-all' : 'soft skip-culprits-only'})`)
-      continue
+      // LOUD HALT — no auto-skip. The unresolved resources and their last
+      // errors are surfaced for a human (or the main session) to decide:
+      // better spec_resolve guidance, a spec fix, or an explicit spec_skip.
+      for (const r of resources) {
+        unresolved.push({ resource_id: r.resource_id, attempts: r.attempts, last_error: r.last_error || '' })
+      }
+      log(`Wave ${wave.wave_index}: HALTED after ${stallCount} passes — ${resources.length} resource(s) did not converge: ${resources.map(r => r.resource_id).join(', ')}. Nothing was auto-skipped; resolve or skip explicitly and re-run.`)
+      break
     }
   } else {
     lastWaveIndex = wave.wave_index
@@ -447,114 +527,57 @@ while (true) {
   const committedOutcomes = outcomes.filter(Boolean).filter(o => o.outcome === 'committed')
 
   for (const committed of committedOutcomes) {
-    const checksResult = await agent(
-      `ToolSearch "select:mcp__crest-spec__spec_sql"
-Call spec_sql with query:
-  SELECT c.id AS check_id, c.behavior, c.check_json
-  FROM checks c
-  JOIN tasks t ON c.task_id = t.id
-  WHERE t.resource_id = '${committed.resource_id}' AND c.state = 'pending'
-If the checks or tasks table does not exist (behavioral pipeline tables not yet migrated), return {"checks": []}.
-Return: {"checks": [{"check_id": string, "behavior": string, "check_json": string}]}`,
-      { label: `list-checks:${committed.resource_id}`, phase: 'Verify', schema: CHECKS_SCHEMA }
-    )
-    const checks = (checksResult?.checks || []).filter(Boolean)
-
+    const checks = await listPendingChecks(committed.resource_id)
     if (checks.length === 0) continue
 
     log(`Wave ${wave.wave_index}: verifying ${checks.length} behavioral check(s) for ${committed.resource_id}`)
+    let { passed, failed, malformed } = await verifyChecks(committed.resource_id, checks)
 
-    // Verifier agents run in parallel, independent of the generator that wrote
-    // the files. Their self-reported {passed, graduated} is NOT trusted for
-    // control flow — running the agent only triggers the witness/spec_verify
-    // work. A crashed/null/empty verifier result is intentionally NOT filtered
-    // away: its check simply stays `pending` server-side and is caught as a
-    // failure by the reconciliation below (I1).
-    await parallel(checks.map(c => () =>
-      agent(verifierPrompt(committed.resource_id, c.check_id, c.behavior, c.check_json), {
-        label: `verify:${c.check_id}`,
-        phase: 'Verify',
-        model,
-        schema: CHECK_VERIFY_SCHEMA,
-      })
-    ))
-
-    // Reconcile against AUTHORITATIVE engine state (I2). Pass/fail is driven off
-    // the checks table, never off the verifier agent's word:
-    //   passed | graduated → success
-    //   malformed          → QUARANTINE, never regenerate. The check's predicate
-    //                        is structurally invalid (type mismatch against the
-    //                        field it targets, or an unknown op) — this is the
-    //                        check's fault, not the implementation's. Regenerating
-    //                        code can never make a structurally-broken predicate
-    //                        pass, so cycling it through spec_resolve would spin
-    //                        forever and block the wave. Collected for human/
-    //                        spec-author review instead.
-    //   failed | theater   → failure (regenerate)
-    //   pending | absent   → failure (regenerate) — the verifier never produced a
-    //                        real fail-closed verification: it crashed, skipped
-    //                        spec/verify, or spec/verify rejected a missing/
-    //                        malformed CREST_OBS/CREST_STUB ("malformed
-    //                        verification"). Either way the behavior is unverified.
-    const checkIdList = checks.map(c => `'${String(c.check_id).replace(/'/g, "''")}'`).join(', ')
-    const reconcile = await agent(
-      `ToolSearch "select:mcp__crest-spec__spec_sql"
-Read the AUTHORITATIVE state of these behavioral checks from the engine. Report exactly what the rows say — do not infer, alter, or fill in missing rows.
-Call spec_sql with query:
-  SELECT c.id AS check_id, c.state AS state,
-    (SELECT v.reason FROM verifications v WHERE v.check_id = c.id ORDER BY v.created_at DESC LIMIT 1) AS reason
-  FROM checks c
-  WHERE c.id IN (${checkIdList})
-Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
-      { label: `reconcile:${committed.resource_id}`, phase: 'Verify', schema: RECONCILE_SCHEMA }
-    )
-    const stateByCheck = {}
-    for (const r of (reconcile?.checks || []).filter(Boolean)) stateByCheck[r.check_id] = r
-
-    const passedChecks = []
-    const failedChecks = []
-    const malformedChecks = []
-    for (const c of checks) {
-      const row = stateByCheck[c.check_id]
-      const state = row?.state
-      if (state === 'passed' || state === 'graduated') {
-        passedChecks.push({ check_id: c.check_id, state })
-      } else if (state === 'malformed') {
-        // Structurally invalid predicate (type mismatch / unknown op) — the
-        // check itself is broken, not the implementation. Quarantine, do not
-        // regenerate.
-        malformedChecks.push({ check_id: c.check_id, reason: row?.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op) against the field it targets' })
-      } else if (state === 'theater') {
-        failedChecks.push({ check_id: c.check_id, theater: true, reason: row?.reason || 'theater: stub baseline also satisfied the check (non-discriminating predicate)' })
-      } else if (state === 'failed') {
-        failedChecks.push({ check_id: c.check_id, theater: false, reason: row?.reason || 'behavioral verification failed: real observation did not satisfy the check' })
-      } else {
-        // pending or absent — no authoritative fail-closed verification recorded.
-        failedChecks.push({ check_id: c.check_id, theater: false, reason: `check still '${state || 'absent'}' after its verifier ran — no fail-closed verification was recorded (verifier crashed, skipped spec/verify, or spec/verify rejected a missing/malformed witness). Behavior is UNVERIFIED; regenerating.` })
+    // Malformed = the CHECK is broken, not the code. The remedy is fixing the
+    // check: re-author the resource's tasks/checks ONCE (spec/tasks_commit
+    // replaces the prior set) with the malformation reasons as feedback, then
+    // re-verify. A check still malformed after re-authoring is a BLOCKER —
+    // spec/finish refuses to finalize the session while it exists. There is
+    // no quarantine and no quiet exit.
+    if (malformed.length > 0) {
+      const design = resourceDesign[committed.resource_id]
+      if (design) {
+        log(`Wave ${wave.wave_index}: re-authoring ${malformed.length} structurally malformed check(s) for ${committed.resource_id} — fixing the check, never bypassing it`)
+        const malformedFeedback = malformed.map(m => `- ${m.check_id}: ${m.reason}`).join('\n')
+        await agent(
+          tasksPrompt(committed.resource_id, design.context_name, design.contract_json) +
+          `\n\nRE-AUTHORING PASS — your PRIOR checks for this resource were STRUCTURALLY MALFORMED:\n${malformedFeedback}\nFix the predicate TYPING per the TYPING RULES above (field/op must match the JSON type a witness can actually emit). spec/tasks_commit REPLACES all prior tasks and checks for this resource.`,
+          { label: `reauthor-checks:${committed.resource_id}`, phase: 'Tasks', model, schema: TASKS_SCHEMA }
+        )
+        const reChecks = await listPendingChecks(committed.resource_id)
+        if (reChecks.length > 0) {
+          log(`Wave ${wave.wave_index}: re-verifying ${reChecks.length} re-authored check(s) for ${committed.resource_id}`)
+          const second = await verifyChecks(committed.resource_id, reChecks)
+          passed = second.passed
+          failed = second.failed
+          malformed = second.malformed
+        }
+      }
+      for (const m of malformed) {
+        blocked.push({ resource_id: committed.resource_id, check_id: m.check_id, reason: m.reason })
+        log(`Wave ${wave.wave_index}: BLOCKER — check ${m.check_id} for ${committed.resource_id} is still structurally malformed after re-authoring. spec_finish will refuse until it is fixed: ${m.reason}`)
       }
     }
 
-    if (passedChecks.length > 0) {
-      for (const v of passedChecks) {
+    if (passed.length > 0) {
+      for (const v of passed) {
         graduated.push({ resource_id: committed.resource_id, check_id: v.check_id, state: v.state })
       }
-      log(`Wave ${wave.wave_index}: ${passedChecks.length}/${checks.length} behavioral check(s) verified via engine state for ${committed.resource_id}`)
+      log(`Wave ${wave.wave_index}: ${passed.length} behavioral check(s) verified via engine state for ${committed.resource_id}`)
     }
 
-    if (malformedChecks.length > 0) {
-      for (const m of malformedChecks) {
-        quarantined.push({ resource_id: committed.resource_id, check_id: m.check_id, reason: m.reason })
-        log(`Wave ${wave.wave_index}: QUARANTINED check ${m.check_id} for ${committed.resource_id} — structurally malformed predicate, not a code defect; will NOT be regenerated: ${m.reason}`)
-      }
-    }
-
-    if (failedChecks.length > 0) {
+    if (failed.length > 0) {
       // Summarise all failures for the resolve guidance. Theater = stub also
       // passed = check is non-discriminating; real-fail = implementation wrong.
-      const failureSummary = failedChecks
+      const failureSummary = failed
         .map(v => `- [${v.check_id}]${v.theater ? ' THEATER (stub also passed — check predicate is non-discriminating):' : ' FAIL:'} ${v.reason || 'verification failed'}`)
         .join('\n')
-      log(`Wave ${wave.wave_index}: ${failedChecks.length} behavioral check(s) failed for ${committed.resource_id} — scheduling for regeneration`)
+      log(`Wave ${wave.wave_index}: ${failed.length} behavioral check(s) failed for ${committed.resource_id} — scheduling for regeneration`)
       await agent(
         `ToolSearch "select:mcp__crest-spec__spec_resolve"
 Resource "${committed.resource_id}" committed files in session ${sessionId} but FAILED behavioral verification:
@@ -569,7 +592,7 @@ This resets the resource to pending so the next wave re-generates with the failu
 Report: resolved=true/false.`,
         { label: `verify-resolve:${committed.resource_id}`, phase: 'Verify' }
       )
-      triaged.push({ resource_id: committed.resource_id, action: 'behavioral-verify-failed', failures: failedChecks })
+      triaged.push({ resource_id: committed.resource_id, action: 'behavioral-verify-failed', failures: failed })
     }
   }
 
@@ -594,7 +617,7 @@ Report: resolved=true/false.`,
   for (const f of failed) {
     // One triage agent per failure: decide resolve-with-guidance vs skip.
     const verdict = await agent(
-      `Resource "${f.resource_id}" in crest-spec session ${sessionId} failed generation after ${f.attempts ?? '?'} attempts. Last error:\n${f.error || '(none reported)'}\n\nLoad tools: ToolSearch "select:mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_skip,mcp__crest-spec__spec_history"\n\nInspect spec_history for the resource if helpful. If the failure looks fixable with concrete guidance (a specific API misuse, a missing import pattern, a misread of the spec), call spec_resolve with {session_id: "${sessionId}", resource_id: "${f.resource_id}", guidance: <specific, actionable guidance>} — this resets the resource to pending so the next wave pass retries it. If it looks structurally impossible (contradictory spec, missing dependency), call spec_skip with a reason. You MUST actually invoke exactly one of spec_resolve or spec_skip before finishing — a prose verdict alone leaves the resource stuck. Report which you chose and why.`,
+      `Resource "${f.resource_id}" in crest-spec session ${sessionId} failed generation after ${f.attempts ?? '?'} attempts. Last error:\n${f.error || '(none reported)'}\n\nLoad tools: ToolSearch "select:mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_skip,mcp__crest-spec__spec_history,mcp__crest-spec__spec_inspect"\n\nInspect spec_history for the resource if helpful. Default to spec_resolve: if the failure is fixable with concrete guidance (a specific API misuse, a missing import pattern, a misread of the spec), call spec_resolve with {session_id: "${sessionId}", resource_id: "${f.resource_id}", guidance: <specific, actionable guidance>} — this resets the resource to pending so the next wave pass retries it.\n\nspec_skip is reserved for the SPEC being wrong, never for the work being hard. Before you may call spec_skip you must: (1) call spec_inspect for the resource, (2) QUOTE the two contradictory declarations or name the dependency that does not exist in the spec, verbatim, in your skip reason. "Keeps failing", "too complex", or "won't converge" are NOT skip reasons — if you cannot quote a contradiction, you must spec_resolve instead. You MUST actually invoke exactly one of spec_resolve or spec_skip before finishing — a prose verdict alone leaves the resource stuck. Report which you chose and why.`,
       { label: `triage:${f.resource_id}`, phase: 'Triage' },
     )
     triaged.push({ resource_id: f.resource_id, action: verdict })
@@ -607,7 +630,8 @@ return {
   waves_processed: waveCount,
   triaged,
   graduated,
-  quarantined,
+  blocked,
+  unresolved,
   behavioral_checks_total: totalChecks,
-  next_steps: 'Call spec_finish (main session). If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit the output via spec_record_learnings. Review the "graduated" list — each entry is a behavioral check the engine confirmed; author the checks back into the spec invariants via the spec-authoring skill. Review the "quarantined" list — each entry is a check whose predicate is structurally invalid (type mismatch / unknown op); it was NEVER regenerated against and needs a human/spec-author to fix the check definition itself, not the resource code.',
+  next_steps: 'Call spec_finish (main session). It REFUSES (Blocked=true) while any behavioral check is pending, failed, theater, or malformed — resolve blockers before finishing; force=true is an explicit human decision, never the default. If "unresolved" is non-empty the run HALTED without auto-skipping: fix the spec or guidance and re-run spec-generate-resume, or spec_skip explicitly with the contradiction quoted. If FinishResult.reflection_prompt is non-empty, run it with a sonnet agent and submit via spec_record_learnings. Review "graduated" — each entry is an engine-confirmed behavioral check; author it back into the spec invariants via the spec-authoring skill. "blocked" lists checks still structurally malformed after one re-authoring pass — fix the check definitions.',
 }

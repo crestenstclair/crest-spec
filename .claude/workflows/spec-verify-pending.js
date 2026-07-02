@@ -61,12 +61,11 @@ const BREAKDOWN_SCHEMA = {
   required: ['states'],
 }
 
-// Authoritative per-check state read after verification, used only to detect
-// 'malformed' checks (structurally invalid predicate — quarantine, never
-// treated as a code defect). This workflow never regenerates on its own, so
-// there is no resolve/regenerate path to skip here; malformed checks are
-// simply pulled out and surfaced distinctly instead of being lumped in with
-// genuine failures.
+// Authoritative per-check state read after verification, used to detect
+// 'malformed' checks (structurally invalid predicate — the CHECK's fault,
+// not the code's). Malformed checks are BLOCKERS: spec/finish refuses to
+// finalize the session while they exist. This workflow surfaces them for
+// re-authoring (spec-generate tasks stage); it never waves them through.
 const RECONCILE_SCHEMA = {
   type: 'object',
   properties: {
@@ -156,10 +155,10 @@ Return: {"states": [{"state": string, "count": number}]}`,
 
 // Pull out just-verified checks that landed in 'malformed' — a structurally
 // invalid predicate (type mismatch / unknown op) is the check's fault, not
-// the resource's. QUARANTINE: never fed back for regeneration (this workflow
-// has no resolve/regenerate path to begin with), just surfaced for a human /
-// spec-author to fix the check definition.
-const quarantined = []
+// the resource's. These are BLOCKERS: spec/finish refuses while they exist.
+// The fix is re-authoring the check (spec-generate tasks stage), never
+// bypassing it.
+const blocked = []
 if (checks.length > 0) {
   const checkIdList = checks.map(c => `'${String(c.check_id).replace(/'/g, "''")}'`).join(', ')
   const reconcile = await agent(
@@ -178,12 +177,12 @@ Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
   for (const row of (reconcile?.checks || []).filter(Boolean)) {
     if (row.state === 'malformed') {
       const c = byId[row.check_id]
-      quarantined.push({
+      blocked.push({
         resource_id: c?.resource_id,
         check_id: row.check_id,
         reason: row.reason || 'malformed: check predicate is structurally invalid (type mismatch or unknown op) against the field it targets',
       })
-      log(`QUARANTINED check ${row.check_id} for ${c?.resource_id || '(unknown resource)'} — structurally malformed predicate, not a code defect; will NOT be regenerated: ${row.reason || ''}`)
+      log(`BLOCKER: check ${row.check_id} for ${c?.resource_id || '(unknown resource)'} is structurally malformed — spec_finish will refuse until the check is re-authored (spec-generate tasks stage): ${row.reason || ''}`)
     }
   }
 }
@@ -191,5 +190,6 @@ Return: {"checks": [{"check_id": string, "state": string, "reason": string}]}`,
 return {
   pending_verified: checks.length,
   final_breakdown: breakdown?.states || [],
-  quarantined,
+  blocked,
+  next_steps: 'spec_finish refuses while any check is pending, failed, theater, or malformed. Re-author "blocked" checks via the spec-generate tasks stage; regenerate resources whose checks failed; force=true is an explicit human decision, never the default.',
 }

@@ -40,8 +40,14 @@ examples; `references/cue-schema.md` is the full field reference. The essentials
 ```cue
 package crestsynth
 
-// project.cue — config + the gate
+// project.cue — mission + config + the gate
 project: name: "crest-synth"
+
+// The mission is REQUIRED context: it is injected into every generator's
+// system prompt so leaf-level decisions are made against the whole. State
+// what is being built, for whom, and the architectural intent — 2-4 sentences.
+project: mission: "A standalone, gamepad-friendly MIDI synthesizer for the Steam Deck. Hexagonal architecture around a hard real-time audio thread that must never allocate, lock, or block."
+
 project: layers: ["domain", "application", "infrastructure"]
 project: layerRules: application: {dependsOn: ["domain"]}
 project: meta: {language: "rust", style: "…", avoid: ["heap alloc on audio thread"]}
@@ -68,7 +74,23 @@ Modelling vocabulary (DDD): `valueObjects` (immutable data; `from:` for newtypes
 `state:` for structs), `aggregates` (`root: true`, with `commands`/`events`/
 `invariants`), `entities`, `ports` (hexagonal interfaces with a `contract:`),
 `domainServices`, `repositories`, `applicationServices`, and `invariants`
-(rules the generator must honor; the loop judges them).
+(constraints injected into the generator's prompt; verification is INDEPENDENT
+— behavioral checks and mechanical validations, never the generator's own word).
+
+**Keep invariants behavioral, keep the language out of the domain.**
+An invariant states an observable rule ("must be 0.0-1.0", "voice is
+reclaimable only when its envelope reaches Idle") — never an implementation
+("use Arc", "apply 2^(semitones/12)"), never a dependency pin. Crate and
+toolchain facts live in exactly two places: `manifest.cue` (the Cargo.toml
+asset's dependency list) and an adapter's `meta: framework:` field. A crate
+name appearing anywhere else in the spec is leakage.
+
+**Structural vs guidance edits (hash split).** The planner cascades
+regeneration through dependents only for STRUCTURAL changes (types, `state`,
+`contract`, `commands`/`events`, `invariants`, dependencies). Guidance edits —
+`prompts`, `description`, `notes`, `rationale`, `purpose`, `style`, `avoid`,
+`examples`, `references` — regenerate only the edited resource. Tune prose
+freely; it no longer churns the tree.
 
 ## Assets — where generation intent lives
 
@@ -186,6 +208,12 @@ a regen (don't adopt a validation you never ran green).
 - Spelling a reducer/algorithm out as English pseudo-code in `meta: notes`. → It
   belongs in `commands`/`events`/`state` + `invariants`.
 - Re-prosing what a type/enum/contract already defines. → Reference the type.
+- Crate names, Rust API paths, version pins, or compiler-error lore in a domain
+  file. → Crates belong ONLY in `manifest.cue` and adapter `meta: framework:`;
+  environmental gotchas go in ONE short project-level note or a learning.
+- Writing a prompt that narrates the implementation line-by-line (a debugging
+  journal). → State the observable behavior + the assertion that proves it;
+  if a past bug taught a rule, make the rule an invariant or validation.
 - Narrating a prompt in chat as if you implemented it. → "I added an asset whose
   prompt asks for X," and link the `.cue`.
 - Static/mechanical generation of content the LLM could produce from a prompt. →

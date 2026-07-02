@@ -75,17 +75,17 @@ verifier agents run, the workflow reads the **authoritative engine state** from
 the `checks` table (`spec_sql`) and drives pass/fail off that:
 
 - `passed` / `graduated` → success
-- `malformed` → **QUARANTINE**, never regenerate. `spec/verify` sets this state
-  when a check's predicate is structurally invalid — a type mismatch (e.g. `eq`
-  against a string/bool field) or an unknown op — as opposed to `failed` (the
-  behavior simply isn't exhibited) or `theater` (non-discriminating). A
-  structurally broken check is the **check's fault, not the implementation's**:
-  no amount of regenerated code can ever satisfy a predicate that can't
-  type-check against the field it targets. The workflow does not call
-  `spec_resolve` for these — it never blocks the resource or counts as a
-  generation failure. Instead each malformed check is collected into a
-  `quarantined` list (`{resource_id, check_id, reason}`) for a human /
-  spec-author to fix the check definition itself.
+- `malformed` → **RE-AUTHOR the check, then block**. `spec/verify` sets this
+  state when a check's predicate is structurally invalid — a type mismatch
+  (e.g. `eq` against a string/bool field) or an unknown op. A structurally
+  broken check is the **check's fault, not the implementation's**: regenerated
+  code can never satisfy a predicate that can't type-check. The workflow
+  therefore re-runs the TASKS stage for that resource once (with the
+  malformation reasons as feedback; `spec/tasks_commit` replaces the prior
+  check set) and re-verifies. A check still malformed after re-authoring goes
+  on the `blocked` list — and `spec/finish` REFUSES to finalize the session
+  while any such check exists. There is no quarantine and no quiet exit from
+  enforcement.
 - `failed` / `theater` → failure → `spec_resolve` (regenerate)
 - `pending` / absent → failure → `spec_resolve` (regenerate). A check still
   pending after its verifier ran means the verifier crashed, timed out, returned
@@ -93,8 +93,9 @@ the `checks` table (`spec_sql`) and drives pass/fail off that:
   witness — the behavior is unverified, so the resource regenerates. A
   crashed/empty verifier is never silently dropped.
 
-Verifier agents run in parallel per check (within a resource). The stall guard
-bounds infinite cycles if behavioral checks never converge.
+Verifier agents run in parallel per check (within a resource). If a wave
+repeats past its pass budget the run HALTS loudly with the unresolved
+resources listed — nothing is auto-skipped.
 
 ### Post-wave: project-level verification
 After behavioral verify, `spec_verify_wave` runs compile/test/fmt checks.
@@ -105,17 +106,20 @@ next `spec_next` call.
 ## Invocation
 
 ```
-1. spec_plan       — review what will change. If empty, stop.
+1. spec_plan       — review what will change (and the `drift` list: files
+   edited out-of-band since their commit). If empty, stop.
 2. spec_begin      — returns session_id, plan, waves, PendingDestroys.
 3. spec_confirm_destroys — if PendingDestroys is non-empty, confirm first.
 4. Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>"}})
-5. Review triaged list; surface skips to user.
-6. spec_finish     — if reflection_prompt non-empty, run with sonnet → spec_record_learnings.
+5. Review triaged + unresolved lists; surface halts and skips to the user.
+6. spec_finish     — REFUSES (Blocked=true, blocking_checks listed) while any
+   behavioral check is pending/failed/theater/malformed. Resolve the blockers;
+   force=true is an explicit human decision, never the default. If
+   reflection_prompt non-empty, run with sonnet → spec_record_learnings.
 7. Review graduated list — each entry is a confirmed behavioral check; use
    spec-authoring skill to author them back into the spec invariants.
-8. Review quarantined list — each entry is a check with a structurally invalid
-   predicate; it was never regenerated against, and needs a human/spec-author
-   fix to the check definition, not the resource code.
+8. Review blocked list — checks still structurally malformed after one
+   re-authoring pass; fix the check definitions (tasks stage), not the code.
 ```
 
 Use `args.model` to override the generation model. Never haiku.
@@ -127,7 +131,8 @@ Use `args.model` to override the generation model. Never haiku.
   "waves_processed": N,
   "triaged": [...],
   "graduated": [{"resource_id": "...", "check_id": "...", "state": "graduated"}],
-  "quarantined": [{"resource_id": "...", "check_id": "...", "reason": "..."}],
+  "blocked": [{"resource_id": "...", "check_id": "...", "reason": "..."}],
+  "unresolved": [{"resource_id": "...", "attempts": N, "last_error": "..."}],
   "behavioral_checks_total": N,
   "next_steps": "..."
 }
@@ -135,15 +140,18 @@ Use `args.model` to override the generation model. Never haiku.
 
 ## Failure handling
 
-- Generator retries are bounded by maxRetries (default 3) inside the generator agent.
+- Generator retries are bounded by maxRetries (default 3) inside the generator
+  agent. `spec_context` injects the prior failure (`## Previous Errors`) and
+  any triage guidance (`## Guidance`) into every retry prompt.
 - Behavioral check failures feed back via `spec_resolve` (same mechanism as
   compile failures) — the resource cycles into the next wave pass with failure context.
-- Malformed checks (structurally invalid predicate) are QUARANTINED, not fed
-  back via `spec_resolve` — they cannot converge through regeneration, so
-  looping them would stall the wave forever. They're reported for a human /
-  spec-author to fix instead.
-- The stall guard (MAX_STALLS=2, MAX_STALLS_HARD=5) terminates infinite cycles
-  by force-skipping culprit resources.
+- Malformed checks (structurally invalid predicate) are RE-AUTHORED once via
+  the tasks stage; if still malformed they land on `blocked` and `spec_finish`
+  refuses until they are fixed. They are never silently dropped.
+- If a wave repeats past its pass budget (MAX_STALLS=3) the run HALTS loudly
+  and returns the unresolved resources. Nothing is auto-skipped: decide
+  explicitly — better `spec_resolve` guidance, a spec fix, or a `spec_skip`
+  whose reason quotes the actual spec contradiction.
 - If the whole workflow dies: `spec_status`/`spec_wave_status` show where it
   stopped; re-invoking with the same sessionId resumes (spec_next re-serves
   non-terminal resources; design/tasks are idempotent via upsert).
@@ -163,8 +171,12 @@ as a failure.
 
 ## Rules
 
-- Never write generated-resource code in the main session — every file comes
-  from a sub-agent via `spec_commit`.
+- Never write generated-resource code ANYWHERE — not in the main session, not
+  via a sub-agent's own file tools. Every file enters the project through
+  `spec_commit`; out-of-band writes surface as `drift` in `spec_plan` and are
+  treated as defects.
+- `spec_skip` is for a WRONG SPEC (quote the contradiction), never for hard
+  work or non-convergence. Halts are resolved by humans, not by skipping.
 - Waves are sequential; resources within a wave run in parallel.
 - Design and tasks phases run once per session (before the wave loop).
 - Behavioral checks live only in sqlite (never in .cue files) until graduated
