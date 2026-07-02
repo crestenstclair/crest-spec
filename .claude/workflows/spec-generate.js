@@ -237,14 +237,12 @@ Then run this loop (at most ${maxRetries + 1} attempts):
    verification is independent (behavioral checks), so a violation WILL be
    caught after commit and cost a full regeneration. Follow the prompt's
    folder structure and style rules. Do NOT create files the prompt doesn't
-   call for. Before committing, if the project has a formatter (cargo fmt,
-   gofmt, prettier), run it over your files and commit the formatted content —
-   tree-wide format checks run after the wave and a diff costs a full retry loop.
+   call for. Don't sweat formatting — the wave gate normalizes it
+   automatically; your job is the design, not the whitespace.
 4. Call spec_commit with {session_id, resource_id, files: [{path, content}],
-   model: "${model}", notes: <one-line design note>}. spec_commit is the ONLY
-   way files enter the project: never write into the project tree with your
-   own file tools — out-of-band writes show up as drift in spec_plan and are
-   treated as a defect.
+   model: "${model}", notes: <one-line design note>}. Commit through
+   spec_commit rather than writing into the project tree with your own file
+   tools — that keeps the loop's state and feedback coherent.
 5. If the result has Committed=true → stop, report outcome "committed".
    If Committed=false → read result.Validations for the failure, go back to
    step 1 (the new context carries the failure) and fix the actual problem.
@@ -603,7 +601,7 @@ Report: resolved=true/false.`,
   const committedCount = committedOutcomes.length
   if (committedCount > 0) {
     const verify = await agent(
-      `Load the crest-spec MCP tools (ToolSearch "select:mcp__crest-spec__spec_verify_wave,mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_sql"), then call spec_verify_wave with {session_id: "${sessionId}", wave_index: ${wave.wave_index}}. If Passed is true, report "wave verified". If Passed is false, attribute each failure YOURSELF before resolving — the server's ResourceID field is a loose heuristic and routinely pins tree-wide fmt/clippy/test failures on the wrong resource. For each error: read the Message, find the file path(s) actually failing (rustfmt diffs and compiler errors name their files), then map each file to its owning resource with spec_sql: SELECT resource_id FROM generated_files WHERE path LIKE '%<filename>%'. Call spec_resolve with {session_id: "${sessionId}", resource_id: <the OWNING resource>, guidance: <the exact failure for that file, condensed to what the regenerating agent must fix>}. Never resolve a resource for a failure that is not in its own files, and never resolve the same resource twice for an identical message — if the owner is not in this session or you cannot place a failure, report it as unattributed instead. Report: passed true/false, which resources you resolved, and any unattributed errors.`,
+      `Load the crest-spec MCP tools (ToolSearch "select:mcp__crest-spec__spec_verify_wave,mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_sql"), then call spec_verify_wave with {session_id: "${sessionId}", wave_index: ${wave.wave_index}}. If Passed is true, report "wave verified". If Passed is false, attribute each failure YOURSELF before resolving — the server's ResourceID field is a loose heuristic and routinely pins tree-wide clippy/test failures on the wrong resource. For each error: read the Message, find the file path(s) actually failing (compiler and clippy errors name their files), then map each file to its owning resource with spec_sql: SELECT resource_id FROM generated_files WHERE path LIKE '%<filename>%'. Call spec_resolve with {session_id: "${sessionId}", resource_id: <the OWNING resource>, guidance: <the exact failure for that file, condensed to what the regenerating agent must fix>}. Never resolve a resource for a failure that is not in its own files, and never resolve the same resource twice for an identical message — if the owner is not in this session or you cannot place a failure, report it as unattributed instead. Report: passed true/false, which resources you resolved, and any unattributed errors.`,
       { label: `verify:wave-${wave.wave_index}`, phase: 'Verify', schema: VERIFY_SCHEMA },
     )
     if (verify && verify.passed === false) {

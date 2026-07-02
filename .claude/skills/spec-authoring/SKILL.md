@@ -25,12 +25,19 @@ unified together (`load.Instances`, `Dir: specDir`). So:
 
 - **Group by domain — one file per bounded context.** `kernel.cue`, `synth.cue`,
   `effects.cue`, … plus `project.cue` (config) and `manifest.cue` (Cargo/Makefile).
-- **No phases. No overrides.** Those were a test-harness artifact for simulating
-  incremental builds; they do not belong in a real spec. Each asset has exactly
-  one declaration.
 - Every file starts with the same package clause (e.g. `package crestsynth`).
 - Co-locate an **adapter** with the context whose port it implements, and a
   **demo/binary asset** with the domain it exercises.
+
+**Phases are snapshot directories, not overlay files.** The evolving design is
+tracked as `phases/phase-N/` subdirectories, each a COMPLETE, standalone,
+copy-paste-able spec (point `CREST_SPEC_SPEC_DIR` at any one of them to build
+that stage; move it to the next phase and the planner diffs the evolution).
+The whole-picture `spec/` directory is the authoritative current design and
+must equal the highest phase. The OLD form — single `phase-N.cue` files
+unified with `override-*.cue` patches in one directory — stays dead: a phase
+is a full spec, never a diff. Within any one directory each asset has exactly
+one declaration.
 
 ## The CUE shape
 
@@ -55,7 +62,7 @@ project: meta: {language: "rust", style: "…", avoid: ["heap alloc on audio thr
 // Whole-tree validations = THE GATE. Run at wave verification across the
 // entire crate. This is where formatters/linters/build/test live.
 project: validations: [
-	{kind: "compiles", command: ["cargo", "fmt", "--", "--check"], description: "rustfmt clean"},
+	{kind: "custom", command: ["cargo", "fmt"], description: "normalize formatting (auto-fix, never blocks)"},
 	{kind: "compiles", command: ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], description: "clippy clean"},
 	{kind: "compiles", command: ["cargo", "build"], description: "crate builds"},
 	{kind: "test", command: ["cargo", "test"], description: "tests pass"},
@@ -157,9 +164,11 @@ invariant/validation/type, the spec is growing prose, not getting better.
 
 The core loop is **generate → commit → validate → retry-with-feedback**. Two
 layers of validation:
-- **Whole-tree** (`project: validations`) — fmt, clippy `--all-targets`, build,
-  test across the *entire crate*. This is the primary gate. It runs at wave
-  verification. Keep it strict.
+- **Whole-tree** (`project: validations`) — clippy `--all-targets`, build, and
+  test across the *entire crate*, plus `cargo fmt` as auto-normalization (it
+  fixes formatting rather than failing on it — the gate polices design, not
+  whitespace). This is the primary gate. It runs at wave verification. Keep
+  the design checks strict.
 - **Per-asset** (`validations:` on an asset) — `make` targets with `assertions`
   that prove that asset's behavior.
 

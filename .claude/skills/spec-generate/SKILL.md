@@ -106,8 +106,7 @@ next `spec_next` call.
 ## Invocation
 
 ```
-1. spec_plan       — review what will change (and the `drift` list: files
-   edited out-of-band since their commit). If empty, stop.
+1. spec_plan       — review what will change. If empty, stop.
 2. spec_begin      — returns session_id, plan, waves, PendingDestroys.
 3. spec_confirm_destroys — if PendingDestroys is non-empty, confirm first.
 4. Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>"}})
@@ -173,8 +172,9 @@ as a failure.
 
 - Never write generated-resource code ANYWHERE — not in the main session, not
   via a sub-agent's own file tools. Every file enters the project through
-  `spec_commit`; out-of-band writes surface as `drift` in `spec_plan` and are
-  treated as defects.
+  `spec_commit` so the loop's feedback stays coherent. (The user's own hand
+  edits to generated files are fine — once generated, the disk is theirs;
+  the planner never polices content.)
 - `spec_skip` is for a WRONG SPEC (quote the contradiction), never for hard
   work or non-convergence. Halts are resolved by humans, not by skipping.
 - Waves are sequential; resources within a wave run in parallel.

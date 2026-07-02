@@ -139,7 +139,7 @@ A plan/apply lifecycle: the **server** plans and checks; **Claude Code** fills.
 4. **Check** — On `spec/commit` the server writes the files and runs the resource's mechanical validations, fail-closed (a validation that cannot launch is a failure). Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`: a real witness must pass AND a degenerate stub must fail). Any failure rejects/regenerates with the detail folded into the next `spec/context`, up to `CREST_SPEC_MAX_RETRIES`. Persistent failures are triaged with `spec/resolve`, or `spec/skip` when the spec itself is provably contradictory.
 5. **Finish** (`spec/finish`) — Waves run until none remain. Finish refuses while behavioral checks are unresolved (`force` is an explicit override). Optionally a reflection pass distils learnings via `spec/evolve` / `spec/record_learnings`.
 
-Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec drift, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. `spec/plan` also reports generated files edited out-of-band (drift) — visible, never silently absorbed.
+Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec changes, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. Once generated, a file's content is yours: the planner guides architecture and invariants, it does not police file contents.
 
 ![High-level flow: CUE spec files load into an in-memory resource registry, diff against SQLite state to produce a plan of waves, the orchestrator's sub-agents generate each resource, and the server's commit gate validates — passes are persisted, failures fold back into the next context and regenerate](docs/images/constraint-loop-flow.svg)
 
@@ -211,7 +211,7 @@ make fmt          # go fmt ./...
 make lint         # golangci-lint run
 ```
 
-See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth` for a multi-phase reference spec.
+See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth` for the reference spec. Its `spec/` directory is the whole-picture design (domain-grouped, one file per bounded context); `phases/phase-1/` through `phases/phase-10/` are complete, standalone snapshots of the same design as it evolves (per `DESIGN.md`) — point `CREST_SPEC_SPEC_DIR` at any phase to build that stage, then at the next one and the planner regenerates exactly the delta. `phases/phase-10` always equals `spec/` (enforced by test; regenerate with `scripts/build-phases.py`).
 
 ## Status
 

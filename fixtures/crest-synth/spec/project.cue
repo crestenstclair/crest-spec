@@ -27,8 +27,11 @@ project: meta: {
 }
 
 // Whole-tree gate: runs across the entire crate at wave verification.
+// Formatting is NORMALIZED, never policed: `cargo fmt` auto-fixes the tree
+// and always passes. The gate blocks on design-level failures only —
+// lints, compilation, behavior.
 project: validations: [
-	{kind: "compiles", command: ["cargo", "fmt", "--", "--check"], description: "rustfmt clean"},
+	{kind: "custom", command: ["cargo", "fmt"], description: "normalize formatting (auto-fix, never blocks)"},
 	{kind: "compiles", command: ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], description: "clippy clean"},
 	{kind: "compiles", command: ["cargo", "build"], description: "crate builds"},
 	{kind: "test", command: ["cargo", "test"], description: "tests pass"},

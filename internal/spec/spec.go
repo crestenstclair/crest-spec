@@ -294,9 +294,6 @@ type PlanResult struct {
 	Waves    [][]string
 	Hashes   map[string]string
 	Mode     string
-	// Drift lists generated files edited out-of-band since their commit.
-	// Advisory: drift never triggers regeneration, but it must be visible.
-	Drift []planpkg.Drift
 }
 
 func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
@@ -328,11 +325,6 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		return nil, err
 	}
 
-	drift, err := planner.DetectDrift()
-	if err != nil {
-		return nil, err
-	}
-
 	waves, err := g.Waves()
 	if err != nil {
 		return nil, err
@@ -350,6 +342,5 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		Waves:    waveStrings,
 		Hashes:   hashes,
 		Mode:     mode,
-		Drift:    drift,
 	}, nil
 }
