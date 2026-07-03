@@ -227,8 +227,7 @@ func evalPredicate(p Predicate, obs Observation) (bool, string, bool) {
 		if p.Member == nil {
 			return false, "equals: predicate is missing its required member (structural)", true
 		}
-		ok2, msg := evalEqualsLike("equals", p.Field, raw, p.Member)
-		return ok2, msg, false
+		return evalEqualsLike("equals", p.Field, raw, p.Member)
 	default:
 		return false, fmt.Sprintf("unknown op %q", p.Op), true
 	}
@@ -244,8 +243,7 @@ func evalEq(p Predicate, raw any) (bool, string, bool) {
 	if n, ok := asNumber(raw); ok {
 		if p.Value == nil {
 			if p.Member != nil {
-				ok2, msg := evalEqualsLike("eq", p.Field, raw, p.Member)
-				return ok2, msg, false
+				return evalEqualsLike("eq", p.Field, raw, p.Member)
 			}
 			return false, "eq: predicate is missing its required value (structural)", true
 		}
@@ -253,8 +251,7 @@ func evalEq(p Predicate, raw any) (bool, string, bool) {
 		return ok2, msg, false
 	}
 	if p.Member != nil {
-		ok2, msg := evalEqualsLike("eq", p.Field, raw, p.Member)
-		return ok2, msg, false
+		return evalEqualsLike("eq", p.Field, raw, p.Member)
 	}
 	return false, fmt.Sprintf("eq: field %q is not numeric and no member provided (structural)", p.Field), true
 }
@@ -262,19 +259,26 @@ func evalEq(p Predicate, raw any) (bool, string, bool) {
 // evalEqualsLike is the shared two-branch comparison used by both "equals"
 // and type-tolerant "eq": numeric if both sides coerce to a number, otherwise
 // a string comparison via fmt formatting (handles bool/string/enum alike).
-func evalEqualsLike(label, field string, raw, member any) (bool, string) {
+func evalEqualsLike(label, field string, raw, member any) (bool, string, bool) {
 	nField, fieldIsNum := asNumber(raw)
 	nMember, memberIsNum := asNumber(member)
 	if fieldIsNum && memberIsNum {
 		if nField != nMember {
-			return false, fmt.Sprintf("%s: %q got %v, want %v", label, field, raw, member)
+			return false, fmt.Sprintf("%s: %q got %v, want %v", label, field, raw, member), false
 		}
-		return true, ""
+		return true, "", false
+	}
+	// Exactly one side numeric = type mismatch. The classic case is a
+	// symbolic member ("SR") back-referencing a witness argument and being
+	// compared literally against the measured number — the CHECK's authoring
+	// fault, never the code's.
+	if fieldIsNum != memberIsNum {
+		return false, fmt.Sprintf("%s: %q observed %v but member %v is a different type — likely a symbolic member instead of a concrete literal (structural)", label, field, raw, member), true
 	}
 	if fmt.Sprintf("%v", raw) != fmt.Sprintf("%v", member) {
-		return false, fmt.Sprintf("%s: %q got %v, want %v", label, field, raw, member)
+		return false, fmt.Sprintf("%s: %q got %v, want %v", label, field, raw, member), false
 	}
-	return true, ""
+	return true, "", false
 }
 
 func cmpNumber(op Op, got, want float64) (bool, string) {
