@@ -98,6 +98,14 @@ The check.predicates define WHAT to measure (each "field" is a quantity observab
 Steps:
 1. ToolSearch "select:mcp__crest-spec__spec_inspect,mcp__crest-spec__spec_verify,mcp__crest-spec__spec_graduate"
 2. Call spec_inspect for "${resourceId}" to learn the public interface (types, functions, endpoints) from the spec declaration — do NOT read committed source files.
+SCENE-RUNNER PREFERENCE: if the project ships a scene runner binary
+(src/bin/scene_run.rs — check with spec/sql: SELECT 1 FROM generated_files
+WHERE path LIKE '%scene_run%'), PREFER it as the witness: author a scene
+file exercising the behavior, run scene_run --scene <file>, and map the
+CREST_OBS fields from the emitted snapshot JSON / summary line. The stub
+baseline is the same scene evaluated against a degenerate no-op reducer
+shape (never the real crate). Fall back to a bespoke harness crate only
+when the behavior is not reachable through applied events.
 3. Write a REAL WITNESS at /tmp/crest_witness_${checkId}/main.go (or appropriate extension for the project language). The witness must:
    a. Call the resource's public interface in a realistic scenario exercising "${behavior}".
    b. Measure each predicate field and collect the values into a JSON object.
