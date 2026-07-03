@@ -26,12 +26,14 @@ SELECT * FROM generated_files WHERE resource_id = ?;
 -- name: SetGeneratedFile :exec
 INSERT INTO generated_files (path, resource_id, content_hash, prompt_hash, model, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(path) DO UPDATE SET
-    resource_id = excluded.resource_id,
+ON CONFLICT(path, resource_id) DO UPDATE SET
     content_hash = excluded.content_hash,
     prompt_hash = excluded.prompt_hash,
     model = excluded.model,
     created_at = excluded.created_at;
+
+-- name: CountOtherFileOwners :one
+SELECT COUNT(*) FROM generated_files WHERE path = ? AND resource_id != ?;
 
 -- name: DeleteGeneratedFiles :exec
 DELETE FROM generated_files WHERE resource_id = ?;

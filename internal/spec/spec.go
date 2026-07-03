@@ -24,6 +24,7 @@ type specStore interface {
 	GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error)
 	SetGeneratedFile(f store.GeneratedFile) error
 	DeleteGeneratedFiles(resourceID string) error
+	CountOtherFileOwners(path, resourceID string) (int64, error)
 	SetDependency(sourceID, targetID, kind string) error
 	DeleteDependencies(sourceID string) error
 	AcquireLock(holder string, pid int) error

@@ -98,6 +98,7 @@ func (s *stubStore) DeleteResource(id string) error                 { return nil
 func (s *stubStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) {
 	return nil, nil
 }
+func (s *stubStore) CountOtherFileOwners(path, resourceID string) (int64, error) { return 0, nil }
 func (s *stubStore) SetGeneratedFile(f store.GeneratedFile) error                   { return nil }
 func (s *stubStore) DeleteGeneratedFiles(resourceID string) error                   { return nil }
 func (s *stubStore) SetDependency(sourceID, targetID, kind string) error            { return nil }

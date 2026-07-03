@@ -9,6 +9,22 @@ import (
 	"context"
 )
 
+const countOtherFileOwners = `-- name: CountOtherFileOwners :one
+SELECT COUNT(*) FROM generated_files WHERE path = ? AND resource_id != ?
+`
+
+type CountOtherFileOwnersParams struct {
+	Path       string
+	ResourceID string
+}
+
+func (q *Queries) CountOtherFileOwners(ctx context.Context, arg CountOtherFileOwnersParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOtherFileOwners, arg.Path, arg.ResourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteDependencies = `-- name: DeleteDependencies :exec
 DELETE FROM dependencies WHERE source_id = ?
 `
@@ -174,8 +190,7 @@ func (q *Queries) SetDependency(ctx context.Context, arg SetDependencyParams) er
 const setGeneratedFile = `-- name: SetGeneratedFile :exec
 INSERT INTO generated_files (path, resource_id, content_hash, prompt_hash, model, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(path) DO UPDATE SET
-    resource_id = excluded.resource_id,
+ON CONFLICT(path, resource_id) DO UPDATE SET
     content_hash = excluded.content_hash,
     prompt_hash = excluded.prompt_hash,
     model = excluded.model,

@@ -596,6 +596,17 @@ func (s *Store) DeleteGeneratedFiles(resourceID string) error {
 	return s.queries.DeleteGeneratedFiles(context.Background(), resourceID)
 }
 
+// CountOtherFileOwners reports how many OTHER resources also own path.
+// Ownership is (path, resource_id); a destroy may only remove the file from
+// disk when this returns zero — shared module files survive their
+// co-committers.
+func (s *Store) CountOtherFileOwners(path, resourceID string) (int64, error) {
+	return s.queries.CountOtherFileOwners(context.Background(), db.CountOtherFileOwnersParams{
+		Path:       path,
+		ResourceID: resourceID,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Dependency CRUD
 // ---------------------------------------------------------------------------

@@ -195,6 +195,12 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 		var deletedFiles []string
 		files, _ := s.store.GetGeneratedFiles(a.ResourceID)
 		for _, f := range files {
+			// A shared module file (src/lib.rs, mod.rs) survives as long as
+			// any other live resource owns it; only sole-owned files leave
+			// the disk with their resource.
+			if n, err := s.store.CountOtherFileOwners(f.Path, a.ResourceID); err == nil && n > 0 {
+				continue
+			}
 			if err := s.fs.Remove(f.Path); err == nil {
 				deletedFiles = append(deletedFiles, f.Path)
 			}
