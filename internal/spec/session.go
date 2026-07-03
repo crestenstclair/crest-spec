@@ -642,19 +642,25 @@ func (s *Spec) persistCommittedResource(
 		SettledAt:       time.Now().UTC(),
 	})
 
-	s.store.DeleteGeneratedFiles(resourceID)
-	for _, f := range files {
-		if f.Path == "" {
-			continue
+	// A commit with NO files is an adoption: the on-disk code was validated
+	// as-is (crest-spec adopt, or re-settling after a strengthened validation).
+	// Existing file tracking MUST survive it — wiping the rows would sever the
+	// resource from its files and break UPDATE-mode iteration.
+	if len(files) > 0 {
+		s.store.DeleteGeneratedFiles(resourceID)
+		for _, f := range files {
+			if f.Path == "" {
+				continue
+			}
+			contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content)))
+			s.store.SetGeneratedFile(store.GeneratedFile{
+				Path:        f.Path,
+				ResourceID:  resourceID,
+				ContentHash: contentHash,
+				Model:       s.cfg.GenerateModel,
+				CreatedAt:   time.Now().UTC(),
+			})
 		}
-		contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content)))
-		s.store.SetGeneratedFile(store.GeneratedFile{
-			Path:        f.Path,
-			ResourceID:  resourceID,
-			ContentHash: contentHash,
-			Model:       s.cfg.GenerateModel,
-			CreatedAt:   time.Now().UTC(),
-		})
 	}
 
 	s.store.DeleteDependencies(resourceID)

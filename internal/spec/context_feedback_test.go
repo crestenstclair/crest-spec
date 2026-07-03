@@ -98,6 +98,34 @@ project: contexts: Audio: valueObjects: Tone: {
 		"the failure must accompany the code so the fix is targeted")
 }
 
+// Adoption keeps file tracking: committing with NO files (crest-spec adopt,
+// or re-settling after a strengthened validation) must preserve the
+// resource's generated_files rows — they are what makes UPDATE-mode
+// iteration possible.
+func TestNoFileCommitPreservesFileTracking(t *testing.T) {
+	s, st := newTestSpecWithSession(t)
+	ctx := context.Background()
+
+	path := t.TempDir() + "/tone.go"
+	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+		[]CommitFile{{Path: path, Content: "package out\n"}}, "", "claude-sonnet-5")
+	require.NoError(t, err)
+
+	files, err := s.store.GetGeneratedFiles(st.resourceID)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	// Re-settle with no files (the adopt path).
+	require.NoError(t, s.Resolve(ctx, st.sessionID, st.resourceID, "re-settle", ""))
+	_, err = s.Commit(ctx, st.sessionID, st.resourceID, nil, "adopted", "claude-sonnet-5")
+	require.NoError(t, err)
+
+	files, err = s.store.GetGeneratedFiles(st.resourceID)
+	require.NoError(t, err)
+	require.Len(t, files, 1, "a no-file commit must not sever the resource from its files")
+	require.Equal(t, path, files[0].Path)
+}
+
 func TestContextWithoutFailureHasNoErrorSection(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 
