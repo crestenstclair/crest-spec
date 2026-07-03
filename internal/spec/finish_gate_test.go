@@ -2,6 +2,8 @@ package spec
 
 import (
 	"context"
+
+	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"path/filepath"
 	"testing"
 
@@ -101,4 +103,25 @@ func TestFinishProceedsWhenChecksResolved(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.Blocked)
 	require.Equal(t, 1, res.Committed)
+}
+
+// Destroying a resource removes its behavioral state too — otherwise checks
+// for a deleted resource dangle forever in every reconcile.
+func TestDestroyRemovesBehavioralState(t *testing.T) {
+	s, st := newTestSpecWithSession(t)
+	ctx := context.Background()
+
+	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+		[]CommitFile{{Path: t.TempDir() + "/a.go", Content: "package out\n"}}, "", "claude-sonnet-5")
+	require.NoError(t, err)
+	seedChecks(t, s, st.resourceID, []string{"passed"})
+
+	sess, err := s.store.GetSession(st.sessionID)
+	require.NoError(t, err)
+	destroyed := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: st.resourceID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	require.Len(t, destroyed, 1)
+
+	checks, err := s.store.ListChecksByResource(st.resourceID)
+	require.NoError(t, err)
+	require.Empty(t, checks, "destroy must cascade to behavioral checks")
 }

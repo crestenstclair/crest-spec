@@ -201,6 +201,10 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 		}
 		s.store.DeleteGeneratedFiles(a.ResourceID)
 		s.store.DeleteDependencies(a.ResourceID)
+		// Behavioral state goes with the resource — dangling checks for a
+		// destroyed resource would haunt every future reconcile.
+		s.store.DeleteChecksByResource(a.ResourceID)
+		s.store.DeleteTasksByResource(a.ResourceID)
 		s.store.DeleteResource(a.ResourceID)
 		s.store.UpdateApplyAction(actionID, "destroyed", "")
 
