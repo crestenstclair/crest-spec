@@ -120,12 +120,17 @@ func Verify(c Check, real, stub Observation) Verdict {
 // prose description (long, many words) is an authoring error the check can
 // never recover from.
 func FieldNameValid(field string) bool {
-	if len(field) > 64 {
+	if len(field) == 0 || len(field) > 64 {
 		return false
 	}
 	spaces := 0
 	for _, r := range field {
-		if r == ' ' {
+		switch r {
+		case '(', ')', '[', ']', '{', '}', ':', '"', '\'', '`', ',', ';':
+			// Expression syntax — "ParameterId::new(42).value()" is code,
+			// not a key a witness can emit.
+			return false
+		case ' ':
 			spaces++
 		}
 	}

@@ -32,3 +32,17 @@ func TestFieldNameValid(t *testing.T) {
 	assert.False(t, FieldNameValid("the value returned by calling try_new with zero and unwrapping the error result"))
 	assert.True(t, FieldNameValid("try_new_zero_rejected"))
 }
+
+func TestExpressionFieldNamesAreInvalid(t *testing.T) {
+	for _, f := range []string{
+		"ParameterId::new(42).value()",
+		"PluginFormat::Clap.name()",
+		"u8::from(ParameterRange::try_new(5.0, 1.0, 3.0, None).is_err())",
+		`PluginFormat::from_str("CLAP").unwrap().name()`,
+	} {
+		assert.False(t, FieldNameValid(f), "expression %q must be rejected", f)
+	}
+	for _, f := range []string{"clap_extension", "param_id_roundtrip", "range_rejects_inverted", "steal_policy.victim_id"} {
+		assert.True(t, FieldNameValid(f), "key %q must be accepted", f)
+	}
+}
