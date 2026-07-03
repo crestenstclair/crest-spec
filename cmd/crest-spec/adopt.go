@@ -71,7 +71,14 @@ func cmdAdopt() {
 			}
 			attempted[r.ResourceID] = true
 			progressed = true
-			res, err := sp.Commit(ctx, begin.SessionID, r.ResourceID, nil, "adopted from existing on-disk code", "")
+			// Claim on-disk files by naming convention so adopted resources
+			// keep UPDATE-mode iteration; unclaimable resources adopt without
+			// file tracking and are reported below.
+			claims := sp.DiscoverClaims(ctx, r.ResourceID)
+			if len(claims) == 0 {
+				fmt.Printf("  (no file claim for %s — adopted without file tracking)\n", r.ResourceID)
+			}
+			res, err := sp.Commit(ctx, begin.SessionID, r.ResourceID, claims, "adopted from existing on-disk code", "")
 			switch {
 			case err != nil:
 				fmt.Printf("  ERROR    %s: %v\n", r.ResourceID, err)

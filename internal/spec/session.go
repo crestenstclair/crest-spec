@@ -652,7 +652,18 @@ func (s *Spec) persistCommittedResource(
 			if f.Path == "" {
 				continue
 			}
-			contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content)))
+			// A path with no content is a CLAIM on an existing on-disk file
+			// (adoption): nothing is written, but the file is tracked with
+			// the hash of what is already on disk.
+			content := []byte(f.Content)
+			if f.Content == "" {
+				data, err := s.fs.ReadFile(f.Path)
+				if err != nil {
+					continue
+				}
+				content = data
+			}
+			contentHash := fmt.Sprintf("%x", sha256.Sum256(content))
 			s.store.SetGeneratedFile(store.GeneratedFile{
 				Path:        f.Path,
 				ResourceID:  resourceID,
