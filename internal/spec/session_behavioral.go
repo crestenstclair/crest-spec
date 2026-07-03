@@ -79,6 +79,14 @@ func (s *Spec) TasksCommit(ctx context.Context, resourceID string, tasks []TaskI
 			return fmt.Errorf("insert task: %w", err)
 		}
 		for _, ci := range t.Checks {
+			// Loud early gate: reject descriptions-as-field-names at authoring
+			// time so the tasks agent fixes them immediately, instead of the
+			// check dying structurally at verification.
+			for _, p := range ci.Check.Predicates {
+				if !check.FieldNameValid(p.Field) {
+					return fmt.Errorf("check %q: predicate field name %q is a description, not a measurable key — use a short key the witness can emit verbatim", ci.Behavior, p.Field)
+				}
+			}
 			checkBytes, err := json.Marshal(ci.Check)
 			if err != nil {
 				return fmt.Errorf("marshal check: %w", err)

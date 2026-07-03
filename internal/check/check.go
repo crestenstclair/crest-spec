@@ -115,7 +115,27 @@ func Verify(c Check, real, stub Observation) Verdict {
 // against obs. structural is true only when the failure can never pass
 // regardless of implementation (wrong type, unknown op, or an eq predicate
 // that has no way to compare a non-numeric field).
+// FieldNameValid reports whether a predicate field name is a plausible
+// measurable key. A witness must emit the field verbatim as a JSON key, so a
+// prose description (long, many words) is an authoring error the check can
+// never recover from.
+func FieldNameValid(field string) bool {
+	if len(field) > 64 {
+		return false
+	}
+	spaces := 0
+	for _, r := range field {
+		if r == ' ' {
+			spaces++
+		}
+	}
+	return spaces < 4
+}
+
 func evalPredicate(p Predicate, obs Observation) (bool, string, bool) {
+	if !FieldNameValid(p.Field) {
+		return false, fmt.Sprintf("field name %q is a description, not a measurable key (structural)", p.Field), true
+	}
 	raw, ok := obs[p.Field]
 	if !ok {
 		return false, fmt.Sprintf("%s: field %q absent from observation", p.Op, p.Field), false
