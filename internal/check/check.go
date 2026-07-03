@@ -28,13 +28,19 @@ const (
 
 // Predicate is one typed assertion over a named field of an Observation.
 type Predicate struct {
-	Field  string  `json:"field"`
-	Op     Op      `json:"op"`
-	Value  float64 `json:"value,omitempty"`  // eq/gt/gte/lt/lte/count/distinct_count
-	Min    float64 `json:"min,omitempty"`    // range
-	Max    float64 `json:"max,omitempty"`    // range
-	Member any     `json:"member"` // set_contains (no omitempty: a zero-valued member must survive round-trip)
+	Field string `json:"field"`
+	Op    Op     `json:"op"`
+	// Value/Min/Max are pointers so a MISSING key is distinguishable from an
+	// explicit 0 — a predicate whose required bound is absent is a structural
+	// authoring error (it would otherwise silently compare against 0).
+	Value  *float64 `json:"value,omitempty"`  // eq/gt/gte/lt/lte/count/distinct_count
+	Min    *float64 `json:"min,omitempty"`    // range
+	Max    *float64 `json:"max,omitempty"`    // range
+	Member any      `json:"member"` // set_contains/equals (no omitempty: a zero-valued member must survive round-trip)
 }
+
+// F is a convenience for constructing predicate bounds in code and tests.
+func F(v float64) *float64 { return &v }
 
 // Check is a behavioral claim plus the predicates that must all hold for the
 // observation to count as exhibiting it.
@@ -118,37 +124,52 @@ func evalPredicate(p Predicate, obs Observation) (bool, string, bool) {
 	case OpEq:
 		return evalEq(p, raw)
 	case OpGt, OpGte, OpLt, OpLte:
+		if p.Value == nil {
+			return false, fmt.Sprintf("%s: predicate is missing its required value (structural)", p.Op), true
+		}
 		n, ok := asNumber(raw)
 		if !ok {
 			return false, fmt.Sprintf("%s: field %q is not numeric", p.Op, p.Field), true
 		}
-		ok2, msg := cmpNumber(p.Op, n, p.Value)
+		ok2, msg := cmpNumber(p.Op, n, *p.Value)
 		return ok2, msg, false
 	case OpRange:
+		if p.Min == nil || p.Max == nil {
+			return false, "range: predicate is missing its required min/max bounds (structural)", true
+		}
+		if *p.Min > *p.Max {
+			return false, fmt.Sprintf("range: min %v > max %v (structural)", *p.Min, *p.Max), true
+		}
 		n, ok := asNumber(raw)
 		if !ok {
 			return false, fmt.Sprintf("range: field %q is not numeric", p.Field), true
 		}
-		if n < p.Min || n > p.Max {
-			return false, fmt.Sprintf("range: %q=%v not in [%v,%v]", p.Field, n, p.Min, p.Max), false
+		if n < *p.Min || n > *p.Max {
+			return false, fmt.Sprintf("range: %q=%v not in [%v,%v]", p.Field, n, *p.Min, *p.Max), false
 		}
 		return true, "", false
 	case OpCount:
+		if p.Value == nil {
+			return false, "count: predicate is missing its required value (structural)", true
+		}
 		l, ok := asList(raw)
 		if !ok {
 			return false, fmt.Sprintf("count: field %q is not a list", p.Field), true
 		}
-		if float64(len(l)) != p.Value {
-			return false, fmt.Sprintf("count: %q has %d items, want %v", p.Field, len(l), p.Value), false
+		if float64(len(l)) != *p.Value {
+			return false, fmt.Sprintf("count: %q has %d items, want %v", p.Field, len(l), *p.Value), false
 		}
 		return true, "", false
 	case OpDistinctCount:
+		if p.Value == nil {
+			return false, "distinct_count: predicate is missing its required value (structural)", true
+		}
 		l, ok := asList(raw)
 		if !ok {
 			return false, fmt.Sprintf("distinct_count: field %q is not a list", p.Field), true
 		}
-		if d := distinct(l); float64(d) < p.Value {
-			return false, fmt.Sprintf("distinct_count: %q has %d distinct, want >= %v", p.Field, d, p.Value), false
+		if d := distinct(l); float64(d) < *p.Value {
+			return false, fmt.Sprintf("distinct_count: %q has %d distinct, want >= %v", p.Field, d, *p.Value), false
 		}
 		return true, "", false
 	case OpDiffer:
@@ -178,6 +199,9 @@ func evalPredicate(p Predicate, obs Observation) (bool, string, bool) {
 		}
 		return false, fmt.Sprintf("set_contains: %q does not contain %v", p.Field, p.Member), false
 	case OpEquals:
+		if p.Member == nil {
+			return false, "equals: predicate is missing its required member (structural)", true
+		}
 		ok2, msg := evalEqualsLike("equals", p.Field, raw, p.Member)
 		return ok2, msg, false
 	default:
@@ -193,7 +217,14 @@ func evalPredicate(p Predicate, obs Observation) (bool, string, bool) {
 // never pass: that is a structural (authoring) error, not a behavioral one.
 func evalEq(p Predicate, raw any) (bool, string, bool) {
 	if n, ok := asNumber(raw); ok {
-		ok2, msg := cmpNumber(OpEq, n, p.Value)
+		if p.Value == nil {
+			if p.Member != nil {
+				ok2, msg := evalEqualsLike("eq", p.Field, raw, p.Member)
+				return ok2, msg, false
+			}
+			return false, "eq: predicate is missing its required value (structural)", true
+		}
+		ok2, msg := cmpNumber(OpEq, n, *p.Value)
 		return ok2, msg, false
 	}
 	if p.Member != nil {

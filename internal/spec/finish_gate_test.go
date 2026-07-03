@@ -23,7 +23,7 @@ func seedChecks(t *testing.T, s *Spec, resourceID string, states []string) []str
 		tasks[0].Checks = append(tasks[0].Checks, CheckInput{
 			Behavior: "output is non-silent",
 			Check: check.Check{Predicates: []check.Predicate{
-				{Field: "peak", Op: "gt", Value: 0},
+				{Field: "peak", Op: "gt", Value: check.F(0)},
 			}},
 		})
 	}

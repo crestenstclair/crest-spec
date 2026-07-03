@@ -57,7 +57,7 @@ func TestTasksCommit_InsertsTasksAndChecks(t *testing.T) {
 					Behavior: "latency under 200ms",
 					Check: check.Check{
 						Behavior:   "latency under 200ms",
-						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 					},
 				},
 			},
@@ -99,14 +99,14 @@ func TestTasksCommit_Idempotent(t *testing.T) {
 					Behavior: "first check A",
 					Check: check.Check{
 						Behavior:   "first check A",
-						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 					},
 				},
 				{
 					Behavior: "first check B",
 					Check: check.Check{
 						Behavior:   "first check B",
-						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+						Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 					},
 				},
 			},
@@ -132,7 +132,7 @@ func TestTasksCommit_Idempotent(t *testing.T) {
 					Behavior: "second check A",
 					Check: check.Check{
 						Behavior:   "second check A",
-						Predicates: []check.Predicate{{Field: "rps", Op: check.OpGt, Value: 100}},
+						Predicates: []check.Predicate{{Field: "rps", Op: check.OpGt, Value: check.F(100)}},
 					},
 				},
 			},
@@ -182,7 +182,7 @@ func TestVerify_RealPassStubFail(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -209,7 +209,7 @@ func TestVerify_Theater(t *testing.T) {
 	// A trivially-true check: field > -999 always passes
 	c := check.Check{
 		Behavior:   "always true",
-		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: -999}},
+		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: check.F(-999)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -233,7 +233,7 @@ func TestVerify_RealFail(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -260,7 +260,7 @@ func TestVerify_EmptyStubRejected(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -287,7 +287,7 @@ func TestVerify_StubMissingPredicateFieldRejected(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -312,7 +312,7 @@ func TestVerify_PersistsVerification(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -338,7 +338,7 @@ func TestVerify_StructuralPredicateMarkedMalformed(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "error field equals expected value",
-		Predicates: []check.Predicate{{Field: "error", Op: check.OpEq, Value: 0}},
+		Predicates: []check.Predicate{{Field: "error", Op: check.OpEq, Value: check.F(0)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -365,7 +365,7 @@ func TestVerify_StubMalformedStaysFailedNotMalformed(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -391,7 +391,7 @@ func TestGraduate_TransitionsStateAndReturnsPredicates(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "latency under 200ms",
-		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: 200}},
+		Predicates: []check.Predicate{{Field: "latency_ms", Op: check.OpLt, Value: check.F(200)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -420,7 +420,7 @@ func TestGraduate_RejectsNonPassedCheck(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "always true",
-		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: -999}},
+		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: check.F(-999)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
@@ -435,7 +435,7 @@ func TestGraduate_RejectsTheaterCheck(t *testing.T) {
 
 	c := check.Check{
 		Behavior:   "always true",
-		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: -999}},
+		Predicates: []check.Predicate{{Field: "x", Op: check.OpGt, Value: check.F(-999)}},
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 

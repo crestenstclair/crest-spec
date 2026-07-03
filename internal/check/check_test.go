@@ -16,14 +16,14 @@ func TestEvaluate_NumericOps(t *testing.T) {
 		pred Predicate
 		want bool
 	}{
-		{"gt pass", Predicate{Field: "steals", Op: OpGt, Value: 0}, true},
-		{"gt fail", Predicate{Field: "steals", Op: OpGt, Value: 5}, false},
-		{"gte boundary", Predicate{Field: "voices", Op: OpGte, Value: 8}, true},
-		{"eq pass", Predicate{Field: "voices", Op: OpEq, Value: 8}, true},
-		{"lt pass", Predicate{Field: "steals", Op: OpLt, Value: 4}, true},
-		{"lte fail", Predicate{Field: "voices", Op: OpLte, Value: 7}, false},
-		{"absent field fails", Predicate{Field: "missing", Op: OpGt, Value: 0}, false},
-		{"non-numeric field fails", Predicate{Field: "label", Op: OpGt, Value: 0}, false},
+		{"gt pass", Predicate{Field: "steals", Op: OpGt, Value: F(0)}, true},
+		{"gt fail", Predicate{Field: "steals", Op: OpGt, Value: F(5)}, false},
+		{"gte boundary", Predicate{Field: "voices", Op: OpGte, Value: F(8)}, true},
+		{"eq pass", Predicate{Field: "voices", Op: OpEq, Value: F(8)}, true},
+		{"lt pass", Predicate{Field: "steals", Op: OpLt, Value: F(4)}, true},
+		{"lte fail", Predicate{Field: "voices", Op: OpLte, Value: F(7)}, false},
+		{"absent field fails", Predicate{Field: "missing", Op: OpGt, Value: F(0)}, false},
+		{"non-numeric field fails", Predicate{Field: "label", Op: OpGt, Value: F(0)}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -39,8 +39,8 @@ func TestEvaluate_NumericOps(t *testing.T) {
 func TestEvaluate_AggregatesAllPredicates(t *testing.T) {
 	obs := Observation{"a": 1.0, "b": 2.0}
 	c := Check{Predicates: []Predicate{
-		{Field: "a", Op: OpEq, Value: 1}, // pass
-		{Field: "b", Op: OpEq, Value: 9}, // fail
+		{Field: "a", Op: OpEq, Value: F(1)}, // pass
+		{Field: "b", Op: OpEq, Value: F(9)}, // fail
 	}}
 	res := Evaluate(c, obs)
 	assert.False(t, res.Passed)
@@ -50,12 +50,12 @@ func TestEvaluate_AggregatesAllPredicates(t *testing.T) {
 func TestEvaluate_Range(t *testing.T) {
 	obs := Observation{"cutoff": 12000.0}
 	pass := Evaluate(Check{Predicates: []Predicate{
-		{Field: "cutoff", Op: OpRange, Min: 20, Max: 20000},
+		{Field: "cutoff", Op: OpRange, Min: F(20), Max: F(20000)},
 	}}, obs)
 	assert.True(t, pass.Passed)
 
 	fail := Evaluate(Check{Predicates: []Predicate{
-		{Field: "cutoff", Op: OpRange, Min: 20, Max: 1000},
+		{Field: "cutoff", Op: OpRange, Min: F(20), Max: F(1000)},
 	}}, obs)
 	assert.False(t, fail.Passed)
 }
@@ -69,11 +69,11 @@ func TestEvaluate_ListOps(t *testing.T) {
 	assert.True(t, Evaluate(Check{Predicates: differ}, differObs).Passed)
 	assert.False(t, Evaluate(Check{Predicates: differ}, sameObs).Passed)
 
-	distinct2 := []Predicate{{Field: "zone_ids", Op: OpDistinctCount, Value: 2}}
+	distinct2 := []Predicate{{Field: "zone_ids", Op: OpDistinctCount, Value: F(2)}}
 	assert.True(t, Evaluate(Check{Predicates: distinct2}, differObs).Passed)
 	assert.False(t, Evaluate(Check{Predicates: distinct2}, sameObs).Passed)
 
-	count2 := []Predicate{{Field: "zone_ids", Op: OpCount, Value: 2}}
+	count2 := []Predicate{{Field: "zone_ids", Op: OpCount, Value: F(2)}}
 	assert.True(t, Evaluate(Check{Predicates: count2}, sameObs).Passed)
 
 	notAList := Observation{"zone_ids": 3.0}
@@ -97,7 +97,7 @@ func TestEvaluate_MonotonicAndSetContains(t *testing.T) {
 func TestVerify_FalsificationGate(t *testing.T) {
 	check := Check{
 		Behavior:   "past the polyphony limit, voice stealing occurs",
-		Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: 0}},
+		Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: F(0)}},
 	}
 	real := Observation{"steals": 4.0} // real impl steals
 	stub := Observation{"steals": 0.0} // no-op never steals
@@ -113,7 +113,7 @@ func TestVerify_FalsificationGate(t *testing.T) {
 	assert.False(t, notExhibited.Theater)
 
 	// A toothless check the stub also passes → theater, rejected even though real passes.
-	toothless := Check{Predicates: []Predicate{{Field: "steals", Op: OpGte, Value: 0}}}
+	toothless := Check{Predicates: []Predicate{{Field: "steals", Op: OpGte, Value: F(0)}}}
 	theater := Verify(toothless, real, stub)
 	assert.False(t, theater.Passed)
 	assert.True(t, theater.Theater)
@@ -129,7 +129,7 @@ func TestEvaluate_FromJSON(t *testing.T) {
 	c := Check{
 		Behavior: "stealing occurs, zones differ, meter rises",
 		Predicates: []Predicate{
-			{Field: "steals", Op: OpGt, Value: 0},
+			{Field: "steals", Op: OpGt, Value: F(0)},
 			{Field: "zone_ids", Op: OpDiffer},
 			{Field: "meter", Op: OpMonotonic},
 		},
@@ -188,7 +188,7 @@ func TestEvaluate_EqTypeTolerant(t *testing.T) {
 	}
 
 	// Numeric eq is unchanged.
-	res := Evaluate(Check{Predicates: []Predicate{{Field: "count", Op: OpEq, Value: 3}}}, obs)
+	res := Evaluate(Check{Predicates: []Predicate{{Field: "count", Op: OpEq, Value: F(3)}}}, obs)
 	assert.True(t, res.Passed)
 	assert.Empty(t, res.StructuralFailures)
 
@@ -210,7 +210,7 @@ func TestEvaluate_EqTypeTolerant(t *testing.T) {
 	assert.Empty(t, res.StructuralFailures)
 
 	// Non-numeric field with NO Member cannot ever be compared: structural.
-	res = Evaluate(Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: 0}}}, obs)
+	res = Evaluate(Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: F(0)}}}, obs)
 	assert.False(t, res.Passed)
 	require.NotEmpty(t, res.Failures)
 	require.NotEmpty(t, res.StructuralFailures, "eq on non-numeric field with no member must be structural")
@@ -227,16 +227,16 @@ func TestEvaluate_StructuralClassification(t *testing.T) {
 	}
 
 	structuralCases := []Predicate{
-		{Field: "str", Op: OpGt, Value: 0},
-		{Field: "str", Op: OpRange, Min: 0, Max: 10},
-		{Field: "num", Op: OpCount, Value: 1},
-		{Field: "num", Op: OpDistinctCount, Value: 1},
+		{Field: "str", Op: OpGt, Value: F(0)},
+		{Field: "str", Op: OpRange, Min: F(0), Max: F(10)},
+		{Field: "num", Op: OpCount, Value: F(1)},
+		{Field: "num", Op: OpDistinctCount, Value: F(1)},
 		{Field: "num", Op: OpDiffer},
 		{Field: "num", Op: OpMonotonic},
 		{Field: "mixed_list", Op: OpMonotonic},
 		{Field: "num", Op: OpSetContains, Member: 1.0},
 		{Field: "num", Op: Op("bogus")},
-		{Field: "str", Op: OpEq, Value: 0},
+		{Field: "str", Op: OpEq, Value: F(0)},
 	}
 	for _, p := range structuralCases {
 		t.Run(string(p.Op)+" structural", func(t *testing.T) {
@@ -247,8 +247,8 @@ func TestEvaluate_StructuralClassification(t *testing.T) {
 	}
 
 	behavioralCases := []Predicate{
-		{Field: "short_list", Op: OpCount, Value: 5},
-		{Field: "list", Op: OpDistinctCount, Value: 99},
+		{Field: "short_list", Op: OpCount, Value: F(5)},
+		{Field: "list", Op: OpDistinctCount, Value: F(99)},
 	}
 	for _, p := range behavioralCases {
 		t.Run(string(p.Op)+" behavioral", func(t *testing.T) {
@@ -260,7 +260,7 @@ func TestEvaluate_StructuralClassification(t *testing.T) {
 }
 
 func TestVerify_StructuralVerdict(t *testing.T) {
-	c := Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: 0}}}
+	c := Check{Predicates: []Predicate{{Field: "result", Op: OpEq, Value: F(0)}}}
 	real := Observation{"result": "Ok"}
 	stub := Observation{"result": "Ok"}
 
@@ -270,7 +270,7 @@ func TestVerify_StructuralVerdict(t *testing.T) {
 }
 
 func TestVerify_NonStructuralVerdictUnaffected(t *testing.T) {
-	c := Check{Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: 0}}}
+	c := Check{Predicates: []Predicate{{Field: "steals", Op: OpGt, Value: F(0)}}}
 	v := Verify(c, Observation{"steals": 0.0}, Observation{"steals": 0.0})
 	assert.False(t, v.Structural)
 }
@@ -288,15 +288,15 @@ func TestEvaluate_TypeErrors(t *testing.T) {
 		name string
 		pred Predicate
 	}{
-		{"eq on string field", Predicate{Field: "str", Op: OpEq, Value: 0}},
-		{"range on string field", Predicate{Field: "str", Op: OpRange, Min: 0, Max: 10}},
-		{"count on non-list field", Predicate{Field: "num", Op: OpCount, Value: 1}},
-		{"distinct_count on non-list field", Predicate{Field: "num", Op: OpDistinctCount, Value: 1}},
+		{"eq on string field", Predicate{Field: "str", Op: OpEq, Value: F(0)}},
+		{"range on string field", Predicate{Field: "str", Op: OpRange, Min: F(0), Max: F(10)}},
+		{"count on non-list field", Predicate{Field: "num", Op: OpCount, Value: F(1)}},
+		{"distinct_count on non-list field", Predicate{Field: "num", Op: OpDistinctCount, Value: F(1)}},
 		{"differ on non-list field", Predicate{Field: "num", Op: OpDiffer}},
 		{"monotonic on non-list field", Predicate{Field: "num", Op: OpMonotonic}},
 		{"monotonic with non-numeric element in list", Predicate{Field: "mixed_list", Op: OpMonotonic}},
 		{"set_contains on non-list field", Predicate{Field: "num", Op: OpSetContains, Member: 1.0}},
-		{"count length mismatch", Predicate{Field: "short_list", Op: OpCount, Value: 5}},
+		{"count length mismatch", Predicate{Field: "short_list", Op: OpCount, Value: F(5)}},
 		{"unknown op", Predicate{Field: "num", Op: Op("bogus")}},
 	}
 
