@@ -1,0 +1,87 @@
+package prompt
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestInjectRuntimeContext_AllFields(t *testing.T) {
+	base := "base prompt content"
+	ctx := RuntimeContext{
+		ModuleTree:      "src/\n  Synth/\n    Voice.go",
+		DependencyFiles: map[string]string{"aggregate.Synth.Voice": "package voice\n..."},
+		AgentNotes:      map[string]string{"aggregate.Synth.Voice": "Used builder pattern for state"},
+		WaveErrors:      "error[E0425]: cannot find value `Oscillator`",
+		UserGuidance:    "Use try_send for audio thread",
+	}
+
+	result := InjectRuntimeContext(base, ctx)
+
+	assert.Contains(t, result, "base prompt content")
+	assert.Contains(t, result, "Module Tree")
+	assert.Contains(t, result, "src/\n  Synth/\n    Voice.go")
+	assert.Contains(t, result, "Existing Dependencies")
+	assert.Contains(t, result, "package voice")
+	assert.Contains(t, result, "Notes from Dependencies")
+	assert.Contains(t, result, "Used builder pattern for state")
+	assert.Contains(t, result, "Previous Errors")
+	assert.Contains(t, result, "cannot find value")
+	assert.Contains(t, result, "## Guidance")
+	assert.Contains(t, result, "try_send")
+}
+
+func TestInjectRuntimeContext_Empty(t *testing.T) {
+	base := "base prompt"
+	ctx := RuntimeContext{}
+
+	result := InjectRuntimeContext(base, ctx)
+
+	assert.Equal(t, base, result)
+}
+
+func TestInjectRuntimeContext_PartialFields(t *testing.T) {
+	base := "base prompt"
+	ctx := RuntimeContext{
+		ModuleTree: "src/\n  Synth/",
+	}
+
+	result := InjectRuntimeContext(base, ctx)
+
+	assert.Contains(t, result, "Module Tree")
+	assert.NotContains(t, result, "Existing Dependencies")
+	assert.NotContains(t, result, "Notes from Dependencies")
+	assert.NotContains(t, result, "Previous Errors")
+	assert.NotContains(t, result, "## Guidance")
+}
+
+func TestInjectRuntimeContext_Learnings(t *testing.T) {
+	out := InjectRuntimeContext("BASE", RuntimeContext{
+		Learnings: []string{"prefer blocking send", "derive PartialEq manually for NaN floats"},
+	})
+	assert.Contains(t, out, "## Learnings From Past Runs")
+	assert.Contains(t, out, "prefer blocking send")
+	assert.Contains(t, out, "derive PartialEq manually for NaN floats")
+}
+
+func TestInjectRuntimeContext_NoLearnings(t *testing.T) {
+	out := InjectRuntimeContext("BASE", RuntimeContext{})
+	assert.NotContains(t, out, "## Learnings From Past Runs")
+}
+
+func TestInjectRuntimeContext_UpdateMode(t *testing.T) {
+	out := InjectRuntimeContext("BASE PROMPT", RuntimeContext{
+		ExistingFiles:   map[string]string{"src/audio/equal_temperament.rs": "pub struct EqualTemperament;"},
+		ChangesRequired: "Reject 0.0/NaN/inf reference pitches in ::new.",
+	})
+	if !strings.Contains(out, "Reject 0.0/NaN/inf") {
+		t.Fatalf("expected CHANGES TO MAKE content, got:\n%s", out)
+	}
+	if !strings.Contains(out, "equal_temperament.rs") || !strings.Contains(out, "pub struct EqualTemperament;") {
+		t.Fatalf("expected existing file content, got:\n%s", out)
+	}
+	if !strings.Contains(out, "UPDATE MODE") {
+		t.Fatalf("expected update-mode framing, got:\n%s", out)
+	}
+}

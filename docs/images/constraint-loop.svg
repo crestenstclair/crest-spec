@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <!-- backdrop glow -->
+    <radialGradient id="bgGlow" cx="50%" cy="0%" r="90%">
+      <stop offset="0%" stop-color="#1b2230"/>
+      <stop offset="55%" stop-color="#11151d"/>
+      <stop offset="100%" stop-color="#0d1016"/>
+    </radialGradient>
+
+    <linearGradient id="declareBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7C9EFF"/><stop offset="100%" stop-color="#5C7CFF"/>
+    </linearGradient>
+    <linearGradient id="generateBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#C792EA"/><stop offset="100%" stop-color="#A86FE0"/>
+    </linearGradient>
+    <linearGradient id="validateBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FFC061"/><stop offset="100%" stop-color="#FF9F45"/>
+    </linearGradient>
+    <linearGradient id="commitBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#86E48C"/><stop offset="100%" stop-color="#57D27E"/>
+    </linearGradient>
+
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9FB6FF"/>
+      <stop offset="45%" stop-color="#C792EA"/>
+      <stop offset="100%" stop-color="#FFB454"/>
+    </linearGradient>
+
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#FF7B72" flood-opacity="0.55"/>
+    </filter>
+
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="7.5" refY="5" orient="auto">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#9AA7B8"/>
+    </marker>
+    <marker id="arrowPass" markerWidth="11" markerHeight="11" refX="7.5" refY="5" orient="auto">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#6FD98A"/>
+    </marker>
+    <marker id="arrowFail" markerWidth="12" markerHeight="12" refX="8" refY="5.5" orient="auto">
+      <path d="M1,1 L10,5.5 L1,10 Z" fill="#FF7B72"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="760" fill="url(#bgGlow)"/>
+
+  <!-- header -->
+  <text x="64" y="78" font-size="42" font-weight="700" fill="url(#titleGrad)" letter-spacing="0.5">The constraint loop</text>
+  <text x="65" y="116" font-size="18" fill="#9AA7B8" letter-spacing="0.2">You declare the invariants · the model fills the code · the server validates against them · failures loop back with feedback</text>
+
+  <!-- ============ CARDS ============ -->
+  <!-- card geometry: w=224 h=232 y=168 ; x: 64, 376, 688, 1000  -->
+
+  <!-- CARD 1 : DECLARE -->
+  <g transform="translate(64,168)">
+    <rect width="224" height="232" rx="16" fill="#161B24" stroke="#283143" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="16" y="0" width="192" height="5" rx="2.5" fill="url(#declareBar)"/>
+    <circle cx="38" cy="42" r="17" fill="#1f2a40" stroke="#7C9EFF" stroke-width="1.5"/>
+    <text x="38" y="47" font-size="13" font-weight="700" fill="#9FB6FF" text-anchor="middle">01</text>
+    <text x="66" y="38" font-size="20" font-weight="700" fill="#C9D6EE">DECLARE</text>
+    <text x="66" y="57" font-size="12.5" fill="#7C9EFF" font-weight="600">CUE spec · your intent</text>
+    <rect x="16" y="74" width="192" height="106" rx="9" fill="#0e131b" stroke="#222b3a" stroke-width="1"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">
+      <text x="28" y="95"  fill="#7C9EFF">Frequency: {</text>
+      <text x="40" y="112" fill="#8B98A9">from:</text><text x="80" y="112" fill="#86E48C">"f64"</text>
+      <text x="40" y="129" fill="#FFB454">invariants</text><text x="118" y="129" fill="#8B98A9">: [</text>
+      <text x="52" y="146" fill="#86E48C">"must be positive"</text>
+      <text x="40" y="163" fill="#8B98A9">]</text>
+      <text x="28" y="172" fill="#7C9EFF">}</text>
+    </g>
+    <text x="16" y="206" font-size="12.5" fill="#94A2B5">You state the <tspan fill="#FFB454" font-weight="600">constraints</tspan>.</text>
+    <text x="16" y="223" font-size="12.5" fill="#94A2B5">No body — just the shape + rules.</text>
+  </g>
+
+  <!-- CARD 2 : GENERATE -->
+  <g transform="translate(376,168)">
+    <rect width="224" height="232" rx="16" fill="#161B24" stroke="#283143" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="16" y="0" width="192" height="5" rx="2.5" fill="url(#generateBar)"/>
+    <circle cx="38" cy="42" r="17" fill="#2a2140" stroke="#C792EA" stroke-width="1.5"/>
+    <text x="38" y="47" font-size="13" font-weight="700" fill="#C792EA" text-anchor="middle">02</text>
+    <text x="66" y="38" font-size="20" font-weight="700" fill="#C9D6EE">GENERATE</text>
+    <text x="66" y="57" font-size="12.5" fill="#C792EA" font-weight="600">sub-agent · sonnet</text>
+    <rect x="16" y="74" width="192" height="106" rx="9" fill="#0e131b" stroke="#222b3a" stroke-width="1"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">
+      <text x="28" y="95"  fill="#C792EA">fn</text><text x="48" y="95" fill="#9FB6FF">try_new</text><text x="100" y="95" fill="#8B98A9">(v) {</text>
+      <text x="40" y="112" fill="#C792EA">if</text><text x="60" y="112" fill="#C9D6EE">v &lt;= 0.0</text><text x="128" y="112" fill="#8B98A9">{</text>
+      <text x="52" y="129" fill="#C792EA">return</text><text x="106" y="129" fill="#FF7B72">Err</text>
+      <text x="40" y="146" fill="#8B98A9">}</text>
+      <text x="40" y="163" fill="#C792EA">Ok</text><text x="60" y="163" fill="#8B98A9">(Self(v))</text>
+      <text x="28" y="172" fill="#8B98A9">}</text>
+    </g>
+    <text x="16" y="206" font-size="12.5" fill="#94A2B5">The model fills the body —</text>
+    <text x="16" y="223" font-size="12.5" fill="#94A2B5">encoding each invariant in code.</text>
+  </g>
+
+  <!-- CARD 3 : VALIDATE (the gate) -->
+  <g transform="translate(688,168)">
+    <rect width="224" height="232" rx="16" fill="#1a1710" stroke="#4a3a1c" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="16" y="0" width="192" height="5" rx="2.5" fill="url(#validateBar)"/>
+    <circle cx="38" cy="42" r="17" fill="#3a2c12" stroke="#FFB454" stroke-width="1.5"/>
+    <text x="38" y="47" font-size="13" font-weight="700" fill="#FFB454" text-anchor="middle">03</text>
+    <text x="66" y="38" font-size="20" font-weight="700" fill="#F1E6CE">VALIDATE</text>
+    <text x="66" y="57" font-size="12.5" fill="#FFB454" font-weight="600">the quality gate · server</text>
+    <rect x="16" y="74" width="192" height="106" rx="9" fill="#120f08" stroke="#3a2e16" stroke-width="1"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
+      <circle cx="34" cy="98" r="5.5" fill="none" stroke="#86E48C" stroke-width="1.6"/>
+      <path d="M31.5,98 l2,2 l3.5,-4" stroke="#86E48C" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <text x="48" y="102" fill="#C9D6EE">cargo check</text>
+
+      <circle cx="34" cy="124" r="5.5" fill="none" stroke="#86E48C" stroke-width="1.6"/>
+      <path d="M31.5,124 l2,2 l3.5,-4" stroke="#86E48C" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <text x="48" y="128" fill="#C9D6EE">cargo test</text>
+
+      <circle cx="34" cy="150" r="5.5" fill="none" stroke="#86E48C" stroke-width="1.6"/>
+      <path d="M31.5,150 l2,2 l3.5,-4" stroke="#86E48C" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <text x="48" y="154" fill="#C9D6EE">invariant verdicts</text>
+    </g>
+    <text x="16" y="206" font-size="12.5" fill="#B7A988">Compile / test / custom +</text>
+    <text x="16" y="223" font-size="12.5" fill="#B7A988">invariant judgement gate the commit.</text>
+  </g>
+
+  <!-- CARD 4 : COMMIT -->
+  <g transform="translate(1000,168)">
+    <rect width="224" height="232" rx="16" fill="#101a14" stroke="#1f4030" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="16" y="0" width="192" height="5" rx="2.5" fill="url(#commitBar)"/>
+    <circle cx="38" cy="42" r="17" fill="#123322" stroke="#86E48C" stroke-width="1.5"/>
+    <text x="38" y="47" font-size="13" font-weight="700" fill="#86E48C" text-anchor="middle">04</text>
+    <text x="66" y="38" font-size="20" font-weight="700" fill="#D7EEDD">COMMIT</text>
+    <text x="66" y="57" font-size="12.5" fill="#86E48C" font-weight="600">settled · written</text>
+    <rect x="16" y="74" width="192" height="106" rx="9" fill="#0a130d" stroke="#1c3527" stroke-width="1"/>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">
+      <text x="28" y="98"  fill="#86E48C">+ src/kernel/</text>
+      <text x="44" y="116" fill="#C9D6EE">frequency.rs</text>
+      <text x="28" y="142" fill="#8B98A9">+ tests: 6 pass</text>
+      <text x="28" y="166" fill="#8B98A9">state:</text><text x="78" y="166" fill="#86E48C">✓ settled</text>
+    </g>
+    <text x="16" y="206" font-size="12.5" fill="#9EB7A6">Files + state persisted.</text>
+    <text x="16" y="223" font-size="12.5" fill="#9EB7A6">Skipped until the spec changes.</text>
+  </g>
+
+  <!-- ============ FORWARD ARROWS ============ -->
+  <line x1="290" y1="284" x2="372" y2="284" stroke="#9AA7B8" stroke-width="2.4" marker-end="url(#arrow)"/>
+  <line x1="602" y1="284" x2="684" y2="284" stroke="#9AA7B8" stroke-width="2.4" marker-end="url(#arrow)"/>
+  <line x1="914" y1="284" x2="996" y2="284" stroke="#6FD98A" stroke-width="2.6" marker-end="url(#arrowPass)"/>
+  <text x="955" y="272" font-size="12.5" font-weight="700" fill="#86E48C" text-anchor="middle">✓ pass</text>
+
+  <!-- ============ FEEDBACK LOOP (validate -> generate) ============ -->
+  <!-- from bottom of VALIDATE (x=800,y=400) curving down and back to bottom of GENERATE (x=488,y=400) -->
+  <path d="M 800 400 C 800 540, 488 540, 488 404"
+        fill="none" stroke="#FF7B72" stroke-width="2.6" stroke-dasharray="2 0"
+        marker-end="url(#arrowFail)" filter="url(#softGlow)"/>
+
+  <!-- feedback label chip -->
+  <g transform="translate(444,512)">
+    <rect width="400" height="46" rx="23" fill="#1e1416" stroke="#FF7B72" stroke-width="1.4"/>
+    <text x="26" y="29" font-size="15" font-weight="700" fill="#FF7B72">✗ fail</text>
+    <text x="84" y="29" font-size="13.5" fill="#E3B4B0">failure detail folds into the next context — regenerate</text>
+  </g>
+
+  <!-- ============ FOOTER STRIP ============ -->
+  <rect x="64" y="616" width="1160" height="84" rx="14" fill="#12161e" stroke="#222b3a" stroke-width="1.2"/>
+  <rect x="64" y="616" width="5" height="84" rx="2.5" fill="url(#titleGrad)"/>
+  <text x="92" y="652" font-size="15.5" fill="#C9D6EE">
+    <tspan font-weight="700" fill="#FFB454">The invariants you declare are the constraints.</tspan>
+    <tspan fill="#9AA7B8"> They gate every commit — nothing lands until it satisfies them.</tspan>
+  </text>
+  <text x="92" y="679" font-size="14" fill="#8B98A9">
+    The server plans, validates, and records state in SQLite; Claude Code's sub-agents do the writing. Declaration drift — not wall-clock — drives regeneration.
+  </text>
+</svg>

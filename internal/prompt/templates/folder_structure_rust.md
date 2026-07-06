@@ -1,0 +1,18 @@
+# Folder Structure
+
+Use snake_case for all file and directory names.
+Place code in src/{context}/{resource}.rs — one file per type/resource.
+
+## Module Declarations (CRITICAL)
+
+You MUST include updated module declaration files in your output:
+- `src/lib.rs` — must declare `pub mod {context};` for every context directory under src/
+- `src/{context}/mod.rs` — must declare `pub mod {resource};` for every .rs file in that context directory
+
+If these files already exist (shown in Module Tree or Existing Dependencies), include them in your output with any new modules ADDED to the existing declarations. Never remove existing declarations.
+
+## Cargo Dependencies (CRITICAL)
+
+If your code uses an external crate (e.g. `cpal`, `midir`, `rtrb`, `gilrs`, `egui`), you MUST include an updated `Cargo.toml` in your output that ADDS the dependency under `[dependencies]` with a version.
+If a `Cargo.toml` already exists (shown in Existing Module Declarations), include it in your output with your new dependencies ADDED — never remove existing dependencies, `[lib]`, or `[[bin]]` sections.
+Only add crates your code actually imports. A build that fails on an unresolved import means the crate is missing from `Cargo.toml`.

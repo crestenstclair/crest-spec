@@ -1,0 +1,1 @@
+ALTER TABLE agent_sessions ADD COLUMN apply_id TEXT NOT NULL DEFAULT '';

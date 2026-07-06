@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crest-spec</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-hover: #1c2129;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --orange: #db6d28;
+  --purple: #bc8cff;
+  --mono: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  padding: 24px;
+}
+h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+h2 { font-size: 14px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text-muted); }
+.pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+.pulse.idle { background: var(--text-muted); animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes dispatched-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.grid { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.card h2 { margin-bottom: 12px; }
+
+.stat { margin-bottom: 12px; }
+.stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-row { display: flex; gap: 24px; }
+
+.progress-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 8px; display: flex; }
+.progress-seg { height: 100%; transition: width 0.3s; }
+.progress-seg.committed { background: var(--green); }
+.progress-seg.rejected { background: var(--red); }
+.progress-seg.errored { background: var(--orange); }
+.progress-seg.pending { background: var(--border); }
+.progress-seg.dispatched { background: var(--accent); animation: dispatched-pulse 2s infinite; }
+.progress-seg.skipped { background: var(--text-muted); }
+.progress-seg.blocked { background: var(--purple); }
+
+/* Donut chart (CSS-only) */
+.donut-container { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.donut {
+  width: 80px; height: 80px; border-radius: 50%;
+  position: relative; flex-shrink: 0;
+}
+.donut-hole {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 48px; height: 48px; border-radius: 50%; background: var(--surface);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 600;
+}
+.donut-legend { font-size: 12px; }
+.donut-legend-item { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.donut-legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(88, 166, 255, 0.04); }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.badge-green { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.badge-yellow { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.badge-red { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+.badge-blue { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+.badge-muted { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.badge-purple { background: rgba(188, 140, 255, 0.15); color: var(--purple); }
+.badge-orange { background: rgba(219, 109, 40, 0.15); color: var(--orange); }
+
+.wave-label { font-weight: 600; color: var(--accent); font-size: 12px; padding: 12px 12px 4px; }
+
+.resource-id { font-family: var(--mono); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+.empty { color: var(--text-muted); font-style: italic; padding: 24px; text-align: center; }
+.error-msg { color: var(--red); font-style: italic; padding: 24px; text-align: center; }
+
+.files-list { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.files-list span { display: block; }
+
+.tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; }
+.tab { padding: 8px 16px; font-size: 13px; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; white-space: nowrap; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.log-entry { padding: 4px 0; font-size: 12px; font-family: var(--mono); }
+.log-time { color: var(--text-muted); margin-right: 8px; }
+
+.collapsible { max-height: 60px; overflow: hidden; position: relative; transition: max-height 0.3s; }
+.collapsible.expanded { max-height: none; }
+.collapsible-toggle {
+  display: inline-block; cursor: pointer; color: var(--accent); font-size: 12px;
+  margin-top: 4px; user-select: none;
+}
+
+.wave-card { margin-bottom: 12px; }
+.wave-card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; cursor: pointer;
+}
+.wave-card-header:hover { opacity: 0.8; }
+.wave-card-body { display: none; }
+.wave-card-body.open { display: block; }
+
+.drilldown { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin: 8px 12px; }
+.drilldown pre {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 12px; font-family: var(--mono); font-size: 12px; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto;
+}
+.drilldown h3 { font-size: 13px; margin-bottom: 6px; color: var(--text-muted); }
+
+.mini-progress { display: inline-flex; align-items: center; gap: 4px; }
+.mini-bar { width: 60px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.mini-fill { height: 100%; background: var(--green); border-radius: 2px; }
+
+.state-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12px; }
+.state-count { display: flex; align-items: center; gap: 4px; }
+.state-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.sse-indicator { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+.sse-connected { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.sse-disconnected { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>crest-spec</h1>
+    <span style="font-size:13px;color:var(--text-muted)" id="spec-dir"></span>
+  </div>
+  <div class="header-right">
+    <span class="sse-indicator sse-disconnected" id="sse-status">polling</span>
+    <span id="last-update"></span>
+    <span class="pulse idle" id="status-pulse"></span>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="sidebar">
+    <!-- Session Card -->
+    <div class="card">
+      <h2>Session</h2>
+      <div id="session-detail">
+        <div class="stat">
+          <div class="stat-label">Status</div>
+          <div id="session-status" class="stat-value" style="font-size:16px">--</div>
+        </div>
+        <div class="stat" style="margin-top:8px">
+          <div class="stat-label">Session ID</div>
+          <div id="session-id" class="mono" style="color:var(--text-muted)">--</div>
+        </div>
+        <div class="stat" style="margin-top:8px">
+          <div class="stat-label">Apply ID</div>
+          <div id="session-apply-id" class="mono" style="color:var(--text-muted)">--</div>
+        </div>
+        <div class="stat" style="margin-top:8px">
+          <div class="stat-label">Wave</div>
+          <div id="wave-status" class="stat-value" style="font-size:16px">--</div>
+        </div>
+        <div class="progress-bar" id="session-progress-bar"></div>
+        <div class="state-counts" id="resource-state-counts"></div>
+      </div>
+    </div>
+
+    <!-- Resource State Donut -->
+    <div class="card">
+      <h2>Resource States</h2>
+      <div class="donut-container" id="donut-container">
+        <div class="empty" style="padding:12px">No session active</div>
+      </div>
+    </div>
+
+    <!-- Latest Apply -->
+    <div class="card">
+      <h2>Latest Apply</h2>
+      <div id="apply-info" class="empty">No applies yet</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tab-bar">
+      <div class="tab active" data-tab="session">Session</div>
+      <div class="tab" data-tab="generations">Generations</div>
+      <div class="tab" data-tab="resources">Resources</div>
+      <div class="tab" data-tab="invariants">Invariants</div>
+      <div class="tab" data-tab="learnings">Learnings</div>
+    </div>
+
+    <!-- Tab: Session (Wave Progress) -->
+    <div class="tab-content active" id="tab-session">
+      <div id="session-waves" class="empty">Loading...</div>
+    </div>
+
+    <!-- Tab: Generations -->
+    <div class="tab-content" id="tab-generations">
+      <div class="card" style="overflow-x:auto">
+        <div id="generations-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Resources -->
+    <div class="tab-content" id="tab-resources">
+      <div class="card" style="overflow-x:auto">
+        <div id="resources-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Invariants -->
+    <div class="tab-content" id="tab-invariants">
+      <div class="card" style="overflow-x:auto">
+        <div id="invariants-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Learnings -->
+    <div class="tab-content" id="tab-learnings">
+      <div class="card" style="overflow-x:auto">
+        <div id="learnings-table" class="empty">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentTab = 'session';
+let sseConnected = false;
+let eventSource = null;
+let cachedStatus = null;
+let cachedSessionResources = null;
+
+// ─── Tab navigation ────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    currentTab = tab.dataset.tab;
+    document.getElementById('tab-' + currentTab).classList.add('active');
+    loadTabData(currentTab);
+  });
+});
+
+// ─── Helpers ───────────────────────────────────────────────────────
+function badge(text, color) {
+  return '<span class="badge badge-' + color + '">' + esc(text) + '</span>';
+}
+
+function statusBadge(status) {
+  const map = {
+    'running': 'yellow', 'active': 'yellow', 'pending': 'muted',
+    'completed': 'green', 'committed': 'green', 'passed': 'green',
+    'failed': 'red', 'errored': 'red', 'rejected': 'red',
+    'cancelled': 'orange', 'skipped': 'orange', 'timed_out': 'orange',
+    'blocked': 'purple', 'dispatched': 'blue',
+    'create': 'green', 'modify': 'yellow', 'destroy': 'red', 'drift': 'orange',
+  };
+  return badge(status || '--', map[status] || 'muted');
+}
+
+function stateColor(state) {
+  const map = {
+    committed: 'var(--green)', rejected: 'var(--red)', errored: 'var(--orange)',
+    pending: 'var(--text-muted)', dispatched: 'var(--accent)',
+    skipped: 'var(--text-muted)', blocked: 'var(--purple)',
+  };
+  return map[state] || 'var(--text-muted)';
+}
+
+function stateClass(state) {
+  return state || 'pending';
+}
+
+function timeAgo(ts) {
+  if (!ts) return '--';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '--';
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 0) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return d.toLocaleDateString();
+}
+
+function shortID(id) {
+  return id ? id.substring(0, 8) : '--';
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function truncate(s, len) {
+  if (!s) return '';
+  if (s.length <= len) return esc(s);
+  return esc(s.substring(0, len)) + '...';
+}
+
+function formatDuration(ms) {
+  if (!ms && ms !== 0) return '--';
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  return (ms / 60000).toFixed(1) + 'm';
+}
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(API + url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+// ─── SSE Connection ────────────────────────────────────────────────
+function connectSSE() {
+  if (eventSource) {
+    eventSource.close();
+  }
+  try {
+    eventSource = new EventSource(API + '/api/live-status');
+    eventSource.onopen = () => {
+      sseConnected = true;
+      updateSSEIndicator();
+    };
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleSSEData(data);
+      } catch {}
+    };
+    eventSource.onerror = () => {
+      sseConnected = false;
+      updateSSEIndicator();
+      eventSource.close();
+      eventSource = null;
+      // Fall back to polling
+      setTimeout(connectSSE, 10000);
+    };
+  } catch {
+    sseConnected = false;
+    updateSSEIndicator();
+  }
+}
+
+function updateSSEIndicator() {
+  const el = document.getElementById('sse-status');
+  if (sseConnected) {
+    el.className = 'sse-indicator sse-connected';
+    el.textContent = 'live';
+  } else {
+    el.className = 'sse-indicator sse-disconnected';
+    el.textContent = 'polling';
+  }
+}
+
+function handleSSEData(data) {
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+  if (data.session) {
+    updateSessionSidebar(data.session);
+  } else {
+    clearSessionSidebar();
+  }
+  if (data.session_resources) {
+    cachedSessionResources = data.session_resources;
+    if (data.session) {
+      updateResourceDonut(data.session_resources);
+      updateResourceStateCounts(data.session_resources);
+    }
+    if (currentTab === 'session') {
+      renderSessionWaves(data.session_resources, data.session);
+    }
+  }
+  if (data.latest_apply) {
+    renderApplyInfo(data.latest_apply);
+  }
+}
+
+// ─── Polling fallback ──────────────────────────────────────────────
+async function pollRefresh() {
+  if (sseConnected) return;
+
+  const [status, resources] = await Promise.all([
+    fetchJSON('/api/status'),
+    fetchJSON('/api/resources'),
+  ]);
+
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+  if (status) {
+    cachedStatus = status;
+    const pulse = document.getElementById('status-pulse');
+    const hasActivity = !!status.session;
+    pulse.className = hasActivity ? 'pulse' : 'pulse idle';
+
+    if (status.session) {
+      updateSessionSidebar(status.session);
+    } else {
+      clearSessionSidebar();
+    }
+    if (status.latest_apply) {
+      renderApplyInfo(status.latest_apply);
+    }
+    if (status.resource_states) {
+      updateResourceDonutFromCounts(status.resource_states);
+      updateResourceStateCountsFromCounts(status.resource_states);
+    }
+  }
+
+  loadTabData(currentTab);
+}
+
+// ─── Sidebar updates ──────────────────────────────────────────────
+function updateSessionSidebar(sess) {
+  const pulse = document.getElementById('status-pulse');
+  pulse.className = 'pulse';
+
+  document.getElementById('session-status').innerHTML =
+    statusBadge(sess.Status || sess.status);
+  document.getElementById('session-id').textContent =
+    shortID(sess.ID || sess.id);
+  document.getElementById('session-apply-id').textContent =
+    shortID(sess.ApplyID || sess.apply_id || '');
+
+  let waves = [];
+  try { waves = JSON.parse(sess.WavesJSON || sess.waves_json || '[]'); } catch {}
+  const total = waves.length;
+  const current = sess.CurrentWave || sess.current_wave || 0;
+  document.getElementById('wave-status').textContent = (current + 1) + ' / ' + total;
+}
+
+function clearSessionSidebar() {
+  const pulse = document.getElementById('status-pulse');
+  pulse.className = 'pulse idle';
+  document.getElementById('session-status').innerHTML = badge('idle', 'muted');
+  document.getElementById('session-id').textContent = '--';
+  document.getElementById('session-apply-id').textContent = '--';
+  document.getElementById('wave-status').textContent = '--';
+  document.getElementById('session-progress-bar').innerHTML = '';
+  document.getElementById('resource-state-counts').innerHTML = '';
+  document.getElementById('donut-container').innerHTML =
+    '<div class="empty" style="padding:12px">No session active</div>';
+}
+
+function updateResourceStateCounts(resources) {
+  const counts = {};
+  for (const r of resources) {
+    const st = r.State || r.state || 'pending';
+    counts[st] = (counts[st] || 0) + 1;
+  }
+  renderStateCountsHTML(counts);
+}
+
+function updateResourceStateCountsFromCounts(counts) {
+  const mapped = {};
+  for (const [k, v] of Object.entries(counts)) {
+    if (v > 0 && k !== 'total') mapped[k] = v;
+  }
+  renderStateCountsHTML(mapped);
+}
+
+function renderStateCountsHTML(counts) {
+  const el = document.getElementById('resource-state-counts');
+  let html = '';
+  for (const [state, count] of Object.entries(counts)) {
+    html += '<div class="state-count"><div class="state-dot" style="background:' +
+      stateColor(state) + '"></div>' + state + ': ' + count + '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function updateResourceDonut(resources) {
+  const counts = {};
+  let total = 0;
+  for (const r of resources) {
+    const st = r.State || r.state || 'pending';
+    counts[st] = (counts[st] || 0) + 1;
+    total++;
+  }
+  renderDonut(counts, total);
+}
+
+function updateResourceDonutFromCounts(counts) {
+  const mapped = {};
+  let total = counts.total || 0;
+  for (const [k, v] of Object.entries(counts)) {
+    if (v > 0 && k !== 'total') mapped[k] = v;
+  }
+  renderDonut(mapped, total);
+}
+
+function renderDonut(counts, total) {
+  const el = document.getElementById('donut-container');
+  if (total === 0) {
+    el.innerHTML = '<div class="empty" style="padding:12px">No resources</div>';
+    return;
+  }
+
+  const entries = Object.entries(counts).filter(([, v]) => v > 0);
+  let gradientParts = [];
+  let cumPct = 0;
+  for (const [state, count] of entries) {
+    const pct = (count / total) * 100;
+    const color = stateColor(state);
+    gradientParts.push(color + ' ' + cumPct + '% ' + (cumPct + pct) + '%');
+    cumPct += pct;
+  }
+
+  const gradient = 'conic-gradient(' + gradientParts.join(', ') + ')';
+
+  let legendHTML = '';
+  for (const [state, count] of entries) {
+    legendHTML += '<div class="donut-legend-item">' +
+      '<div class="donut-legend-swatch" style="background:' + stateColor(state) + '"></div>' +
+      '<span>' + state + ': ' + count + '</span></div>';
+  }
+
+  el.innerHTML =
+    '<div class="donut" style="background:' + gradient + '">' +
+      '<div class="donut-hole">' + total + '</div>' +
+    '</div>' +
+    '<div class="donut-legend">' + legendHTML + '</div>';
+
+  // Update progress bar too
+  const barEl = document.getElementById('session-progress-bar');
+  let barHTML = '';
+  for (const [state, count] of entries) {
+    const pct = (count / total) * 100;
+    barHTML += '<div class="progress-seg ' + stateClass(state) + '" style="width:' + pct + '%"></div>';
+  }
+  barEl.innerHTML = barHTML;
+}
+
+// ─── Tab data loaders ──────────────────────────────────────────────
+async function loadTabData(tab) {
+  switch (tab) {
+    case 'session': await loadSessionTab(); break;
+    case 'generations': await loadGenerationsTab(); break;
+    case 'resources': await loadResourcesTab(); break;
+    case 'invariants': await loadInvariantsTab(); break;
+    case 'learnings': await loadLearningsTab(); break;
+  }
+}
+
+// ─── Tab: Learnings ────────────────────────────────────────────────
+async function loadLearningsTab() {
+  const el = document.getElementById('learnings-table');
+  const learnings = await fetchJSON('/api/learnings');
+  if (!learnings) {
+    el.innerHTML = '<div class="error-msg">Error loading learnings</div>';
+    return;
+  }
+  if (learnings.length === 0) {
+    el.innerHTML = '<div class="empty">No active learnings recorded yet.</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr>' +
+    '<th>Scope</th><th>Text</th><th>Confidence</th><th>Applied</th><th>Status</th>' +
+  '</tr></thead><tbody>';
+
+  for (const l of learnings) {
+    const lang = l.scope_lang || '';
+    const kind = l.scope_kind || '';
+    const scope = (lang || kind) ? esc([lang, kind].filter(Boolean).join('/')) : '<span style="color:var(--text-muted)">any</span>';
+    const conf = (typeof l.confidence === 'number') ? l.confidence.toFixed(2) : '--';
+
+    html += '<tr>' +
+      '<td style="font-size:12px">' + scope + '</td>' +
+      '<td style="font-size:12px">' + esc(l.text || '') + '</td>' +
+      '<td class="mono">' + conf + '</td>' +
+      '<td class="mono">' + (l.times_applied || 0) + '</td>' +
+      '<td>' + badge(l.status || '', 'blue') + '</td>' +
+    '</tr>';
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// ─── Tab: Session (Wave Progress) ──────────────────────────────────
+async function loadSessionTab() {
+  const status = cachedStatus || await fetchJSON('/api/status');
+  cachedStatus = status;
+  if (!status || !status.session) {
+    document.getElementById('session-waves').innerHTML =
+      '<div class="empty">No active session</div>';
+    return;
+  }
+  const sess = status.session;
+  const resources = await fetchJSON('/api/session-resources/' + encodeURIComponent(sess.ID));
+  if (!resources) {
+    document.getElementById('session-waves').innerHTML =
+      '<div class="error-msg">Error loading session resources</div>';
+    return;
+  }
+  cachedSessionResources = resources;
+  renderSessionWaves(resources, sess);
+}
+
+function renderSessionWaves(resources, sess) {
+  const el = document.getElementById('session-waves');
+  if (!resources || resources.length === 0) {
+    el.innerHTML = '<div class="empty">No resources in session</div>';
+    return;
+  }
+
+  // Group by wave
+  const byWave = {};
+  for (const r of resources) {
+    const w = r.WaveIndex != null ? r.WaveIndex : (r.wave_index != null ? r.wave_index : 0);
+    if (!byWave[w]) byWave[w] = [];
+    byWave[w].push(r);
+  }
+
+  const waveKeys = Object.keys(byWave).sort((a, b) => a - b);
+  let currentWave = 0;
+  if (sess) {
+    currentWave = sess.CurrentWave != null ? sess.CurrentWave : (sess.current_wave || 0);
+  }
+
+  let html = '';
+  for (const w of waveKeys) {
+    const waveResources = byWave[w];
+    const counts = {};
+    let total = waveResources.length;
+    for (const r of waveResources) {
+      const st = r.State || r.state || 'pending';
+      counts[st] = (counts[st] || 0) + 1;
+    }
+    const isCurrent = parseInt(w) === currentWave;
+
+    // Progress segments
+    let progressHTML = '';
+    for (const [state, count] of Object.entries(counts)) {
+      const pct = (count / total) * 100;
+      progressHTML += '<div class="progress-seg ' + stateClass(state) + '" style="width:' + pct + '%"></div>';
+    }
+
+    // State summary
+    let stateHTML = '';
+    for (const [state, count] of Object.entries(counts)) {
+      stateHTML += '<span style="color:' + stateColor(state) + ';margin-right:12px">' +
+        state + ': ' + count + '</span>';
+    }
+
+    const waveID = 'wave-' + w;
+    html += '<div class="card wave-card">' +
+      '<div class="wave-card-header" onclick="toggleWave(\'' + waveID + '\')">' +
+        '<div>' +
+          '<span style="font-weight:600;color:var(--accent)">Wave ' + (parseInt(w) + 1) + '</span>' +
+          (isCurrent ? ' ' + badge('current', 'yellow') : '') +
+          ' <span style="font-size:12px;color:var(--text-muted)">' + total + ' resources</span>' +
+        '</div>' +
+        '<div style="font-size:12px">' + stateHTML + '</div>' +
+      '</div>' +
+      '<div class="progress-bar">' + progressHTML + '</div>' +
+      '<div class="wave-card-body' + (isCurrent ? ' open' : '') + '" id="' + waveID + '">' +
+        '<table><thead><tr>' +
+          '<th>Resource</th><th>State</th><th>Attempts</th><th>Last Error</th><th>Updated</th>' +
+        '</tr></thead><tbody>';
+
+    for (const r of waveResources) {
+      const rid = r.ResourceID || r.resource_id || '';
+      const st = r.State || r.state || 'pending';
+      const phase = r.Phase || r.phase || '';
+      const attempts = r.Attempts || r.attempts || 0;
+      const maxRetries = r.MaxRetries || r.max_retries || 0;
+      const lastErr = r.LastError || r.last_error || '';
+      const updatedAt = r.UpdatedAt || r.updated_at || '';
+      const elapsedMs = r.ElapsedMS || r.elapsed_ms || 0;
+
+      const phaseDisplay = phase && st === 'dispatched'
+        ? '<span style="color:var(--purple);font-size:11px;margin-left:4px">' + esc(phase) + '</span>'
+        : '';
+      const elapsedDisplay = elapsedMs > 0
+        ? '<span style="color:var(--text-muted);font-size:11px;margin-left:4px">' + formatDuration(elapsedMs) + '</span>'
+        : '';
+
+      const errDisplay = lastErr
+        ? '<span class="collapsible" style="max-height:40px;display:block;font-size:11px;color:var(--text-muted)">' +
+            esc(lastErr) + '</span>' +
+          (lastErr.length > 80 ? '<span class="collapsible-toggle" onclick="event.stopPropagation();toggleCollapsible(this)">Show more</span>' : '')
+        : '<span style="color:var(--text-muted)">--</span>';
+
+      html += '<tr>' +
+        '<td class="resource-id">' + esc(rid) + '</td>' +
+        '<td>' + statusBadge(st) + phaseDisplay + elapsedDisplay + '</td>' +
+        '<td class="mono">' + attempts + '/' + maxRetries + '</td>' +
+        '<td>' + errDisplay + '</td>' +
+        '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(updatedAt) + '</td>' +
+      '</tr>';
+    }
+
+    html += '</tbody></table></div></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function toggleWave(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+function toggleCollapsible(btn) {
+  const sib = btn.previousElementSibling;
+  if (sib) {
+    sib.classList.toggle('expanded');
+    btn.textContent = sib.classList.contains('expanded') ? 'Show less' : 'Show more';
+  }
+}
+
+// ─── Tab: Generations ──────────────────────────────────────────────
+async function loadGenerationsTab() {
+  const el = document.getElementById('generations-table');
+  const gens = await fetchJSON('/api/generations-recent?limit=100');
+  if (!gens) {
+    el.innerHTML = '<div class="error-msg">Error loading generations</div>';
+    return;
+  }
+  if (gens.length === 0) {
+    el.innerHTML = '<div class="empty">No generations yet</div>';
+    return;
+  }
+  renderGenerationsTable(gens);
+}
+
+function renderGenerationsTable(gens) {
+  const el = document.getElementById('generations-table');
+  let html = '<table><thead><tr>' +
+    '<th>Resource</th><th>Attempt</th><th>Model</th><th>Outcome</th>' +
+    '<th>Duration</th><th>Tokens</th><th>Cost</th><th>Time</th>' +
+  '</tr></thead><tbody>';
+
+  for (let i = 0; i < gens.length; i++) {
+    const g = gens[i];
+    const rid = g.resource_id || g.ResourceID || '';
+    const attempt = g.retry_count != null ? g.retry_count : (g.RetryCount || 0);
+    const model = g.model || g.Model || '--';
+    const outcome = g.outcome || g.Outcome || 'pending';
+    const duration = g.duration_ms || g.DurationMS || 0;
+    const inTok = g.input_tokens || g.InputTokens || 0;
+    const outTok = g.output_tokens || g.OutputTokens || 0;
+    const cost = g.cost_usd || g.CostUSD || 0;
+    const ts = g.created_at || g.CreatedAt || '';
+    const gID = g.id || g.ID || i;
+
+    html += '<tr class="clickable" onclick="toggleGenDrilldown(\'' + esc(String(gID)) + '\', \'' + encodeURIComponent(rid) + '\', ' + i + ')">' +
+      '<td class="resource-id">' + esc(rid) + '</td>' +
+      '<td class="mono">#' + (attempt + 1) + '</td>' +
+      '<td style="font-size:12px;color:var(--text-muted)">' + esc(model) + '</td>' +
+      '<td>' + statusBadge(outcome) + '</td>' +
+      '<td class="mono">' + formatDuration(duration) + '</td>' +
+      '<td class="mono" style="font-size:11px">' + inTok + ' / ' + outTok + '</td>' +
+      '<td class="mono" style="font-size:11px">$' + (cost ? cost.toFixed(4) : '0') + '</td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(ts) + '</td>' +
+    '</tr>' +
+    '<tr id="gen-drilldown-' + i + '" style="display:none"><td colspan="8"></td></tr>';
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function toggleGenDrilldown(genID, encodedResourceID, idx) {
+  const row = document.getElementById('gen-drilldown-' + idx);
+  if (!row) return;
+
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+
+  const resourceID = decodeURIComponent(encodedResourceID);
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Loading...</div></div>';
+  row.style.display = '';
+
+  // Fetch full generation details for this resource
+  const gens = await fetchJSON('/api/generations/' + encodeURIComponent(resourceID));
+  if (!gens || gens.length === 0) {
+    td.innerHTML = '<div class="drilldown"><div class="error-msg">Could not load details</div></div>';
+    return;
+  }
+
+  // Find matching generation
+  const gen = gens.find(g => (g.ID || g.id) === genID) || gens[0];
+
+  let html = '<div class="drilldown">';
+
+  // Rejection reason
+  const rejection = gen.RejectionReason || gen.rejection_reason || '';
+  if (rejection) {
+    html += '<h3>Rejection Reason</h3><p style="color:var(--red);font-size:13px;margin-bottom:12px">' + esc(rejection) + '</p>';
+  }
+
+  // Prompt
+  const prompt = gen.PromptText || gen.prompt_text || '';
+  if (prompt) {
+    const promptID = 'prompt-' + idx;
+    html += '<h3>Prompt</h3>' +
+      '<div class="collapsible" id="' + promptID + '" style="max-height:100px">' +
+        '<pre>' + esc(prompt) + '</pre>' +
+      '</div>' +
+      '<span class="collapsible-toggle" onclick="toggleCollapsible(this)">Show more</span>';
+  }
+
+  // Output
+  const output = gen.OutputText || gen.output_text || '';
+  if (output) {
+    const outputID = 'output-' + idx;
+    html += '<h3 style="margin-top:12px">Output</h3>' +
+      '<div class="collapsible" id="' + outputID + '" style="max-height:100px">' +
+        '<pre>' + esc(output) + '</pre>' +
+      '</div>' +
+      '<span class="collapsible-toggle" onclick="toggleCollapsible(this)">Show more</span>';
+  }
+
+  // Meta
+  html += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted)">' +
+    'Model: ' + esc(gen.Model || gen.model || '') +
+    ' | Duration: ' + formatDuration(gen.DurationMS || gen.duration_ms || 0) +
+    ' | Tokens: ' + (gen.InputTokens || gen.input_tokens || 0) + ' in / ' + (gen.OutputTokens || gen.output_tokens || 0) + ' out' +
+    ' | Cost: $' + ((gen.CostUSD || gen.cost_usd || 0).toFixed(4)) +
+  '</div>';
+
+  html += '</div>';
+  td.innerHTML = html;
+}
+
+// ─── Tab: Resources ────────────────────────────────────────────────
+async function loadResourcesTab() {
+  const resources = await fetchJSON('/api/resources');
+  const el = document.getElementById('resources-table');
+  if (!resources) {
+    el.innerHTML = '<div class="error-msg">Error loading resources</div>';
+    return;
+  }
+  if (!resources || resources.length === 0) {
+    el.innerHTML = '<div class="empty">No settled resources yet</div>';
+    return;
+  }
+  renderResourcesTable(resources);
+}
+
+function renderResourcesTable(resources) {
+  const el = document.getElementById('resources-table');
+
+  let html = '<table><thead><tr>' +
+    '<th>Resource</th><th>Kind</th><th>Context</th><th>Model</th><th>Files</th><th>Settled</th>' +
+  '</tr></thead><tbody>';
+
+  for (let i = 0; i < resources.length; i++) {
+    const r = resources[i];
+    const rid = r.ID || r.id || '';
+    const kind = r.Kind || r.kind || '';
+    const ctx = r.ContextName || r.context_name || '--';
+    const model = r.Model || r.model || '--';
+    const files = r.files || r.Files || [];
+    const settledAt = r.SettledAt || r.settled_at || '';
+
+    const fileList = files.map(f => '<span>' + esc(f.Path || f.path) + '</span>').join('');
+
+    html += '<tr class="clickable" onclick="toggleResourceDrilldown(' + i + ', \'' + encodeURIComponent(rid) + '\')">' +
+      '<td class="resource-id">' + esc(rid) + '</td>' +
+      '<td>' + badge(kind, 'blue') + '</td>' +
+      '<td style="color:var(--text-muted)">' + esc(ctx) + '</td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + esc(model) + '</td>' +
+      '<td><div class="files-list">' + (fileList || '--') + '</div></td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(settledAt) + '</td>' +
+    '</tr>' +
+    '<tr id="res-drilldown-' + i + '" style="display:none"><td colspan="6"></td></tr>';
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function toggleResourceDrilldown(idx, encodedResourceID) {
+  const row = document.getElementById('res-drilldown-' + idx);
+  if (!row) return;
+
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+
+  const resourceID = decodeURIComponent(encodedResourceID);
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Loading...</div></div>';
+  row.style.display = '';
+
+  const gens = await fetchJSON('/api/generations/' + encodeURIComponent(resourceID));
+
+  let html = '<div class="drilldown">';
+  if (!gens || gens.length === 0) {
+    html += '<div class="empty">No generation history</div>';
+  } else {
+    html += '<h3>Generation History (' + gens.length + ' attempts)</h3>' +
+      '<table><thead><tr><th>Attempt</th><th>Model</th><th>Outcome</th><th>Duration</th><th>Time</th></tr></thead><tbody>';
+    for (const g of gens) {
+      html += '<tr>' +
+        '<td class="mono">#' + ((g.RetryCount || g.retry_count || 0) + 1) + '</td>' +
+        '<td style="font-size:12px">' + esc(g.Model || g.model || '') + '</td>' +
+        '<td>' + statusBadge(g.Outcome || g.outcome || '') + '</td>' +
+        '<td class="mono">' + formatDuration(g.DurationMS || g.duration_ms || 0) + '</td>' +
+        '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(g.CreatedAt || g.created_at) + '</td>' +
+      '</tr>';
+      const rejection = g.RejectionReason || g.rejection_reason || '';
+      if (rejection) {
+        html += '<tr><td colspan="5" style="padding-left:24px;color:var(--red);font-size:12px">' + esc(rejection) + '</td></tr>';
+      }
+    }
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+  td.innerHTML = html;
+}
+
+// ─── Tab: Invariants ───────────────────────────────────────────────
+async function loadInvariantsTab() {
+  const el = document.getElementById('invariants-table');
+  const status = cachedStatus || await fetchJSON('/api/status');
+  cachedStatus = status;
+
+  if (!status || !status.latest_apply) {
+    el.innerHTML = '<div class="empty">No applies found</div>';
+    return;
+  }
+
+  const applyID = status.latest_apply.ID || status.latest_apply.id;
+  const checks = await fetchJSON('/api/invariant-checks/' + encodeURIComponent(applyID));
+  if (!checks) {
+    el.innerHTML = '<div class="error-msg">Error loading invariant checks</div>';
+    return;
+  }
+  if (checks.length === 0) {
+    el.innerHTML = '<div class="empty">No invariant checks recorded</div>';
+    return;
+  }
+
+  // Group by resource
+  const byResource = {};
+  for (const c of checks) {
+    const rid = c.ResourceID || c.resource_id || 'unknown';
+    if (!byResource[rid]) byResource[rid] = [];
+    byResource[rid].push(c);
+  }
+
+  let html = '<table><thead><tr>' +
+    '<th>Resource</th><th>Invariant</th><th>Result</th><th>Details</th><th>Time</th>' +
+  '</tr></thead><tbody>';
+
+  for (const [rid, rChecks] of Object.entries(byResource)) {
+    let first = true;
+    for (const c of rChecks) {
+      const passed = c.Passed || c.passed;
+      const checkType = c.CheckType || c.check_type || c.Invariant || c.invariant || '';
+      const output = c.Output || c.output || c.Details || c.details || '';
+      const ts = c.CreatedAt || c.created_at || '';
+
+      html += '<tr>' +
+        '<td class="resource-id">' + (first ? esc(rid) : '') + '</td>' +
+        '<td style="font-size:12px">' + esc(checkType) + '</td>' +
+        '<td>' + (passed ? badge('passed', 'green') : badge('failed', 'red')) + '</td>' +
+        '<td style="font-size:12px;color:var(--text-muted)">' + truncate(output, 200) + '</td>' +
+        '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(ts) + '</td>' +
+      '</tr>';
+      first = false;
+    }
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// ─── Sidebar: Apply Info ───────────────────────────────────────────
+function renderApplyInfo(apply) {
+  const el = document.getElementById('apply-info');
+  el.innerHTML =
+    '<div class="stat">' +
+      '<div class="stat-label">ID</div>' +
+      '<div class="mono">' + shortID(apply.ID || apply.id) + '</div>' +
+    '</div>' +
+    '<div class="stat">' +
+      '<div class="stat-label">Status</div>' +
+      '<div>' + statusBadge(apply.Status || apply.status) + '</div>' +
+    '</div>' +
+    '<div class="stat">' +
+      '<div class="stat-label">Started</div>' +
+      '<div style="font-size:12px;color:var(--text-muted)">' + timeAgo(apply.StartedAt || apply.started_at) + '</div>' +
+    '</div>';
+}
+
+// ─── Initialize ────────────────────────────────────────────────────
+async function init() {
+  // Initial full load
+  await pollRefresh();
+
+  // Connect SSE for live updates
+  connectSSE();
+
+  // Polling fallback every 3 seconds if SSE is down
+  setInterval(() => {
+    if (!sseConnected) pollRefresh();
+  }, 3000);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+package prompt
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+type RuntimeContext struct {
+	ModuleTree      string
+	ModuleFiles     map[string]string // path → content of existing module declaration files (lib.rs, mod.rs, __init__.py, etc.)
+	DependencyFiles map[string]string
+	AgentNotes      map[string]string
+	Learnings       []string
+	// DesignContract is the observable contract committed for this resource's
+	// bounded context (spec/design_commit) — the behaviors the context must
+	// exhibit, which the generated code will be verified against.
+	DesignContract string
+	WaveErrors     string
+	UserGuidance   string
+	// ExistingFiles is the current committed implementation, keyed by path. When
+	// non-empty, the resource is regenerated in UPDATE mode (minimal diff).
+	ExistingFiles map[string]string
+	// ChangesRequired is the flagged "CHANGES TO MAKE" instruction block (e.g.
+	// the concatenated prompts of pending amendments).
+	ChangesRequired string
+}
+
+func InjectRuntimeContext(prompt string, ctx RuntimeContext) string {
+	var sections []string
+
+	if ctx.ModuleTree != "" {
+		sections = append(sections, fmt.Sprintf("## Module Tree\n\n%s", ctx.ModuleTree))
+	}
+
+	if len(ctx.ModuleFiles) > 0 {
+		var b strings.Builder
+		b.WriteString("## Existing Module Declarations & Manifest\n\n")
+		b.WriteString("These files already exist. If you change them, include them in your output with your new modules or dependencies ADDED (do not remove existing lines).\n\n")
+		keys := sortedKeys(ctx.ModuleFiles)
+		for _, path := range keys {
+			content := ctx.ModuleFiles[path]
+			b.WriteString(fmt.Sprintf("### %s\n\n```\n%s\n```\n\n", path, content))
+		}
+		sections = append(sections, b.String())
+	}
+
+	if len(ctx.DependencyFiles) > 0 {
+		var b strings.Builder
+		b.WriteString("## Existing Dependencies\n\n")
+		keys := sortedKeys(ctx.DependencyFiles)
+		for _, id := range keys {
+			content := ctx.DependencyFiles[id]
+			b.WriteString(fmt.Sprintf("### %s\n\n```\n%s\n```\n\n", id, content))
+		}
+		sections = append(sections, b.String())
+	}
+
+	if len(ctx.AgentNotes) > 0 {
+		var b strings.Builder
+		b.WriteString("## Notes from Dependencies\n\n")
+		keys := sortedKeys(ctx.AgentNotes)
+		for _, id := range keys {
+			notes := ctx.AgentNotes[id]
+			b.WriteString(fmt.Sprintf("### %s\n\n%s\n\n", id, notes))
+		}
+		sections = append(sections, b.String())
+	}
+
+	if ctx.DesignContract != "" {
+		sections = append(sections, fmt.Sprintf("## Bounded-Context Design Contract\n\nThe observable contract this resource's bounded context must satisfy. Behavioral checks will verify the generated code against it.\n\n```json\n%s\n```\n", ctx.DesignContract))
+	}
+
+	if len(ctx.Learnings) > 0 {
+		var b strings.Builder
+		b.WriteString("## Learnings From Past Runs\n\n")
+		b.WriteString("Apply these craft guidelines distilled from earlier generations:\n\n")
+		for _, l := range ctx.Learnings {
+			b.WriteString("- " + l + "\n")
+		}
+		sections = append(sections, b.String())
+	}
+
+	if len(ctx.ExistingFiles) > 0 {
+		var b strings.Builder
+		b.WriteString(renderTemplate("update.md", "", ""))
+		b.WriteString("\n### Existing Generated Files\n\n")
+		for _, p := range sortedKeys(ctx.ExistingFiles) {
+			b.WriteString("`" + p + "`:\n\n```\n")
+			b.WriteString(ctx.ExistingFiles[p])
+			b.WriteString("\n```\n\n")
+		}
+		if ctx.ChangesRequired != "" {
+			b.WriteString("### CHANGES TO MAKE\n\n")
+			b.WriteString(ctx.ChangesRequired)
+			b.WriteString("\n")
+		}
+		sections = append(sections, b.String())
+	}
+
+	if ctx.WaveErrors != "" {
+		sections = append(sections, fmt.Sprintf("## Previous Errors\n\nThe previous attempt was rejected with the failure below. Your output MUST address it — do not resubmit the same approach.\n\n%s", ctx.WaveErrors))
+	}
+
+	if ctx.UserGuidance != "" {
+		sections = append(sections, fmt.Sprintf("## Guidance\n\nTriage guidance recorded for this resource. Follow it.\n\n%s", ctx.UserGuidance))
+	}
+
+	if len(sections) == 0 {
+		return prompt
+	}
+
+	return prompt + "\n\n" + strings.Join(sections, "\n\n")
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
