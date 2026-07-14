@@ -302,6 +302,7 @@ type PlanResult struct {
 	Waves    [][]string
 	Hashes   map[string]string
 	Mode     string
+	Slices   []planpkg.CapabilitySlice
 }
 
 func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
@@ -350,5 +351,6 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		Waves:    waveStrings,
 		Hashes:   hashes,
 		Mode:     mode,
+		Slices:   planpkg.BuildCapabilitySlices(actions, registry),
 	}, nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -193,10 +194,17 @@ func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type planResource struct {
-		ResourceID string `json:"resource_id"`
-		Kind       string `json:"kind"`
-		Reason     string `json:"reason"`
-		WaveIndex  int    `json:"wave_index"`
+		ResourceID       string            `json:"resource_id"`
+		Kind             string            `json:"kind"`
+		Reason           string            `json:"reason"`
+		WaveIndex        int               `json:"wave_index"`
+		OperationID      string            `json:"operation_id"`
+		Category         string            `json:"category"`
+		Capabilities     []string          `json:"capabilities"`
+		Goals            []string          `json:"goals"`
+		Contributions    map[string]string `json:"contributions"`
+		ExpectedBehavior []string          `json:"expected_behavior"`
+		ExpectedEvidence []string          `json:"expected_evidence"`
 	}
 
 	waveMap := make(map[string]int)
@@ -209,18 +217,26 @@ func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 	var resources []planResource
 	for _, a := range result.Actions {
 		resources = append(resources, planResource{
-			ResourceID: a.ResourceID,
-			Kind:       string(a.Kind),
-			Reason:     a.Reason,
-			WaveIndex:  waveMap[a.ResourceID],
+			ResourceID:       a.ResourceID,
+			Kind:             string(a.Kind),
+			Reason:           a.Reason,
+			WaveIndex:        waveMap[a.ResourceID],
+			OperationID:      a.OperationID,
+			Category:         a.Category,
+			Capabilities:     a.Capabilities,
+			Goals:            a.Goals,
+			Contributions:    a.Contributions,
+			ExpectedBehavior: a.ExpectedBehavior,
+			ExpectedEvidence: a.ExpectedEvidence,
 		})
 	}
 
 	type planResp struct {
-		Actions    []planResource `json:"actions"`
-		Waves      [][]string     `json:"waves"`
-		TotalCount int            `json:"total_count"`
-		WaveCount  int            `json:"wave_count"`
+		Actions    []planResource            `json:"actions"`
+		Waves      [][]string                `json:"waves"`
+		TotalCount int                       `json:"total_count"`
+		WaveCount  int                       `json:"wave_count"`
+		Slices     []planpkg.CapabilitySlice `json:"slices"`
 	}
 
 	d.writeJSON(w, planResp{
@@ -228,6 +244,7 @@ func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 		Waves:      result.Waves,
 		TotalCount: len(resources),
 		WaveCount:  len(result.Waves),
+		Slices:     result.Slices,
 	})
 }
 

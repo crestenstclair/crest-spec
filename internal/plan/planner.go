@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
@@ -81,8 +82,115 @@ func (p *Planner) Plan(
 	result := make([]PlannedAction, 0, len(destroys)+len(createModify))
 	result = append(result, destroys...)
 	result = append(result, createModify...)
+	annotateGoalImpact(result, registry)
 
 	return result, nil
+}
+
+func annotateGoalImpact(actions []PlannedAction, registry *cuepkg.Registry) {
+	for index := range actions {
+		action := &actions[index]
+		action.OperationID = operationID(*action)
+		action.Category = classifyCategory(*action, registry.Resources[action.ResourceID])
+		resource, exists := registry.Resources[action.ResourceID]
+		if !exists || len(resource.Contributions) == 0 {
+			action.SharedInfrastructure = true
+			continue
+		}
+		goalSet := make(map[string]bool)
+		action.Contributions = make(map[string]string)
+		for _, contribution := range resource.Contributions {
+			action.Capabilities = append(action.Capabilities, contribution.Capability)
+			action.Contributions[contribution.Capability] = contribution.Contribution
+			capability := registry.Project.Capabilities[strings.TrimPrefix(contribution.Capability, "capability.")]
+			for _, goalID := range capability.Goals {
+				goalSet[goalID] = true
+			}
+			for _, acceptance := range capability.Acceptance {
+				action.ExpectedBehavior = append(action.ExpectedBehavior, acceptance.Description)
+				action.ExpectedEvidence = append(action.ExpectedEvidence, acceptance.Evidence...)
+			}
+		}
+		for goalID := range goalSet {
+			action.Goals = append(action.Goals, goalID)
+		}
+		sort.Strings(action.Capabilities)
+		sort.Strings(action.Goals)
+		sort.Strings(action.ExpectedBehavior)
+		sort.Strings(action.ExpectedEvidence)
+		action.ExpectedEvidence = dedupeStrings(action.ExpectedEvidence)
+	}
+}
+
+func BuildCapabilitySlices(actions []PlannedAction, registry *cuepkg.Registry) []CapabilitySlice {
+	byCapability := make(map[string]*CapabilitySlice)
+	for _, action := range actions {
+		for _, capabilityID := range action.Capabilities {
+			slice := byCapability[capabilityID]
+			if slice == nil {
+				capability := registry.Project.Capabilities[strings.TrimPrefix(capabilityID, "capability.")]
+				slice = &CapabilitySlice{Capability: capabilityID, Goals: append([]string(nil), capability.Goals...), CurrentGap: "resource implementation or verification is not current"}
+				for _, goalID := range capability.Goals {
+					goal := registry.Project.Goals[strings.TrimPrefix(goalID, "goal.")]
+					if goal.Priority == "required" {
+						slice.Required = true
+					}
+				}
+				for _, acceptance := range capability.Acceptance {
+					slice.ExpectedBehavior = append(slice.ExpectedBehavior, acceptance.Description)
+					slice.ExpectedEvidence = append(slice.ExpectedEvidence, acceptance.Evidence...)
+				}
+				byCapability[capabilityID] = slice
+			}
+			slice.OperationIDs = append(slice.OperationIDs, action.OperationID)
+		}
+	}
+	result := make([]CapabilitySlice, 0, len(byCapability))
+	for _, slice := range byCapability {
+		sort.Strings(slice.Goals)
+		sort.Strings(slice.ExpectedBehavior)
+		sort.Strings(slice.ExpectedEvidence)
+		slice.ExpectedEvidence = dedupeStrings(slice.ExpectedEvidence)
+		result = append(result, *slice)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Required != result[j].Required {
+			return result[i].Required
+		}
+		return result[i].Capability < result[j].Capability
+	})
+	return result
+}
+
+func operationID(action PlannedAction) string {
+	value := fmt.Sprintf("%s\x00%s\x00%s", action.ResourceID, action.Kind, action.Reason)
+	return fmt.Sprintf("op.%x", sha256.Sum256([]byte(value)))
+}
+
+func classifyCategory(action PlannedAction, resource cuepkg.Resource) string {
+	if action.Kind == ActionDestroy || action.Kind == ActionCreate {
+		return "structural"
+	}
+	if action.CascadedFrom != "" {
+		return "integrative"
+	}
+	if asset, ok := resource.Declaration.(cuepkg.Asset); ok && asset.Profile.Kind == "verification_harness" {
+		return "verification"
+	}
+	return "corrective"
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func (p *Planner) loadStoredMap() (map[string]store.Resource, error) {
