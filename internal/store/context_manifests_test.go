@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	"github.com/stretchr/testify/require"
@@ -95,6 +96,47 @@ func TestContextManifestCreationIsAtomic(t *testing.T) {
 	blobCount, err := st.CountContentBlobs(context.Background())
 	require.NoError(t, err)
 	require.Zero(t, blobCount)
+}
+
+func TestVacuumReleasesUnreferencedContextSnapshots(t *testing.T) {
+	st := newContextManifestStore(t, "resource.vacuum")
+	_, err := st.CreateContextManifest(context.Background(), ContextManifestWrite{
+		Manifest: testContextManifest("attempt-vacuum", "manifest-vacuum", "resource.vacuum"), Dispatch: true,
+	})
+	require.NoError(t, err)
+
+	deleted, err := st.Vacuum(time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, deleted, 4)
+	_, err = st.GetContextManifest(context.Background(), "manifest-vacuum")
+	require.Error(t, err)
+	blobCount, err := st.CountContentBlobs(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, blobCount)
+}
+
+func TestVacuumRetainsOldAttemptThatIsAncestorOfRetainedRetry(t *testing.T) {
+	st := newContextManifestStore(t, "resource.ancestry")
+	ctx := context.Background()
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-old", "manifest-old", "resource.ancestry"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	_, err = st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-future", "manifest-future", "resource.ancestry"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	_, err = st.sqlDB.Exec("UPDATE generation_attempts SET created_at = ? WHERE id = ?", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), "attempt-future")
+	require.NoError(t, err)
+
+	_, err = st.Vacuum(time.Now())
+	require.NoError(t, err)
+	oldManifest, err := st.GetContextManifest(ctx, "manifest-old")
+	require.NoError(t, err)
+	require.Equal(t, "attempt-old", oldManifest.Attempt.ID)
+	futureManifest, err := st.GetContextManifest(ctx, "manifest-future")
+	require.NoError(t, err)
+	require.Equal(t, "attempt-old", futureManifest.Attempt.ParentAttemptID)
 }
 
 func newContextManifestStore(t *testing.T, resourceID string) *Store {

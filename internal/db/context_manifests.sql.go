@@ -297,6 +297,89 @@ func (q *Queries) GetLatestGenerationAttempt(ctx context.Context, arg GetLatestG
 	return i, err
 }
 
+const listContextManifestSummaries = `-- name: ListContextManifestSummaries :many
+SELECT
+    cm.id, cm.attempt_id, cm.selector_version, cm.estimator_version,
+    cm.selection_strategy, cm.budget_tokens, cm.estimated_tokens,
+    cm.original_bytes, cm.selected_bytes, cm.context_hash, cm.blocked,
+    cm.blocked_reason, cm.created_at,
+    ga.session_id, ga.apply_id, ga.resource_id, ga.plan_operation_id,
+    ga.parent_attempt_id, ga.retry_number, ga.role, ga.status
+FROM context_manifests cm
+JOIN generation_attempts ga ON ga.id = cm.attempt_id
+ORDER BY cm.created_at DESC, cm.id DESC
+LIMIT ?
+`
+
+type ListContextManifestSummariesRow struct {
+	ID                string
+	AttemptID         string
+	SelectorVersion   string
+	EstimatorVersion  string
+	SelectionStrategy string
+	BudgetTokens      int64
+	EstimatedTokens   int64
+	OriginalBytes     int64
+	SelectedBytes     int64
+	ContextHash       string
+	Blocked           int64
+	BlockedReason     string
+	CreatedAt         string
+	SessionID         string
+	ApplyID           string
+	ResourceID        string
+	PlanOperationID   string
+	ParentAttemptID   *string
+	RetryNumber       int64
+	Role              string
+	Status            string
+}
+
+func (q *Queries) ListContextManifestSummaries(ctx context.Context, limit int64) ([]ListContextManifestSummariesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listContextManifestSummaries, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListContextManifestSummariesRow
+	for rows.Next() {
+		var i ListContextManifestSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AttemptID,
+			&i.SelectorVersion,
+			&i.EstimatorVersion,
+			&i.SelectionStrategy,
+			&i.BudgetTokens,
+			&i.EstimatedTokens,
+			&i.OriginalBytes,
+			&i.SelectedBytes,
+			&i.ContextHash,
+			&i.Blocked,
+			&i.BlockedReason,
+			&i.CreatedAt,
+			&i.SessionID,
+			&i.ApplyID,
+			&i.ResourceID,
+			&i.PlanOperationID,
+			&i.ParentAttemptID,
+			&i.RetryNumber,
+			&i.Role,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listContextSections = `-- name: ListContextSections :many
 SELECT id, manifest_id, ordinal, section_kind, title, source_kind, source_id, source_path, priority, mandatory, decision, reason, original_hash, content_blob, original_bytes, selected_bytes, estimated_tokens FROM context_sections WHERE manifest_id = ? ORDER BY ordinal
 `

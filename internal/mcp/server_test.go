@@ -34,6 +34,7 @@ type fakeSpec struct {
 	lastModel         string
 	lastVerifySession string
 	lastVerifyWave    int
+	lastContext       specmod.ContextOptions
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -50,6 +51,19 @@ func (f *fakeSpec) Next(ctx context.Context, sessionID string) (*specmod.NextRes
 }
 func (f *fakeSpec) Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error) {
 	return &specmod.ContextResult{}, nil
+}
+func (f *fakeSpec) PrepareContext(ctx context.Context, opts specmod.ContextOptions) (*specmod.ContextResult, error) {
+	f.lastContext = opts
+	return &specmod.ContextResult{AttemptID: "attempt-test", ContextManifestID: "manifest-test"}, nil
+}
+func (f *fakeSpec) InspectContext(ctx context.Context, manifestID, attemptID string) (*storemod.ContextManifest, error) {
+	return &storemod.ContextManifest{ID: manifestID}, nil
+}
+func (f *fakeSpec) ListContextAttempts(ctx context.Context, limit int) ([]storemod.ContextManifestSummary, error) {
+	return []storemod.ContextManifestSummary{{ID: "manifest-test"}}, nil
+}
+func (f *fakeSpec) CompareContexts(ctx context.Context, leftManifestID, rightManifestID string) (*specmod.ContextManifestComparison, error) {
+	return &specmod.ContextManifestComparison{LeftManifestID: leftManifestID, RightManifestID: rightManifestID}, nil
 }
 func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error) {
 	f.lastFiles = files
@@ -250,8 +264,11 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["about"])
 	assert.True(t, names["live_metrics"])
 
-	// New tool.
+	// New tools.
 	assert.True(t, names["spec/record_learnings"])
+	assert.True(t, names["spec/context_attempts"])
+	assert.True(t, names["spec/context_inspect"])
+	assert.True(t, names["spec/context_compare"])
 
 	// Spot-check kept spec tools.
 	for _, kept := range []string{
@@ -274,6 +291,19 @@ func TestCommitToolForwardsArgs(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-6", fake.lastModel)
 	require.Len(t, fake.lastFiles, 1)
 	assert.Equal(t, "a.go", fake.lastFiles[0].Path)
+}
+
+func TestContextToolCreatesAttemptWithSelectionOptions(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"session_id":"s","resource_id":"r","role":"minimal_diff_repair","budget_tokens":8192,"parent_attempt_id":"parent-1"}`)
+	result := srv.toolFns["spec/context"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Equal(t, specmod.ContextOptions{
+		SessionID: "s", ResourceID: "r", Role: "minimal_diff_repair",
+		BudgetTokens: 8192, ParentAttemptID: "parent-1",
+	}, fake.lastContext)
+	require.Contains(t, result.Content[0].Text, `"AttemptID":"attempt-test"`)
 }
 
 func TestVerifyWaveToolForwardsArgs(t *testing.T) {

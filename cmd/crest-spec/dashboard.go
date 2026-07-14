@@ -55,6 +55,9 @@ func cmdDashboard(flags cliFlags) {
 	// API routes
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/v1/project", d.handleProjectOverview)
+	mux.HandleFunc("GET /api/v1/contexts", d.handleContextAttempts)
+	mux.HandleFunc("GET /api/v1/contexts/{id}", d.handleContextManifest)
+	mux.HandleFunc("GET /api/v1/context-comparison", d.handleContextComparison)
 	mux.HandleFunc("GET /api/plan", d.handlePlan)
 	mux.HandleFunc("GET /api/resources", d.handleResources)
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
@@ -184,6 +187,39 @@ func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	d.writeJSON(w, overview)
+}
+
+func (d *dashboard) handleContextAttempts(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+	attempts, err := d.spec.ListContextAttempts(r.Context(), limit)
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, attempts)
+}
+
+func (d *dashboard) handleContextManifest(w http.ResponseWriter, r *http.Request) {
+	manifest, err := d.spec.InspectContext(r.Context(), r.PathValue("id"), "")
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, manifest)
+}
+
+func (d *dashboard) handleContextComparison(w http.ResponseWriter, r *http.Request) {
+	comparison, err := d.spec.CompareContexts(r.Context(), r.URL.Query().Get("left"), r.URL.Query().Get("right"))
+	if err != nil {
+		d.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	d.writeJSON(w, comparison)
 }
 
 func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {

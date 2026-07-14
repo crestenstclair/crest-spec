@@ -141,9 +141,19 @@ spawned for one resource/check.
 ### Generation (called BY your generator sub-agents)
 | Tool | Purpose |
 |---|---|
-| `spec/context` | THE prompt: system prompt, resource prompt, dependency interfaces, invariants, mission. In UPDATE mode (any retry or modify) it includes the previous files, `## Previous Errors`, and `## Guidance` — sub-agents iterate on existing code, never regenerate from scratch. |
+| `spec/context` | Creates an immutable attempt and returns its `AttemptID`/`ContextManifestID`, budget allocation, ordered selection decisions, system prompt, and task prompt. Context is goal-directed: acceptance, task, resource contract, dependencies, consumers, relevant code, invariants, and retry evidence. In UPDATE mode it includes previous files, `## Previous Errors`, and `## Guidance`. Optional `role`, `budget_tokens`, and `parent_attempt_id` inputs shape the attempt without coupling crest-spec to a provider. |
 | `spec/commit` | Submit candidate files. The engine runs the spec's validation commands; returns `Committed` plus per-validation results on rejection. The sub-agent reads the failures and retries (the engine records attempt files so the next `spec/context` is UPDATE mode). |
 | `spec/note` | Attach a free-form note to the session/resource (shows up in later context). |
+
+### Context inspection (orchestrator and humans)
+
+| Tool | Purpose |
+|---|---|
+| `spec/context_attempts` | List attempts with resource, role, retry ancestry, budget, hash, and blocked state. |
+| `spec/context_inspect` | Reconstruct the exact immutable system/task prompts and every included, truncated, or omitted source from SQLite. |
+| `spec/context_compare` | Compare two manifests by source, decision, content hash, allocation, selector, budget, and template changes. |
+
+Context creation and the resource's dispatch transition are one SQLite transaction. If mandatory goal, acceptance, task, system, and resource-contract material exceeds the bounded budget, the attempt is recorded as `context_blocked` and the resource remains pending. Runtime context manifests are never written into the project tree.
 
 ### Behavioral verification (called BY your verifier sub-agents)
 | Tool | Purpose |

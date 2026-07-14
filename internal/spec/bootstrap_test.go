@@ -183,6 +183,9 @@ func (s *stubStore) GetContextManifestByAttempt(context.Context, string) (*store
 func (s *stubStore) ListContextManifests(context.Context, int) ([]store.ContextManifest, error) {
 	return nil, nil
 }
+func (s *stubStore) ListContextManifestSummaries(context.Context, int) ([]store.ContextManifestSummary, error) {
+	return nil, nil
+}
 func (s *stubStore) ListGenerationAttemptsBySession(context.Context, string) ([]store.GenerationAttempt, error) {
 	return nil, nil
 }

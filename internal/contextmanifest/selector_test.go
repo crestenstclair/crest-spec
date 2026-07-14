@@ -34,6 +34,19 @@ func TestSelectBlocksWhenMandatoryMaterialExceedsBudget(t *testing.T) {
 	require.Equal(t, Omitted, result.Sections[0].Decision)
 }
 
+func TestSelectReservesBudgetForLaterMandatorySections(t *testing.T) {
+	result := Select([]Candidate{
+		{Kind: "goal", Title: "Goal", SourceKind: "spec", SourceID: "goal.A", Content: strings.Repeat("g", 800), Priority: PriorityGoal, Mandatory: true, InclusionReason: "target goal"},
+		// Canonical kind ordering puts design_contract before resource_contract
+		// at the same priority. It must not consume the contract's reservation.
+		{Kind: "design_contract", Title: "Design", SourceKind: "spec", SourceID: "design.A", Content: strings.Repeat("d", 3000), Priority: PriorityContract, Truncatable: true, InclusionReason: "design detail"},
+		{Kind: "resource_contract", Title: "Resource", SourceKind: "spec", SourceID: "resource.A", Content: strings.Repeat("r", 800), Priority: PriorityContract, Mandatory: true, InclusionReason: "target contract"},
+	}, MinimumBudget)
+	require.False(t, result.Blocked)
+	require.Equal(t, Truncated, result.Sections[1].Decision)
+	require.Equal(t, Included, result.Sections[2].Decision)
+}
+
 func TestSelectRecordsUnavailableAndDuplicateSources(t *testing.T) {
 	result := Select([]Candidate{
 		{Kind: "code", Title: "Call sites", SourceKind: "discovery", SourceID: "calls", Priority: PriorityCode, UnavailableReason: "selector unavailable"},

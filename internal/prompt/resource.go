@@ -8,6 +8,8 @@ import (
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 )
 
+const ResourceTemplateVersion = "resource-prompt-v1"
+
 func BuildResourcePrompt(resource cuepkg.Resource, registry *cuepkg.Registry) string {
 	if resource.Kind == "asset" {
 		return buildAssetPrompt(resource, registry)

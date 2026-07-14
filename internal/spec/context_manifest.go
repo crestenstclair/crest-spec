@@ -69,8 +69,8 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	candidates := s.contextCandidates(ctx, action, resource, planResult.Registry, runtimeContext, runtimeErr, systemPrompt, resourcePrompt)
 	selection := contextmanifest.Select(candidates, contextmanifest.BudgetForRole(opts.Role, opts.BudgetTokens))
 	templateHashes := map[string]string{
-		"system_prompt":   contextmanifest.Hash(systemPrompt),
-		"resource_prompt": contextmanifest.Hash(resourcePrompt),
+		promptpkg.SystemTemplateVersion:   contextmanifest.Hash(systemPrompt),
+		promptpkg.ResourceTemplateVersion: contextmanifest.Hash(resourcePrompt),
 	}
 	templateJSON, _ := json.Marshal(templateHashes)
 	selection.ContextHash = contextmanifest.Hash(selection.ContextHash + "\n" + string(templateJSON))
@@ -453,6 +453,8 @@ func (s *Spec) referenceCandidates(references []string) []contextmanifest.Candid
 		relative, err := filepath.Rel(root, path)
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			candidate.UnavailableReason = "reference path is outside the project root and was not captured"
+		} else if sensitiveContextPath(relative) {
+			candidate.UnavailableReason = "reference path may contain secrets and was not captured"
 		} else if content, readErr := s.fs.ReadFile(path); readErr != nil {
 			candidate.UnavailableReason = "referenced repository instruction could not be read"
 		} else {
@@ -462,6 +464,22 @@ func (s *Spec) referenceCandidates(references []string) []contextmanifest.Candid
 		result = append(result, candidate)
 	}
 	return result
+}
+
+func sensitiveContextPath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	if strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") {
+		return true
+	}
+	for _, marker := range []string{"credential", "credentials", "secret", "private-key", "private_key"} {
+		if strings.Contains(base, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func contextJSON(value any) string {

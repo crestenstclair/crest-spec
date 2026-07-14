@@ -135,11 +135,14 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 
 	mandatoryTokens := 0
 	mandatoryContent := make(map[string]bool)
+	mandatoryIdentities := make(map[string]bool)
 	for _, candidate := range ordered {
 		hash := Hash(candidate.Content)
-		if candidate.Mandatory && candidate.UnavailableReason == "" && !mandatoryContent[hash] {
-			mandatoryTokens += EstimateTokens(candidate.Content)
+		identity := candidate.Kind + "\x00" + candidate.SourceKind + "\x00" + candidate.SourceID
+		if candidate.Mandatory && candidate.UnavailableReason == "" && !mandatoryContent[hash] && !mandatoryIdentities[identity] {
+			mandatoryTokens += candidateTokenCost(candidate)
 			mandatoryContent[hash] = true
+			mandatoryIdentities[identity] = true
 		}
 	}
 	if mandatoryTokens > budget {
@@ -148,12 +151,18 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 	}
 
 	remaining := budget
+	mandatoryRemaining := mandatoryTokens
+	reservedMandatoryContent := make(map[string]bool, len(mandatoryContent))
 	seen := make(map[string]bool, len(ordered))
 	seenContent := make(map[string]string, len(ordered))
 	for _, candidate := range ordered {
 		section := baseSection(candidate, len(result.Sections))
 		identity := candidate.Kind + "\x00" + candidate.SourceKind + "\x00" + candidate.SourceID
 		contentHash := Hash(candidate.Content)
+		if candidate.Mandatory && candidate.UnavailableReason == "" && mandatoryContent[contentHash] && !reservedMandatoryContent[contentHash] {
+			mandatoryRemaining -= candidateTokenCost(candidate)
+			reservedMandatoryContent[contentHash] = true
+		}
 		switch {
 		case candidate.UnavailableReason != "":
 			section.Decision = Omitted
@@ -169,16 +178,24 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 			section.Reason = result.BlockedReason
 		default:
 			seen[identity] = true
-			seenContent[contentHash] = candidate.SourceKind + ":" + candidate.SourceID
-			tokens := EstimateTokens(candidate.Content)
-			if tokens <= remaining {
+			tokens := candidateTokenCost(candidate)
+			available := remaining
+			if !candidate.Mandatory {
+				available -= mandatoryRemaining
+				if available < 0 {
+					available = 0
+				}
+			}
+			if tokens <= available {
 				include(&section, candidate.Content, Included, candidate.InclusionReason)
-				remaining -= tokens
-			} else if candidate.Truncatable && remaining > 24 {
-				content, ok := truncate(candidate.Content, remaining)
+				remaining -= section.EstimatedTokens
+				seenContent[contentHash] = candidate.SourceKind + ":" + candidate.SourceID
+			} else if candidate.Truncatable && available > 24 {
+				content, ok := truncate(candidate.Content, available-EstimateTokens("## "+candidate.Title+"\n\n"))
 				if ok {
 					include(&section, content, Truncated, fmt.Sprintf("%s; truncated to remaining budget", candidate.InclusionReason))
 					remaining -= section.EstimatedTokens
+					seenContent[contentHash] = candidate.SourceKind + ":" + candidate.SourceID
 				} else {
 					section.Decision = Omitted
 					section.Reason = "insufficient remaining budget for a useful truncation"
@@ -243,7 +260,11 @@ func include(section *Section, content string, decision Decision, reason string)
 	section.Content = content
 	section.SelectedHash = Hash(content)
 	section.SelectedBytes = len([]byte(content))
-	section.EstimatedTokens = EstimateTokens(content)
+	section.EstimatedTokens = EstimateTokens("## " + section.Title + "\n\n" + content)
+}
+
+func candidateTokenCost(candidate Candidate) int {
+	return EstimateTokens("## " + candidate.Title + "\n\n" + candidate.Content)
 }
 
 func truncate(content string, tokenBudget int) (string, bool) {
@@ -268,8 +289,10 @@ func resultHash(result Result) string {
 	type hashSection struct {
 		Ordinal      int      `json:"ordinal"`
 		Kind         string   `json:"kind"`
+		Title        string   `json:"title"`
 		SourceKind   string   `json:"source_kind"`
 		SourceID     string   `json:"source_id"`
+		SourcePath   string   `json:"source_path"`
 		Priority     Priority `json:"priority"`
 		Mandatory    bool     `json:"mandatory"`
 		Decision     Decision `json:"decision"`
@@ -286,8 +309,8 @@ func resultHash(result Result) string {
 	}{Selector: result.SelectorVersion, Estimator: result.EstimatorVersion, Budget: result.BudgetTokens, Blocked: result.Blocked}
 	for _, section := range result.Sections {
 		payload.Sections = append(payload.Sections, hashSection{
-			Ordinal: section.Ordinal, Kind: section.Kind, SourceKind: section.SourceKind,
-			SourceID: section.SourceID, Priority: section.Priority, Mandatory: section.Mandatory,
+			Ordinal: section.Ordinal, Kind: section.Kind, Title: section.Title, SourceKind: section.SourceKind,
+			SourceID: section.SourceID, SourcePath: section.SourcePath, Priority: section.Priority, Mandatory: section.Mandatory,
 			Decision: section.Decision, Reason: section.Reason,
 			OriginalHash: section.OriginalHash, SelectedHash: section.SelectedHash,
 		})

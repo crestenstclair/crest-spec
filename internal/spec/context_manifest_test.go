@@ -97,6 +97,7 @@ func TestPrepareContextPersistsVerticalSliceWithDependenciesConsumersAndAcceptan
 	require.NoError(t, err)
 	require.Equal(t, "dispatched", resourceState.State)
 
+	require.NoError(t, st.UpdateSessionResourceState(sessionID, resourceID, "rejected", "go test: renderer returned silence", "", 1, ""))
 	second, err := s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID, Role: "minimal_diff_repair"})
 	require.NoError(t, err)
 	secondManifest, err := st.GetContextManifestByAttempt(ctx, second.AttemptID)
@@ -104,6 +105,17 @@ func TestPrepareContextPersistsVerticalSliceWithDependenciesConsumersAndAcceptan
 	require.Equal(t, 2, secondManifest.Attempt.RetryNumber)
 	require.Equal(t, result.AttemptID, secondManifest.Attempt.ParentAttemptID)
 	require.Equal(t, 24576, secondManifest.BudgetTokens)
+
+	comparison, err := s.CompareContexts(ctx, result.ContextManifestID, second.ContextManifestID)
+	require.NoError(t, err)
+	require.True(t, comparison.BudgetChanged)
+	require.False(t, comparison.SameContext)
+	requireAddedContextKind(t, comparison.AddedSections, "previous_failure")
+
+	summaries, err := s.ListContextAttempts(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+	require.Equal(t, second.ContextManifestID, summaries[0].ID)
 }
 
 func TestPrepareContextRecordsMandatoryBudgetBlockWithoutDispatch(t *testing.T) {
@@ -125,6 +137,23 @@ func TestPrepareContextRecordsMandatoryBudgetBlockWithoutDispatch(t *testing.T) 
 	resourceState, err := st.GetSessionResource(sessionID, resourceID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", resourceState.State)
+}
+
+func TestReferenceContextRejectsOutsideAndSecretBearingPaths(t *testing.T) {
+	projectRoot := t.TempDir()
+	specDir := filepath.Join(projectRoot, "spec")
+	require.NoError(t, os.MkdirAll(specDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, "AGENTS.md"), []byte("repository guidance"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, ".env"), []byte("TOKEN=do-not-capture"), 0o600))
+	s := &Spec{fs: OSFileSystem{}, cfg: &config.Config{SpecDir: specDir}}
+
+	candidates := s.referenceCandidates([]string{"AGENTS.md", ".env", "../outside.txt"})
+	require.Len(t, candidates, 3)
+	require.Equal(t, "repository guidance", candidates[0].Content)
+	require.Empty(t, candidates[0].UnavailableReason)
+	require.Contains(t, candidates[1].UnavailableReason, "secrets")
+	require.Empty(t, candidates[1].Content)
+	require.Contains(t, candidates[2].UnavailableReason, "outside the project root")
 }
 
 func newVerticalSliceContextSpec(t *testing.T) (*Spec, *store.Store, string) {
@@ -150,4 +179,14 @@ func requireContextSection(t *testing.T, sections []store.ContextManifestSection
 		}
 	}
 	require.Failf(t, "missing context section", "kind %q not present", kind)
+}
+
+func requireAddedContextKind(t *testing.T, changes []ContextSectionChange, kind string) {
+	t.Helper()
+	for _, change := range changes {
+		if change.After != nil && change.After.Kind == kind {
+			return
+		}
+	}
+	require.Failf(t, "missing added context section", "kind %q not present", kind)
 }

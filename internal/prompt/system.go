@@ -6,6 +6,8 @@ import (
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 )
 
+const SystemTemplateVersion = "system-prompt-v1"
+
 var langExtensions = map[string]string{
 	"go":         ".go",
 	"rust":       ".rs",

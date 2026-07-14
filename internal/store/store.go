@@ -1560,25 +1560,57 @@ func (s *Store) DeleteAmendment(resourceID, name string) error {
 // Vacuum — compact old history
 // ---------------------------------------------------------------------------
 
-// Vacuum deletes generations, invariant checks, and apply records
-// (along with their actions) that were created before the given time.
-// Returns the total number of rows deleted across all tables.
+// Vacuum deletes operational history older than the given time in one
+// transaction. Context ancestry is reference-safe: an old attempt remains
+// while any retained retry descends from it, and content blobs are released
+// only after no manifest or section references them.
 func (s *Store) Vacuum(before time.Time) (int, error) {
 	ts := before.UTC().Format(time.RFC3339Nano)
 	total := 0
+	tx, err := s.sqlDB.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("vacuum begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	tables := []string{
-		"DELETE FROM agent_events WHERE created_at < ?",
-		"DELETE FROM generations WHERE created_at < ?",
-		"DELETE FROM invariant_checks WHERE checked_at < ?",
-		"DELETE FROM apply_actions WHERE started_at < ?",
-		"DELETE FROM agent_notes WHERE created_at < ?",
-		"DELETE FROM session_resources WHERE updated_at < ?",
-		"DELETE FROM applies WHERE started_at < ?",
+	const retainedAttemptAncestors = `WITH RECURSIVE retained_attempts(id) AS (
+		SELECT id FROM generation_attempts WHERE created_at >= ?
+		UNION
+		SELECT ga.parent_attempt_id
+		FROM generation_attempts ga
+		JOIN retained_attempts retained ON retained.id = ga.id
+		WHERE ga.parent_attempt_id IS NOT NULL
+	)`
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{"DELETE FROM agent_events WHERE created_at < ?", []any{ts}},
+		{"DELETE FROM generations WHERE created_at < ?", []any{ts}},
+		{"DELETE FROM invariant_checks WHERE checked_at < ?", []any{ts}},
+		{"DELETE FROM apply_actions WHERE started_at < ?", []any{ts}},
+		{"DELETE FROM agent_notes WHERE created_at < ?", []any{ts}},
+		{"DELETE FROM session_resources WHERE updated_at < ?", []any{ts}},
+		{retainedAttemptAncestors + `
+		DELETE FROM context_sections WHERE manifest_id IN (
+			SELECT cm.id FROM context_manifests cm
+			JOIN generation_attempts ga ON ga.id = cm.attempt_id
+			WHERE ga.created_at < ? AND ga.id NOT IN (SELECT id FROM retained_attempts)
+		)`, []any{ts, ts}},
+		{retainedAttemptAncestors + `
+		DELETE FROM context_manifests WHERE attempt_id IN (
+			SELECT id FROM generation_attempts
+			WHERE created_at < ? AND id NOT IN (SELECT id FROM retained_attempts)
+		)`, []any{ts, ts}},
+		{retainedAttemptAncestors + `
+		DELETE FROM generation_attempts
+		WHERE created_at < ? AND id NOT IN (SELECT id FROM retained_attempts)`, []any{ts, ts}},
+		{"DELETE FROM content_blobs WHERE NOT EXISTS (SELECT 1 FROM context_manifests WHERE system_prompt_blob = content_blobs.hash OR rendered_prompt_blob = content_blobs.hash) AND NOT EXISTS (SELECT 1 FROM context_sections WHERE content_blob = content_blobs.hash)", nil},
+		{"DELETE FROM applies WHERE started_at < ? AND NOT EXISTS (SELECT 1 FROM generation_attempts WHERE generation_attempts.apply_id = applies.id)", []any{ts}},
 	}
 
-	for _, stmt := range tables {
-		res, err := s.sqlDB.Exec(stmt, ts)
+	for _, statement := range statements {
+		res, err := tx.Exec(statement.query, statement.args...)
 		if err != nil {
 			return total, fmt.Errorf("vacuum: %w", err)
 		}
@@ -1588,7 +1620,9 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		}
 		total += int(n)
 	}
-
+	if err := tx.Commit(); err != nil {
+		return total, fmt.Errorf("vacuum commit: %w", err)
+	}
 	return total, nil
 }
 

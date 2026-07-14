@@ -56,6 +56,19 @@ SELECT * FROM context_manifests WHERE attempt_id = ?;
 -- name: ListRecentContextManifests :many
 SELECT * FROM context_manifests ORDER BY created_at DESC, id DESC LIMIT ?;
 
+-- name: ListContextManifestSummaries :many
+SELECT
+    cm.id, cm.attempt_id, cm.selector_version, cm.estimator_version,
+    cm.selection_strategy, cm.budget_tokens, cm.estimated_tokens,
+    cm.original_bytes, cm.selected_bytes, cm.context_hash, cm.blocked,
+    cm.blocked_reason, cm.created_at,
+    ga.session_id, ga.apply_id, ga.resource_id, ga.plan_operation_id,
+    ga.parent_attempt_id, ga.retry_number, ga.role, ga.status
+FROM context_manifests cm
+JOIN generation_attempts ga ON ga.id = cm.attempt_id
+ORDER BY cm.created_at DESC, cm.id DESC
+LIMIT ?;
+
 -- name: CreateContextSection :exec
 INSERT INTO context_sections (
     id, manifest_id, ordinal, section_kind, title, source_kind, source_id,

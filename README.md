@@ -229,11 +229,13 @@ A plan/apply lifecycle: the **server** plans and checks; the **host** fills.
 
 1. **Declare** — Write your domain as CUE in the spec directory: contexts, aggregates, value objects, domain/application services, repositories, ports, adapters, and assets. Each is a *resource*.
 2. **Coordinate** (`spec/plan`, `spec/begin`) — The server diffs the CUE spec against SQLite state by declaration hash, computes a dependency graph, and returns an execution plan ordered into waves, plus any pending destroys for removed resources. Destroys never auto-execute — `spec/confirm_destroys` is human-gated.
-3. **Fill** (`spec/next` → `spec/context` → `spec/commit`) — For each resource in a wave, a sub-agent fetches a scoped prompt from `spec/context` — the project mission, the declaration, its bounded context's design contract, the invariants to honor, and (on retries) the previous files, errors, and triage guidance — authors the files, and commits.
+3. **Fill** (`spec/next` → `spec/context` → `spec/commit`) — For each resource in a wave, `spec/context` creates an immutable attempt and selects a budgeted, goal-directed prompt: target goals and acceptance, the task and resource contract, dependencies, consumers, relevant code, design constraints, and retry evidence. Included, truncated, and omitted sources—and the exact bytes served—are stored in SQLite before dispatch. The sub-agent authors the files and commits.
 4. **Check** — On `spec/commit` the server writes the files and runs the resource's declared validations, fail-closed (a validation that cannot launch is a failure). Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`, below). Any failure rejects/regenerates with the detail folded into the next `spec/context`, up to `CREST_SPEC_MAX_RETRIES`. Persistent failures are triaged with `spec/resolve`, or `spec/skip` when the spec itself is provably contradictory.
 5. **Finish** (`spec/finish`) — Waves run until none remain. Finish refuses while behavioral checks are unresolved (`force` is an explicit human decision). Optionally a reflection pass distils cross-session learnings via `spec/record_learnings` — real examples from crest-ci include "schedule manifest assets before whole-tree gates" (auto-applied 32×) and "verify the file ledger before integration gates."
 
 Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec changes, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. Retries and modifications run in **UPDATE mode**: the existing files are served back with the failure, and the generator makes the minimal edit — a blank-slate rewrite happens only for brand-new resources. Generated files can be **co-owned** by multiple resources (a shared module survives when one of its owners is destroyed), and destroying a resource cascades its behavioral tasks and checks with it.
+
+Context observability is canonical state, not a sidecar: content-addressed snapshots, attempt ancestry, budgets, selection reasons, omissions, template hashes, and rendered prompts live in the existing SQLite database. The dashboard's **Contexts** tab reads those records directly and can compare a failed attempt with its retry even after the working tree changes. Existing databases migrate additively; older generation history remains visible as legacy history without fabricated context manifests.
 
 Once generated, a file's content is yours: the planner guides architecture and invariants, it does not police file contents.
 
@@ -270,6 +272,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/validate` | Parse + registry-check the spec; run after every spec edit |
 | `spec/plan` | Diff spec vs state → create/modify/destroy actions + waves |
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts) |
+| `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | List, reconstruct, and structurally compare immutable generation contexts |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db |
 | `spec/sql` | Read-only SQL over the whole state db — the escape hatch |
 
@@ -290,7 +293,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 
 | Tool | Purpose |
 |------|---------|
-| `spec/context` | The scoped prompt: system prompt, declaration, dependency interfaces, invariants, mission — plus previous files/errors/guidance in UPDATE mode |
+| `spec/context` | Create an immutable attempt and return budgeted goal/acceptance/task/contracts/code context plus selection decisions and rendered prompts |
 | `spec/commit` | Submit candidate files; the engine runs the declared validations and accepts or rejects |
 | `spec/note` | Attach a note to the session/resource (surfaces in later context) |
 
@@ -354,6 +357,9 @@ With no arguments, `crest-spec` starts the MCP server on stdio. Generation is ne
 crest-spec init [--agent name] [--force]  bootstrap agent-host integration files
 crest-spec dashboard [--addr :8080]       web dashboard for monitoring sessions
 crest-spec adopt                          seed baseline state from on-disk code
+crest-spec context list [limit]           list immutable context attempts
+crest-spec context show <manifest|attempt> reconstruct exact served context
+crest-spec context compare <left> <right> compare source and selection changes
 crest-spec state list                     print all resources in state
 crest-spec state rm <resourceId>          remove a resource from state
 crest-spec diff <apply_a> <apply_b>       show changes between two applies

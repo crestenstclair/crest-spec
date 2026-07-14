@@ -70,6 +70,22 @@ type ContextManifestSection struct {
 	Content         string
 }
 
+type ContextManifestSummary struct {
+	ID                string
+	Attempt           GenerationAttempt
+	SelectorVersion   string
+	EstimatorVersion  string
+	SelectionStrategy string
+	BudgetTokens      int
+	EstimatedTokens   int
+	OriginalBytes     int
+	SelectedBytes     int
+	ContextHash       string
+	Blocked           bool
+	BlockedReason     string
+	CreatedAt         time.Time
+}
+
 // ContextManifestWrite is persisted as one transaction with its attempt,
 // sections, blobs, and session dispatch transition.
 type ContextManifestWrite struct {
@@ -284,6 +300,34 @@ func (s *Store) ListContextManifests(ctx context.Context, limit int) ([]ContextM
 			return nil, hydrateErr
 		}
 		result = append(result, *manifest)
+	}
+	return result, nil
+}
+
+func (s *Store) ListContextManifestSummaries(ctx context.Context, limit int) ([]ContextManifestSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.queries.ListContextManifestSummaries(ctx, int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ContextManifestSummary, len(rows))
+	for i, row := range rows {
+		result[i] = ContextManifestSummary{
+			ID: row.ID,
+			Attempt: GenerationAttempt{
+				ID: row.AttemptID, SessionID: row.SessionID, ApplyID: row.ApplyID,
+				ResourceID: row.ResourceID, PlanOperationID: row.PlanOperationID,
+				ParentAttemptID: stringVal(row.ParentAttemptID), RetryNumber: int(row.RetryNumber),
+				Role: row.Role, Status: row.Status, CreatedAt: parseTime(row.CreatedAt),
+			},
+			SelectorVersion: row.SelectorVersion, EstimatorVersion: row.EstimatorVersion,
+			SelectionStrategy: row.SelectionStrategy, BudgetTokens: int(row.BudgetTokens),
+			EstimatedTokens: int(row.EstimatedTokens), OriginalBytes: int(row.OriginalBytes),
+			SelectedBytes: int(row.SelectedBytes), ContextHash: row.ContextHash,
+			Blocked: row.Blocked == 1, BlockedReason: row.BlockedReason, CreatedAt: parseTime(row.CreatedAt),
+		}
 	}
 	return result, nil
 }

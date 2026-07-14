@@ -64,6 +64,7 @@ type specStore interface {
 	GetContextManifest(ctx context.Context, id string) (*store.ContextManifest, error)
 	GetContextManifestByAttempt(ctx context.Context, attemptID string) (*store.ContextManifest, error)
 	ListContextManifests(ctx context.Context, limit int) ([]store.ContextManifest, error)
+	ListContextManifestSummaries(ctx context.Context, limit int) ([]store.ContextManifestSummary, error)
 	ListGenerationAttemptsBySession(ctx context.Context, sessionID string) ([]store.GenerationAttempt, error)
 	ListGenerationAttemptsByResource(ctx context.Context, resourceID string, limit int) ([]store.GenerationAttempt, error)
 	GetGeneration(id string) (*store.Generation, error)

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -50,6 +52,9 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "  init [--agent name] [--force]  bootstrap agent-host integration files")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
 			fmt.Fprintln(os.Stderr, "  project                         show mission, goal state, and blockers")
+			fmt.Fprintln(os.Stderr, "  context list [limit]            list immutable context attempts")
+			fmt.Fprintln(os.Stderr, "  context show <manifest|attempt> inspect exact served context")
+			fmt.Fprintln(os.Stderr, "  context compare <left> <right>  compare two context manifests")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
 			fmt.Fprintln(os.Stderr, "  state rm <resourceId>          remove a resource from state")
 			fmt.Fprintln(os.Stderr, "  diff <apply_a> <apply_b>       show changes between two applies")
@@ -77,6 +82,8 @@ func runSubcommand() bool {
 		cmdDashboard(flags)
 	case "project":
 		cmdProject()
+	case "context":
+		cmdContext(os.Args[2:])
 	case "state":
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {
@@ -238,6 +245,64 @@ func cmdProject() {
 	for _, blocker := range overview.Blockers {
 		fmt.Printf("BLOCKED %s [%s]: %s\n", blocker.GoalID, blocker.Category, blocker.Reason)
 	}
+}
+
+func cmdContext(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: crest-spec context [list [limit]|show <manifest-or-attempt>|compare <left-manifest> <right-manifest>]")
+		os.Exit(1)
+	}
+	st := openStore()
+	defer st.Close()
+	ctx := context.Background()
+	switch args[0] {
+	case "list":
+		limit := 50
+		if len(args) > 1 {
+			if parsed, err := strconv.Atoi(args[1]); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		rows, err := st.ListContextManifestSummaries(ctx, limit)
+		if err != nil {
+			fatal(fmt.Errorf("list context attempts: %w", err))
+		}
+		writePrettyJSON(rows)
+	case "show":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: crest-spec context show <manifest-or-attempt>")
+			os.Exit(1)
+		}
+		manifest, err := st.GetContextManifest(ctx, args[1])
+		if err != nil {
+			manifest, err = st.GetContextManifestByAttempt(ctx, args[1])
+		}
+		if err != nil {
+			fatal(fmt.Errorf("inspect context: %w", err))
+		}
+		writePrettyJSON(manifest)
+	case "compare":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: crest-spec context compare <left-manifest> <right-manifest>")
+			os.Exit(1)
+		}
+		comparison, err := specmod.New(st, specmod.OSFileSystem{}, &config.Config{}).CompareContexts(ctx, args[1], args[2])
+		if err != nil {
+			fatal(fmt.Errorf("compare contexts: %w", err))
+		}
+		writePrettyJSON(comparison)
+	default:
+		fmt.Fprintln(os.Stderr, "usage: crest-spec context [list|show|compare]")
+		os.Exit(1)
+	}
+}
+
+func writePrettyJSON(value any) {
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		fatal(fmt.Errorf("encode output: %w", err))
+	}
+	fmt.Println(string(encoded))
 }
 
 func truncHash(h string) string {
