@@ -34,12 +34,14 @@ project: contexts: Patch: aggregates: Patch: {
 	invariants: [
 		"a patch's MPE zone never overlaps another patch's zone",
 	]
+	contributesTo: [{capability: "capability.configure_complete_patch", contribution: "binds sound source, modulation, MIDI mapping, MPE zone, and mixer assignment into one playable instrument"}]
 }
 
 project: contexts: Patch: domainServices: {
 	MidiDispatcher: {
 		purpose: "routes each normalized MidiEvent to exactly the patches whose channel mapping matches its address"
 		uses: ["aggregate.Patch.Patch"]
+		contributesTo: [{capability: "capability.accept_external_midi", contribution: "delivers normalized events to exactly the intentionally mapped and layered patches"}]
 	}
 }
 
@@ -51,5 +53,6 @@ project: contexts: Patch: applicationServices: {
 			createPatch: {output: {id: "PatchId"}}
 			deletePatch: {input: {id: "PatchId"}}
 		}
+		contributesTo: [{capability: "capability.configure_complete_patch", contribution: "coordinates creation and editing of complete patch configuration"}]
 	}
 }

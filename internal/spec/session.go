@@ -101,6 +101,15 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
+	intent, err := projectIntentSnapshot(planResult.Registry.Project)
+	if err != nil {
+		return nil, fmt.Errorf("project intent: %w", err)
+	}
+	intent.ResourceTrace = resourceTraceSnapshot(planResult.Registry)
+	if err := s.store.ReconcileProjectIntent(ctx, intent); err != nil {
+		return nil, fmt.Errorf("reconcile project intent: %w", err)
+	}
+
 	actions := planResult.Actions
 	waves := planResult.Waves
 

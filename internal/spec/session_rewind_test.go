@@ -37,7 +37,7 @@ func newTestSpecWithTwoWaveSession(t *testing.T) (s *Spec, sessionID, wave0ID, w
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(twoWaveSpecCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(withTestIntent(twoWaveSpecCUE)), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "claude-sonnet-4-6", MaxRetries: 3}
 	s = New(st, OSFileSystem{}, cfg)

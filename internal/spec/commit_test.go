@@ -23,6 +23,24 @@ project: contexts: Audio: valueObjects: Tone: {from: "f64"}
 project: invariants: [{text: "no global state"}]
 `
 
+// testIntentCUE is shared by focused spec-engine tests whose resource shape is
+// intentionally tiny. Production and fixture specs carry domain-specific
+// intent; these tests need one valid goal without obscuring the behavior under
+// test.
+const testIntentCUE = `
+project: mission: "Generate and verify the resource under test"
+project: actors: developer: {description: "the developer running the test"}
+project: goals: test_behavior: {description: "the declared test behavior works", priority: "required", actors: ["actor.developer"], capabilities: ["capability.exercise_resource"], requirements: ["requirement.valid_result"]}
+project: capabilities: exercise_resource: {description: "exercise the resource under test", goals: ["goal.test_behavior"], acceptance: successful_result: {description: "the resource produces the expected result", actor: "actor.developer", evidence: ["evidence.test_result"]}}
+project: requirements: valid_result: {kind: "functional", description: "the resource produces a valid result", goals: ["goal.test_behavior"], capabilities: ["capability.exercise_resource"]}
+project: evidence: test_result: {kind: "validation", description: "the focused test validation"}
+project: completion: requiredGoals: ["goal.test_behavior"]
+`
+
+func withTestIntent(specCUE string) string {
+	return specCUE + "\n" + testIntentCUE
+}
+
 // commitTestSession bundles the IDs the commit-contract tests assert against.
 type commitTestSession struct {
 	sessionID  string
@@ -42,7 +60,7 @@ func newTestSpecWithSessionCUE(t *testing.T, specCUE string) (*Spec, commitTestS
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(specCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(withTestIntent(specCUE)), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "claude-sonnet-4-6", MaxRetries: 3}
 	s := New(st, OSFileSystem{}, cfg)

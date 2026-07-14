@@ -169,6 +169,12 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
 
 <div class="grid">
   <div class="sidebar">
+    <!-- Project completion card -->
+    <div class="card">
+      <h2>Project Goal</h2>
+      <div id="project-summary" class="empty">Loading project intent...</div>
+    </div>
+
     <!-- Session Card -->
     <div class="card">
       <h2>Session</h2>
@@ -211,11 +217,19 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
 
   <div class="main">
     <div class="tab-bar">
+      <div class="tab" data-tab="project">Project</div>
       <div class="tab active" data-tab="session">Session</div>
       <div class="tab" data-tab="generations">Generations</div>
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
       <div class="tab" data-tab="learnings">Learnings</div>
+    </div>
+
+    <!-- Tab: Session (Wave Progress) -->
+    <div class="tab-content" id="tab-project">
+      <div class="card" style="overflow-x:auto">
+        <div id="project-detail" class="empty">Loading project intent...</div>
+      </div>
     </div>
 
     <!-- Tab: Session (Wave Progress) -->
@@ -260,6 +274,7 @@ let sseConnected = false;
 let eventSource = null;
 let cachedStatus = null;
 let cachedSessionResources = null;
+let cachedProject = null;
 
 // ─── Tab navigation ────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -416,9 +431,10 @@ function handleSSEData(data) {
 async function pollRefresh() {
   if (sseConnected) return;
 
-  const [status, resources] = await Promise.all([
+  const [status, resources, project] = await Promise.all([
     fetchJSON('/api/status'),
     fetchJSON('/api/resources'),
+    fetchJSON('/api/v1/project'),
   ]);
 
   document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
@@ -441,6 +457,12 @@ async function pollRefresh() {
       updateResourceDonutFromCounts(status.resource_states);
       updateResourceStateCountsFromCounts(status.resource_states);
     }
+  }
+
+  if (project) {
+    cachedProject = project;
+    renderProjectSummary(project);
+    if (currentTab === 'project') renderProjectDetail(project);
   }
 
   loadTabData(currentTab);
@@ -570,12 +592,77 @@ function renderDonut(counts, total) {
 // ─── Tab data loaders ──────────────────────────────────────────────
 async function loadTabData(tab) {
   switch (tab) {
+    case 'project': await loadProjectTab(); break;
     case 'session': await loadSessionTab(); break;
     case 'generations': await loadGenerationsTab(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'learnings': await loadLearningsTab(); break;
   }
+}
+
+// ─── Project overview and goal explorer ───────────────────────────
+async function loadProjectTab() {
+  const data = cachedProject || await fetchJSON('/api/v1/project');
+  if (!data) {
+    document.getElementById('project-detail').innerHTML = '<div class="error-msg">Error loading project intent</div>';
+    return;
+  }
+  cachedProject = data;
+  renderProjectSummary(data);
+  renderProjectDetail(data);
+}
+
+function renderProjectSummary(data) {
+  const project = data.project || data.Project;
+  if (!project) return;
+  const status = project.CompletionStatus || project.completion_status || 'declared';
+  const mission = project.Mission || project.mission || '';
+  const reason = project.CompletionReason || project.completion_reason || '';
+  document.getElementById('project-summary').innerHTML =
+    '<div style="margin-bottom:10px">' + statusBadge(status) + '</div>' +
+    '<div style="font-size:13px">' + esc(mission) + '</div>' +
+    '<div style="font-size:12px;color:var(--text-muted);margin-top:8px">' + esc(reason) + '</div>';
+}
+
+function renderProjectDetail(data) {
+  const el = document.getElementById('project-detail');
+  const project = data.project || data.Project;
+  const goals = project.Goals || project.goals || [];
+  const blockers = data.blockers || data.Blockers || [];
+	const contributions = data.contributions || data.Contributions || [];
+	const byCapability = {};
+	for (const contribution of contributions) {
+	  const capability = contribution.CapabilityID || contribution.capability_id || '';
+	  if (!byCapability[capability]) byCapability[capability] = [];
+	  byCapability[capability].push(contribution.ResourceID || contribution.resource_id || '');
+	}
+  let html = '<h2 style="margin-top:4px">Goals</h2>' +
+    '<table><thead><tr><th>Goal</th><th>Priority</th><th>Status</th><th>Contributing resources</th><th>Why / missing work</th></tr></thead><tbody>';
+  for (const goal of goals) {
+    const id = goal.ID || goal.id || '';
+    const description = goal.Description || goal.description || '';
+    const priority = goal.Priority || goal.priority || '';
+    const status = goal.Status || goal.status || 'declared';
+    const reason = goal.StatusReason || goal.status_reason || '';
+	const capabilities = goal.Capabilities || goal.capabilities || [];
+	const resources = [...new Set(capabilities.flatMap(capability => byCapability[capability] || []))].sort();
+    html += '<tr><td><div class="resource-id">' + esc(id) + '</div><div style="font-size:12px">' + esc(description) + '</div></td>' +
+      '<td>' + badge(priority, priority === 'required' ? 'blue' : 'muted') + '</td>' +
+      '<td>' + statusBadge(status) + '</td><td><div class="files-list">' + (resources.map(resource => '<span>' + esc(resource) + '</span>').join('') || '<span style="color:var(--red)">missing</span>') + '</div></td>' +
+      '<td style="font-size:12px;color:var(--text-muted)">' + esc(reason) + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  if (blockers.length) {
+    html += '<h2 style="margin-top:24px">Current blockers</h2><table><thead><tr><th>Goal</th><th>Category</th><th>Reason</th></tr></thead><tbody>';
+    for (const blocker of blockers) {
+      html += '<tr><td class="resource-id">' + esc(blocker.goal_id || blocker.GoalID || 'project') + '</td>' +
+        '<td>' + badge(blocker.category || blocker.Category || '', 'purple') + '</td>' +
+        '<td>' + esc(blocker.reason || blocker.Reason || '') + '</td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  el.innerHTML = html;
 }
 
 // ─── Tab: Learnings ────────────────────────────────────────────────
@@ -884,7 +971,7 @@ function renderResourcesTable(resources) {
   const el = document.getElementById('resources-table');
 
   let html = '<table><thead><tr>' +
-    '<th>Resource</th><th>Kind</th><th>Context</th><th>Model</th><th>Files</th><th>Settled</th>' +
+    '<th>Resource</th><th>Kind</th><th>Capabilities</th><th>Context</th><th>Model</th><th>Files</th><th>Settled</th>' +
   '</tr></thead><tbody>';
 
   for (let i = 0; i < resources.length; i++) {
@@ -895,18 +982,21 @@ function renderResourcesTable(resources) {
     const model = r.Model || r.model || '--';
     const files = r.files || r.Files || [];
     const settledAt = r.SettledAt || r.settled_at || '';
+	const overviewContributions = cachedProject ? (cachedProject.contributions || cachedProject.Contributions || []) : [];
+	const capabilities = overviewContributions.filter(c => (c.ResourceID || c.resource_id) === rid).map(c => c.CapabilityID || c.capability_id);
 
     const fileList = files.map(f => '<span>' + esc(f.Path || f.path) + '</span>').join('');
 
     html += '<tr class="clickable" onclick="toggleResourceDrilldown(' + i + ', \'' + encodeURIComponent(rid) + '\')">' +
       '<td class="resource-id">' + esc(rid) + '</td>' +
       '<td>' + badge(kind, 'blue') + '</td>' +
+	  '<td><div class="files-list">' + (capabilities.map(c => '<span>' + esc(c) + '</span>').join('') || '--') + '</div></td>' +
       '<td style="color:var(--text-muted)">' + esc(ctx) + '</td>' +
       '<td style="color:var(--text-muted);font-size:12px">' + esc(model) + '</td>' +
       '<td><div class="files-list">' + (fileList || '--') + '</div></td>' +
       '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(settledAt) + '</td>' +
     '</tr>' +
-    '<tr id="res-drilldown-' + i + '" style="display:none"><td colspan="6"></td></tr>';
+    '<tr id="res-drilldown-' + i + '" style="display:none"><td colspan="7"></td></tr>';
   }
 
   html += '</tbody></table>';

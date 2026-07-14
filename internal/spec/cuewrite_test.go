@@ -50,6 +50,7 @@ project: name: "rt"
 project: contexts: Audio: purpose: "audio"
 project: contexts: Audio: valueObjects: EqualTemperament: {from: "f64"}
 `
+	base = withTestIntent(base)
 	if err := os.WriteFile(filepath.Join(dir, "base.cue"), []byte(base), 0o644); err != nil {
 		t.Fatalf("write base: %v", err)
 	}

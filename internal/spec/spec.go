@@ -17,6 +17,13 @@ import (
 )
 
 type specStore interface {
+	ReconcileProjectIntent(ctx context.Context, snapshot store.ProjectIntentSnapshot) error
+	GetProjectIntent(ctx context.Context, projectName string) (*store.ProjectIntentState, error)
+	ListGoalStatusHistory(ctx context.Context, goalID string) ([]store.StatusTransition, error)
+	ListProjectStatusHistory(ctx context.Context, projectName string) ([]store.StatusTransition, error)
+	ListCompletionBlockers(ctx context.Context, projectName string) ([]store.CompletionBlocker, error)
+	ListResourceContributions(ctx context.Context, projectName string) ([]store.PersistedContribution, error)
+	ListContributionsByResource(ctx context.Context, resourceID string) ([]store.PersistedContribution, error)
 	GetResource(id string) (*store.Resource, error)
 	ListResources() ([]store.Resource, error)
 	SetResource(r store.Resource) error
@@ -295,6 +302,7 @@ type PlanResult struct {
 	Waves    [][]string
 	Hashes   map[string]string
 	Mode     string
+	Slices   []planpkg.CapabilitySlice
 }
 
 func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
@@ -343,5 +351,6 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		Waves:    waveStrings,
 		Hashes:   hashes,
 		Mode:     mode,
+		Slices:   planpkg.BuildCapabilitySlices(actions, registry),
 	}, nil
 }

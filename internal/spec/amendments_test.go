@@ -56,7 +56,7 @@ func setupAmendmentsSpec(t *testing.T) (*Spec, *store.Store) {
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(amendmentSpecCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(withTestIntent(amendmentSpecCUE)), 0o644))
 
 	cfg := &config.Config{
 		SpecDir:       dir,
@@ -173,7 +173,7 @@ func TestApplyAmendments_PreviewVsApply(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(withTestIntent(applyAmendmentsBaseCUE)), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
 	s := New(st, OSFileSystem{}, cfg)
@@ -231,7 +231,7 @@ func TestListAmendments_FilterByState(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(withTestIntent(applyAmendmentsBaseCUE)), 0o644))
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
 	s := New(st, OSFileSystem{}, cfg)
 
@@ -286,7 +286,7 @@ func TestGraduateAmendment_PreviewVsApply(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(applyAmendmentsBaseCUE), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.cue"), []byte(withTestIntent(applyAmendmentsBaseCUE)), 0o644))
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "test-model", MaxRetries: 3}
 	s := New(st, OSFileSystem{}, cfg)
 

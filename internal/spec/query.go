@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
@@ -144,11 +146,18 @@ type InspectResult struct {
 	SystemPrompt    string                `json:"system_prompt"`
 	ResourcePrompt  string                `json:"resource_prompt"`
 	Wave            int                   `json:"wave"`
+	Contributions   []InspectContribution `json:"contributions,omitempty"`
+	SupportedGoals  []string              `json:"supported_goals,omitempty"`
 }
 
 type InspectDep struct {
 	TargetID string `json:"target_id"`
 	Kind     string `json:"kind"`
+}
+
+type InspectContribution struct {
+	Capability  string `json:"capability"`
+	Description string `json:"description"`
 }
 
 func (s *Spec) Inspect(ctx context.Context, resourceID string) (*InspectResult, error) {
@@ -182,6 +191,20 @@ func (s *Spec) Inspect(ctx context.Context, resourceID string) (*InspectResult, 
 	}
 
 	files, _ := s.store.GetGeneratedFiles(resourceID)
+	var contributions []InspectContribution
+	goalSet := make(map[string]bool)
+	for _, contribution := range resource.Contributions {
+		contributions = append(contributions, InspectContribution{Capability: contribution.Capability, Description: contribution.Contribution})
+		capabilityName := strings.TrimPrefix(contribution.Capability, "capability.")
+		for _, goalID := range planResult.Registry.Project.Capabilities[capabilityName].Goals {
+			goalSet[goalID] = true
+		}
+	}
+	var supportedGoals []string
+	for goalID := range goalSet {
+		supportedGoals = append(supportedGoals, goalID)
+	}
+	sort.Strings(supportedGoals)
 
 	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
 	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
@@ -209,6 +232,8 @@ func (s *Spec) Inspect(ctx context.Context, resourceID string) (*InspectResult, 
 		SystemPrompt:    systemPrompt,
 		ResourcePrompt:  resourcePrompt,
 		Wave:            wave,
+		Contributions:   contributions,
+		SupportedGoals:  supportedGoals,
 	}, nil
 }
 

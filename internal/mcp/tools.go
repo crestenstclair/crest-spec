@@ -61,6 +61,8 @@ the returned Instructions, or read the server instructions from initialize.`)
 // registerSpecStubs adds placeholder stubs when no spec handler is provided.
 func (s *Server) registerSpecStubs() {
 	stubs := []toolDef{
+		{Name: "spec/project_overview", Description: "Show project mission, goals, completion, blockers, and history", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/impact", Description: "Trace resource change impact into capabilities, goals, and evidence", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"}},"required":["resource_id"]}`)},
 		{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
 		{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
 		{Name: "spec/begin", Description: "Step 1: Start a generation session.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
@@ -306,7 +308,7 @@ type specDesignCommitArgs struct {
 }
 
 type specTasksCommitArgs struct {
-	ResourceID string             `json:"resource_id"`
+	ResourceID string              `json:"resource_id"`
 	Tasks      []specmod.TaskInput `json:"tasks"`
 }
 
@@ -517,6 +519,20 @@ func (s *Server) registerSpecLifecycleTools() {
 
 // registerSpecQueryTools adds spec query and admin tools (status through prompt).
 func (s *Server) registerSpecQueryTools() {
+	s.addTool(toolDef{
+		Name: "spec/project_overview", Description: "Show the SQLite-backed project mission, required and optional goals, capabilities, acceptance requirements, completion state, blockers, and status history.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, specTool("project_overview", func(ctx context.Context, _ struct{}) (any, error) {
+		return s.spec.ProjectOverview(ctx)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/impact", Description: "Trace a changed resource through structural dependents to affected capabilities, goals, evidence, and completed goals requiring re-verification.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"}},"required":["resource_id"]}`),
+	}, specTool("impact", func(ctx context.Context, a specResourceArgs) (any, error) {
+		return s.spec.Impact(ctx, a.ResourceID)
+	}))
+
 	s.addTool(toolDef{
 		Name: "spec/status", Description: "Session-level status overview. Without session_id: shows general state. With session_id: shows wave progress, per-wave resource counts (committed/rejected/errored/pending).",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional — omit for general status)"}}}`),

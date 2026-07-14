@@ -79,6 +79,53 @@ func TestNewRegistry_ContextName(t *testing.T) {
 	assert.Equal(t, "", reg.Resources["adapter.CoreAudioAdapter"].ContextName)
 }
 
+func TestNewRegistry_BuildsBidirectionalCapabilityTraceability(t *testing.T) {
+	p := validIntentProject()
+	p.Contexts = map[string]Context{
+		"Example": {
+			Purpose: "implement the example",
+			ValueObjects: map[string]ValueObject{
+				"Output": {Description: "observable output", ContributesTo: []Contribution{{Capability: "capability.run_example", Contribution: "defines the observable result"}}},
+			},
+			ApplicationServices: map[string]ApplicationService{
+				"Runner": {Purpose: "run it", ContributesTo: []Contribution{{Capability: "capability.run_example", Contribution: "coordinates the example"}}},
+			},
+		},
+	}
+
+	reg, err := NewRegistry(p)
+	require.NoError(t, err)
+	require.Equal(t, []string{"applicationService.Example.Runner", "valueObject.Example.Output"}, reg.ResourcesForCapability("capability.run_example"))
+	require.Equal(t, []string{"capability.run_example"}, reg.CapabilitiesForResource("applicationService.Example.Runner"))
+	require.Equal(t, []string{"applicationService.Example.Runner", "valueObject.Example.Output"}, reg.ResourcesForGoal("goal.complete_example"))
+	require.Empty(t, reg.MissingCapabilities)
+	// Contributions are grouping edges only, not resource dependencies.
+	require.Empty(t, reg.Resources["applicationService.Example.Runner"].Dependencies)
+}
+
+func TestNewRegistry_ReportsMissingCapabilitiesWithoutRejectingProject(t *testing.T) {
+	reg, err := NewRegistry(validIntentProject())
+	require.NoError(t, err)
+	require.Equal(t, []string{"capability.run_example"}, reg.MissingCapabilities)
+}
+
+func TestNewRegistry_RejectsInvalidContributionsAndProfiles(t *testing.T) {
+	p := validIntentProject()
+	p.Contexts = map[string]Context{"Example": {
+		Purpose:      "invalid seams",
+		Ports:        map[string]Port{"Input": {Direction: "sideways"}},
+		ValueObjects: map[string]ValueObject{"Output": {ContributesTo: []Contribution{{Capability: "capability.missing"}}}},
+	}}
+	p.Adapters = map[string]Adapter{"Endpoint": {Implements: "port.Example.Input", Profile: BoundaryProfile{Kind: "http"}}}
+
+	_, err := NewRegistry(p)
+	require.Error(t, err)
+	require.ErrorContains(t, err, `capability "capability.missing" not found`)
+	require.ErrorContains(t, err, "contribution description is required")
+	require.ErrorContains(t, err, `direction must be "inbound" or "outbound"`)
+	require.ErrorContains(t, err, "http adapters require method and path")
+}
+
 func TestNewRegistry_MetaMerging(t *testing.T) {
 	p := loadMinimalProject(t)
 	reg, err := NewRegistry(p)

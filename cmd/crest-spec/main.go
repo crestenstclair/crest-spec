@@ -49,6 +49,7 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "Commands:")
 			fmt.Fprintln(os.Stderr, "  init [--agent name] [--force]  bootstrap agent-host integration files")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
+			fmt.Fprintln(os.Stderr, "  project                         show mission, goal state, and blockers")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
 			fmt.Fprintln(os.Stderr, "  state rm <resourceId>          remove a resource from state")
 			fmt.Fprintln(os.Stderr, "  diff <apply_a> <apply_b>       show changes between two applies")
@@ -74,6 +75,8 @@ func runSubcommand() bool {
 	case "dashboard":
 		flags := parseFlags(os.Args[2:])
 		cmdDashboard(flags)
+	case "project":
+		cmdProject()
 	case "state":
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {
@@ -204,6 +207,37 @@ func cmdStateList() {
 			r.Model, settled)
 	}
 	w.Flush()
+}
+
+func cmdProject() {
+	cfg, err := config.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	st := openStore()
+	defer st.Close()
+	overview, err := specmod.New(st, specmod.OSFileSystem{}, cfg).ProjectOverview(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project overview: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%s\n\n", overview.Project.Mission)
+	fmt.Printf("Completion: %s", overview.Project.CompletionStatus)
+	if overview.Project.CompletionReason != "" {
+		fmt.Printf(" — %s", overview.Project.CompletionReason)
+	}
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+	fmt.Fprintln(w, "GOAL\tPRIORITY\tSTATUS\tREASON")
+	for _, goal := range overview.Project.Goals {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", goal.ID, goal.Priority, goal.Status, goal.StatusReason)
+	}
+	w.Flush()
+	for _, blocker := range overview.Blockers {
+		fmt.Printf("BLOCKED %s [%s]: %s\n", blocker.GoalID, blocker.Category, blocker.Reason)
+	}
 }
 
 func truncHash(h string) string {

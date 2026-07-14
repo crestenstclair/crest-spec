@@ -87,18 +87,99 @@ type Project struct {
 	// Mission is the project's why: what is being built, for whom, and the
 	// architectural intent. Injected into every generator's system prompt so
 	// leaf-level decisions are made against the whole, not in isolation.
-	Mission     string               `json:"mission,omitempty"`
-	Layers      []string             `json:"layers"`
-	LayerRules  map[string]LayerRule `json:"layerRules"`
-	Meta        Meta                 `json:"meta"`
-	Contexts    map[string]Context   `json:"contexts"`
-	Adapters    map[string]Adapter   `json:"adapters"`
-	AssetKinds  map[string]AssetKind `json:"assetKinds"`
-	Assets      map[string]Asset     `json:"assets"`
-	Invariants  FlexInvariants       `json:"invariants"`
-	ContextMap  FlexContextMap       `json:"contextMap"`
-	Validations []Validation         `json:"validations,omitempty"`
+	Mission      string                         `json:"mission"`
+	Actors       map[string]Actor               `json:"actors"`
+	Goals        map[string]Goal                `json:"goals"`
+	Capabilities map[string]Capability          `json:"capabilities"`
+	Requirements map[string]Requirement         `json:"requirements"`
+	Evidence     map[string]EvidenceRequirement `json:"evidence"`
+	NonGoals     map[string]string              `json:"nonGoals,omitempty"`
+	Completion   CompletionPolicy               `json:"completion"`
+	Layers       []string                       `json:"layers"`
+	LayerRules   map[string]LayerRule           `json:"layerRules"`
+	Meta         Meta                           `json:"meta"`
+	Contexts     map[string]Context             `json:"contexts"`
+	Adapters     map[string]Adapter             `json:"adapters"`
+	AssetKinds   map[string]AssetKind           `json:"assetKinds"`
+	Assets       map[string]Asset               `json:"assets"`
+	Invariants   FlexInvariants                 `json:"invariants"`
+	ContextMap   FlexContextMap                 `json:"contextMap"`
+	Validations  []Validation                   `json:"validations,omitempty"`
 }
+
+// Actor is a stable project participant referenced by goals and acceptance
+// scenarios. Map keys become canonical IDs in the form actor.<key>.
+type Actor struct {
+	Description string `json:"description"`
+}
+
+// Goal is a user- or system-level outcome. Its lifecycle status is derived
+// from plans and evidence; status is intentionally absent from the CUE model.
+type Goal struct {
+	Description  string   `json:"description"`
+	Priority     string   `json:"priority"`
+	Actors       []string `json:"actors,omitempty"`
+	DependsOn    []string `json:"dependsOn,omitempty"`
+	Capabilities []string `json:"capabilities"`
+	Requirements []string `json:"requirements,omitempty"`
+}
+
+// Capability is observable functionality that may contribute to more than
+// one goal and may be implemented by multiple architectural resources.
+type Capability struct {
+	Description string                        `json:"description"`
+	Goals       []string                      `json:"goals"`
+	Acceptance  map[string]AcceptanceScenario `json:"acceptance"`
+}
+
+// AcceptanceScenario is an ordered user/system journey with explicit evidence
+// requirements. Map keys become acceptance.<capability>.<key> IDs.
+type AcceptanceScenario struct {
+	Description string           `json:"description"`
+	Actor       string           `json:"actor,omitempty"`
+	Steps       []AcceptanceStep `json:"steps,omitempty"`
+	Evidence    []string         `json:"evidence"`
+}
+
+type AcceptanceStep struct {
+	Action   string `json:"action"`
+	Observes string `json:"observes"`
+}
+
+// Requirement captures functional or nonfunctional constraints separately
+// from the resources that implement them.
+type Requirement struct {
+	Kind         string   `json:"kind"`
+	Description  string   `json:"description"`
+	Goals        []string `json:"goals,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// EvidenceRequirement declares what kind of proof an acceptance scenario
+// needs. Concrete executable witness definitions are introduced in WS6.
+type EvidenceRequirement struct {
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+}
+
+type CompletionPolicy struct {
+	RequiredGoals []string `json:"requiredGoals"`
+	ProjectChecks []string `json:"projectChecks,omitempty"`
+}
+
+type CompletionStatus string
+
+const (
+	CompletionDeclared             CompletionStatus = "declared"
+	CompletionPlanned              CompletionStatus = "planned"
+	CompletionPartiallyImplemented CompletionStatus = "partially_implemented"
+	CompletionLocallyValidated     CompletionStatus = "locally_validated"
+	CompletionIntegrated           CompletionStatus = "integrated"
+	CompletionBehaviorallyVerified CompletionStatus = "behaviorally_verified"
+	CompletionComplete             CompletionStatus = "complete"
+	CompletionBlocked              CompletionStatus = "blocked"
+	CompletionRegressed            CompletionStatus = "regressed"
+)
 
 type LayerRule struct {
 	DependsOn []string `json:"dependsOn"`
@@ -134,71 +215,81 @@ type Context struct {
 }
 
 type Aggregate struct {
-	Root         bool                   `json:"root,omitempty"`
-	Purpose      string                 `json:"purpose,omitempty"`
-	State        map[string]string      `json:"state,omitempty"`
-	Commands     FlexMap                `json:"commands,omitempty"`
-	Events       FlexMap                `json:"events,omitempty"`
-	Invariants   []string               `json:"invariants,omitempty"`
-	Implements   string                 `json:"implements,omitempty"`
-	Publishes    []string               `json:"publishes,omitempty"`
-	Meta         Meta                   `json:"meta,omitempty"`
-	Entities     map[string]Entity      `json:"entities,omitempty"`
-	ValueObjects map[string]ValueObject `json:"valueObjects,omitempty"`
-	Validations  []Validation           `json:"validations,omitempty"`
-	Assets       map[string]Asset       `json:"assets,omitempty"`
+	Root          bool                   `json:"root,omitempty"`
+	Purpose       string                 `json:"purpose,omitempty"`
+	State         map[string]string      `json:"state,omitempty"`
+	Commands      FlexMap                `json:"commands,omitempty"`
+	Events        FlexMap                `json:"events,omitempty"`
+	Invariants    []string               `json:"invariants,omitempty"`
+	Implements    string                 `json:"implements,omitempty"`
+	Publishes     []string               `json:"publishes,omitempty"`
+	Meta          Meta                   `json:"meta,omitempty"`
+	Entities      map[string]Entity      `json:"entities,omitempty"`
+	ValueObjects  map[string]ValueObject `json:"valueObjects,omitempty"`
+	Validations   []Validation           `json:"validations,omitempty"`
+	Assets        map[string]Asset       `json:"assets,omitempty"`
+	ContributesTo []Contribution         `json:"contributesTo,omitempty"`
 }
 
 type Entity struct {
-	State       map[string]string `json:"state,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	State         map[string]string `json:"state,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type ValueObject struct {
-	From        string            `json:"from,omitempty"`
-	State       map[string]string `json:"state,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Invariants  []string          `json:"invariants,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	From          string            `json:"from,omitempty"`
+	State         map[string]string `json:"state,omitempty"`
+	Description   string            `json:"description,omitempty"`
+	Invariants    []string          `json:"invariants,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type Port struct {
-	Contract map[string]string `json:"contract,omitempty"`
-	Consumes []string          `json:"consumes,omitempty"`
-	Meta     Meta              `json:"meta,omitempty"`
+	Direction     string            `json:"direction,omitempty"`
+	Contract      map[string]string `json:"contract,omitempty"`
+	Consumes      []string          `json:"consumes,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type Adapter struct {
-	Implements  string       `json:"implements"`
-	Layer       string       `json:"layer,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Implements    string          `json:"implements"`
+	Layer         string          `json:"layer,omitempty"`
+	Profile       BoundaryProfile `json:"profile,omitempty"`
+	Meta          Meta            `json:"meta,omitempty"`
+	Validations   []Validation    `json:"validations,omitempty"`
+	ContributesTo []Contribution  `json:"contributesTo,omitempty"`
 }
 
 type Repository struct {
-	Of          string            `json:"of"`
-	Contract    map[string]string `json:"contract,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	Of            string            `json:"of"`
+	Contract      map[string]string `json:"contract,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type DomainService struct {
-	Purpose     string       `json:"purpose,omitempty"`
-	Uses        []string     `json:"uses,omitempty"`
-	Consumes    []string     `json:"consumes,omitempty"`
-	Publishes   []string     `json:"publishes,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Purpose       string         `json:"purpose,omitempty"`
+	Uses          []string       `json:"uses,omitempty"`
+	Consumes      []string       `json:"consumes,omitempty"`
+	Publishes     []string       `json:"publishes,omitempty"`
+	Meta          Meta           `json:"meta,omitempty"`
+	Validations   []Validation   `json:"validations,omitempty"`
+	ContributesTo []Contribution `json:"contributesTo,omitempty"`
 }
 
 type ApplicationService struct {
-	Purpose     string               `json:"purpose,omitempty"`
-	Uses        []string             `json:"uses,omitempty"`
-	Operations  map[string]Operation `json:"operations,omitempty"`
-	Meta        Meta                 `json:"meta,omitempty"`
-	Validations []Validation         `json:"validations,omitempty"`
+	Purpose       string               `json:"purpose,omitempty"`
+	Uses          []string             `json:"uses,omitempty"`
+	Operations    map[string]Operation `json:"operations,omitempty"`
+	Meta          Meta                 `json:"meta,omitempty"`
+	Validations   []Validation         `json:"validations,omitempty"`
+	ContributesTo []Contribution       `json:"contributesTo,omitempty"`
 }
 
 type Operation struct {
@@ -215,12 +306,56 @@ type AssetKind struct {
 }
 
 type Asset struct {
-	Kind        string       `json:"kind"`
-	Description string       `json:"description,omitempty"`
-	Prompts     []string     `json:"prompts,omitempty"`
-	Targets     []string     `json:"targets,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Kind          string         `json:"kind"`
+	Description   string         `json:"description,omitempty"`
+	Prompts       []string       `json:"prompts,omitempty"`
+	Targets       []string       `json:"targets,omitempty"`
+	Meta          Meta           `json:"meta,omitempty"`
+	Validations   []Validation   `json:"validations,omitempty"`
+	Profile       AssetProfile   `json:"profile,omitempty"`
+	ContributesTo []Contribution `json:"contributesTo,omitempty"`
+}
+
+// Contribution connects an implementation resource to observable project
+// functionality without changing resource dependency ordering.
+type Contribution struct {
+	Capability   string `json:"capability"`
+	Contribution string `json:"contribution"`
+}
+
+// BoundaryProfile describes delivery mechanics; the implemented port remains
+// the owner of the behavioral contract.
+type BoundaryProfile struct {
+	Kind          string   `json:"kind,omitempty"`
+	Method        string   `json:"method,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Topology      string   `json:"topology,omitempty"`
+	Device        string   `json:"device,omitempty"`
+	Medium        string   `json:"medium,omitempty"`
+	System        string   `json:"system,omitempty"`
+	Topic         string   `json:"topic,omitempty"`
+	Trigger       string   `json:"trigger,omitempty"`
+	Surfaces      []string `json:"surfaces,omitempty"`
+	Accessibility []string `json:"accessibility,omitempty"`
+}
+
+// AssetProfile gives recurring operational artifacts a structured vocabulary
+// while custom AssetKind continues to determine generated file shape.
+type AssetProfile struct {
+	Kind             string   `json:"kind,omitempty"`
+	Ecosystem        string   `json:"ecosystem,omitempty"`
+	Witness          string   `json:"witness,omitempty"`
+	Source           string   `json:"source,omitempty"`
+	SecretPolicy     string   `json:"secretPolicy,omitempty"`
+	FailurePolicy    string   `json:"failurePolicy,omitempty"`
+	Signals          []string `json:"signals,omitempty"`
+	Constraint       string   `json:"constraint,omitempty"`
+	Audience         string   `json:"audience,omitempty"`
+	RequiredExamples []string `json:"requiredExamples,omitempty"`
+	Predecessor      string   `json:"predecessor,omitempty"`
+	Compatibility    string   `json:"compatibility,omitempty"`
+	Rollback         string   `json:"rollback,omitempty"`
 }
 
 type Validation struct {
