@@ -171,6 +171,27 @@ func (s *stubStore) UpdateSessionResourcePhase(sessionID, resourceID, phase stri
 	return nil
 }
 func (s *stubStore) SetSessionResourceDispatched(sessionID, resourceID string) error { return nil }
+func (s *stubStore) CreateContextManifest(context.Context, store.ContextManifestWrite) (*store.ContextManifest, error) {
+	return nil, nil
+}
+func (s *stubStore) GetContextManifest(context.Context, string) (*store.ContextManifest, error) {
+	return nil, nil
+}
+func (s *stubStore) GetContextManifestByAttempt(context.Context, string) (*store.ContextManifest, error) {
+	return nil, nil
+}
+func (s *stubStore) ListContextManifests(context.Context, int) ([]store.ContextManifest, error) {
+	return nil, nil
+}
+func (s *stubStore) ListContextManifestSummaries(context.Context, int) ([]store.ContextManifestSummary, error) {
+	return nil, nil
+}
+func (s *stubStore) ListGenerationAttemptsBySession(context.Context, string) ([]store.GenerationAttempt, error) {
+	return nil, nil
+}
+func (s *stubStore) ListGenerationAttemptsByResource(context.Context, string, int) ([]store.GenerationAttempt, error) {
+	return nil, nil
+}
 func (s *stubStore) ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error) {
 	return nil, nil
 }

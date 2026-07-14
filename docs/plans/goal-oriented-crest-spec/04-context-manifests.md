@@ -1,6 +1,7 @@
 # Workstream 4: Context Selection, Budgeting, and Manifests
 
-Status: **Draft**  
+Status: **Implemented — ready for review**
+
 Depends on: WS1, WS2, WS3  
 Enables: WS5, WS6, WS7, WS8  
 Original scope: Workstreams 4 and 5
@@ -178,3 +179,11 @@ Hosts may continue consuming concatenated `system_prompt` and `prompt` fields du
 - Context comparison works across attempts.
 - No manifest or observability sidecar is written to the project tree.
 
+## Implementation record
+
+- `context-selector-v1` provides canonical candidate ordering, role-aware bounded budgets, mandatory reservations, deterministic estimation, truncation markers, content/source deduplication, omission reasons, and stable hashes.
+- `spec/context` is attempt-oriented. It returns attempt/manifest identifiers and structured sections while preserving the legacy rendered system and task prompts for existing hosts.
+- Migration `020_context_manifests.sql` adds normalized attempts, manifests, sections, and content-addressed blobs to the existing SQLite database. Manifest persistence and resource dispatch commit or roll back together.
+- Goal, acceptance, exact task, resource/system contract, dependencies, reverse consumers, design, owned/dependency/consumer code, module/build configuration, retry failures, guidance, learnings, and conventions have typed candidates. Unsupported call-site and git-diff plugins are explicit omissions rather than invisible failures.
+- Complete manifests and structural comparisons are available through Go APIs, MCP (`spec/context_attempts`, `spec/context_inspect`, `spec/context_compare`), CLI (`crest-spec context ...`), HTTP, and the dashboard Context Inspector.
+- The migration is additive. Historical `generations` remain legacy records; crest-spec does not fabricate provenance that was never captured.

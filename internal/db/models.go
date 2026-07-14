@@ -122,6 +122,52 @@ type CompletionBlocker struct {
 	ResolvedAt  *string
 }
 
+type ContentBlob struct {
+	Hash      string
+	Content   []byte
+	ByteSize  int64
+	CreatedAt string
+}
+
+type ContextManifest struct {
+	ID                 string
+	AttemptID          string
+	SelectorVersion    string
+	EstimatorVersion   string
+	SelectionStrategy  string
+	BudgetTokens       int64
+	EstimatedTokens    int64
+	OriginalBytes      int64
+	SelectedBytes      int64
+	TemplateHashesJson string
+	SystemPromptBlob   string
+	RenderedPromptBlob string
+	ContextHash        string
+	Blocked            int64
+	BlockedReason      string
+	CreatedAt          string
+}
+
+type ContextSection struct {
+	ID              string
+	ManifestID      string
+	Ordinal         int64
+	SectionKind     string
+	Title           string
+	SourceKind      string
+	SourceID        string
+	SourcePath      string
+	Priority        int64
+	Mandatory       int64
+	Decision        string
+	Reason          string
+	OriginalHash    string
+	ContentBlob     *string
+	OriginalBytes   int64
+	SelectedBytes   int64
+	EstimatedTokens int64
+}
+
 type Dependency struct {
 	SourceID string
 	TargetID string
@@ -170,6 +216,19 @@ type Generation struct {
 	InputTokens     *int64
 	OutputTokens    *int64
 	CostUsd         *float64
+	CreatedAt       string
+}
+
+type GenerationAttempt struct {
+	ID              string
+	SessionID       string
+	ApplyID         string
+	ResourceID      string
+	PlanOperationID string
+	ParentAttemptID *string
+	RetryNumber     int64
+	Role            string
+	Status          string
 	CreatedAt       string
 }
 

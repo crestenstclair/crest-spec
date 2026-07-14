@@ -220,6 +220,7 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
       <div class="tab" data-tab="project">Project</div>
       <div class="tab active" data-tab="session">Session</div>
       <div class="tab" data-tab="generations">Generations</div>
+      <div class="tab" data-tab="contexts">Contexts</div>
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
       <div class="tab" data-tab="learnings">Learnings</div>
@@ -241,6 +242,21 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
     <div class="tab-content" id="tab-generations">
       <div class="card" style="overflow-x:auto">
         <div id="generations-table" class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tab: Context Inspector -->
+    <div class="tab-content" id="tab-contexts">
+      <div class="card" style="overflow-x:auto">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+          <strong style="font-size:13px">Compare attempts</strong>
+          <select id="context-compare-left" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:5px"></select>
+          <span style="color:var(--text-muted)">→</span>
+          <select id="context-compare-right" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:5px"></select>
+          <button onclick="compareSelectedContexts()" style="background:var(--accent);color:var(--bg);border:0;border-radius:4px;padding:6px 10px;cursor:pointer">Compare</button>
+        </div>
+        <div id="context-comparison"></div>
+        <div id="contexts-table" class="empty">Loading...</div>
       </div>
     </div>
 
@@ -275,6 +291,7 @@ let eventSource = null;
 let cachedStatus = null;
 let cachedSessionResources = null;
 let cachedProject = null;
+let cachedContexts = [];
 
 // ─── Tab navigation ────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -595,6 +612,7 @@ async function loadTabData(tab) {
     case 'project': await loadProjectTab(); break;
     case 'session': await loadSessionTab(); break;
     case 'generations': await loadGenerationsTab(); break;
+    case 'contexts': await loadContextsTab(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'learnings': await loadLearningsTab(); break;
@@ -950,6 +968,164 @@ async function toggleGenDrilldown(genID, encodedResourceID, idx) {
 
   html += '</div>';
   td.innerHTML = html;
+}
+
+// ─── Tab: Context Inspector ───────────────────────────────────────
+async function loadContextsTab() {
+  const el = document.getElementById('contexts-table');
+  const contexts = await fetchJSON('/api/v1/contexts?limit=100');
+  if (!contexts) {
+    el.innerHTML = '<div class="error-msg">Error loading context attempts</div>';
+    return;
+  }
+  cachedContexts = contexts;
+  populateContextCompare(contexts);
+  if (contexts.length === 0) {
+    el.innerHTML = '<div class="empty">No context attempts yet. Calling spec/context creates the first immutable manifest.</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr><th>Resource</th><th>Retry</th><th>Role</th><th>Allocation</th><th>Status</th><th>Context Hash</th><th>Time</th></tr></thead><tbody>';
+  contexts.forEach((manifest, index) => {
+    const attempt = manifest.Attempt || manifest.attempt || {};
+    const id = manifest.ID || manifest.id || '';
+    const resource = attempt.ResourceID || attempt.resource_id || '';
+    const retry = attempt.RetryNumber || attempt.retry_number || 1;
+    const role = attempt.Role || attempt.role || '';
+    const estimated = manifest.EstimatedTokens || manifest.estimated_tokens || 0;
+    const budget = manifest.BudgetTokens || manifest.budget_tokens || 0;
+    const blocked = manifest.Blocked || manifest.blocked;
+    const status = blocked ? 'context_blocked' : (attempt.Status || attempt.status || 'context_prepared');
+    const hash = manifest.ContextHash || manifest.context_hash || '';
+    const created = manifest.CreatedAt || manifest.created_at || '';
+    html += '<tr class="clickable" onclick="toggleContextDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+      '<td class="resource-id">' + esc(resource) + '</td>' +
+      '<td class="mono">#' + retry + '</td>' +
+      '<td style="font-size:12px">' + esc(role) + '</td>' +
+      '<td class="mono">' + estimated + ' / ' + budget + '</td>' +
+      '<td>' + statusBadge(status) + '</td>' +
+      '<td class="mono" title="' + esc(hash) + '">' + esc(shortID(hash)) + '</td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(created) + '</td>' +
+    '</tr><tr id="context-drilldown-' + index + '" style="display:none"><td colspan="7"></td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function populateContextCompare(contexts) {
+  const left = document.getElementById('context-compare-left');
+  const right = document.getElementById('context-compare-right');
+  const options = contexts.map(manifest => {
+    const attempt = manifest.Attempt || manifest.attempt || {};
+    const id = manifest.ID || manifest.id || '';
+    const label = (attempt.ResourceID || attempt.resource_id || '') + ' #' + (attempt.RetryNumber || attempt.retry_number || 1) + ' · ' + shortID(id);
+    return '<option value="' + esc(id) + '">' + esc(label) + '</option>';
+  }).join('');
+  left.innerHTML = options;
+  right.innerHTML = options;
+  if (contexts.length > 1) {
+    left.selectedIndex = 1;
+    right.selectedIndex = 0;
+  }
+}
+
+async function toggleContextDrilldown(manifestID, index) {
+  const row = document.getElementById('context-drilldown-' + index);
+  if (!row) return;
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = '';
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Reconstructing immutable context...</div></div>';
+  const manifest = await fetchJSON('/api/v1/contexts/' + encodeURIComponent(manifestID));
+  if (!manifest) {
+    td.innerHTML = '<div class="drilldown"><div class="error-msg">Could not load context manifest</div></div>';
+    return;
+  }
+  const attempt = manifest.Attempt || manifest.attempt || {};
+  const sections = manifest.Sections || manifest.sections || [];
+  const templateHashes = manifest.TemplateHashes || manifest.template_hashes || {};
+  let html = '<div class="drilldown">' +
+    '<div class="stat-row" style="margin-bottom:14px">' +
+      '<div><div class="stat-label">Attempt</div><div class="mono">' + esc(attempt.ID || attempt.id || '') + '</div></div>' +
+      '<div><div class="stat-label">Parent</div><div class="mono">' + esc(attempt.ParentAttemptID || attempt.parent_attempt_id || 'first attempt') + '</div></div>' +
+      '<div><div class="stat-label">Selector</div><div class="mono">' + esc(manifest.SelectorVersion || manifest.selector_version || '') + '</div></div>' +
+    '</div>' +
+    '<h3>Template hashes</h3><pre>' + esc(JSON.stringify(templateHashes, null, 2)) + '</pre>' +
+    '<h3 style="margin-top:12px">Selection decisions</h3>' +
+    '<table><thead><tr><th>Section</th><th>Source</th><th>Decision</th><th>Tokens</th><th>Reason</th></tr></thead><tbody>';
+  sections.forEach((section, sectionIndex) => {
+    const decision = section.Decision || section.decision || '';
+    const title = section.Title || section.title || section.Kind || section.kind || '';
+    const source = (section.SourceKind || section.source_kind || '') + ':' + (section.SourceID || section.source_id || '');
+    const tokens = section.EstimatedTokens || section.estimated_tokens || 0;
+    const reason = section.Reason || section.reason || '';
+    const content = section.Content || section.content || '';
+    const contentID = 'context-content-' + index + '-' + sectionIndex;
+    html += '<tr><td><strong>' + esc(title) + '</strong>' + (content ? '<br><span class="collapsible-toggle" onclick="toggleContextContent(\'' + contentID + '\')">show snapshot</span>' : '') + '</td>' +
+      '<td class="mono">' + esc(source) + '</td><td>' + statusBadge(decision) + '</td><td class="mono">' + tokens + '</td><td style="font-size:12px;color:var(--text-muted)">' + esc(reason) + '</td></tr>';
+    if (content) {
+      html += '<tr id="' + contentID + '" style="display:none"><td colspan="5"><pre>' + esc(content) + '</pre></td></tr>';
+    }
+  });
+  html += '</tbody></table>' +
+    '<h3 style="margin-top:12px">Rendered system prompt</h3><pre>' + esc(manifest.SystemPrompt || manifest.system_prompt || '') + '</pre>' +
+    '<h3 style="margin-top:12px">Rendered task prompt</h3><pre>' + esc(manifest.RenderedPrompt || manifest.rendered_prompt || '') + '</pre>' +
+    '</div>';
+  td.innerHTML = html;
+}
+
+function toggleContextContent(id) {
+  const row = document.getElementById(id);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+async function compareSelectedContexts() {
+  const left = document.getElementById('context-compare-left').value;
+  const right = document.getElementById('context-compare-right').value;
+  const el = document.getElementById('context-comparison');
+  if (!left || !right || left === right) {
+    el.innerHTML = '<div class="error-msg">Select two different context attempts.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="empty">Comparing context decisions...</div>';
+  const comparison = await fetchJSON('/api/v1/context-comparison?left=' + encodeURIComponent(left) + '&right=' + encodeURIComponent(right));
+  if (!comparison) {
+    el.innerHTML = '<div class="error-msg">Could not compare contexts</div>';
+    return;
+  }
+  const added = comparison.AddedSections || comparison.added_sections || [];
+  const removed = comparison.RemovedSections || comparison.removed_sections || [];
+  const changed = comparison.ChangedSections || comparison.changed_sections || [];
+  const unchanged = comparison.UnchangedSections || comparison.unchanged_sections || 0;
+  let html = '<div class="drilldown" style="margin:0 0 16px 0">' +
+    '<h3>Structural comparison</h3><div class="state-counts">' +
+      '<span>' + badge(added.length + ' added', added.length ? 'green' : 'muted') + '</span>' +
+      '<span>' + badge(removed.length + ' removed', removed.length ? 'red' : 'muted') + '</span>' +
+      '<span>' + badge(changed.length + ' changed', changed.length ? 'yellow' : 'muted') + '</span>' +
+      '<span>' + badge(unchanged + ' unchanged', 'muted') + '</span>' +
+    '</div><div style="font-size:12px;color:var(--text-muted);margin-top:10px">' +
+      'Budget changed: ' + !!(comparison.BudgetChanged || comparison.budget_changed) +
+      ' · Selector changed: ' + !!(comparison.SelectorChanged || comparison.selector_changed) +
+      ' · Same context: ' + !!(comparison.SameContext || comparison.same_context) +
+    '</div>';
+  const changes = added.concat(removed).concat(changed);
+  if (changes.length) {
+    html += '<table style="margin-top:10px"><thead><tr><th>Source</th><th>Changes</th><th>Before</th><th>After</th></tr></thead><tbody>';
+    changes.forEach(change => {
+      const before = change.Before || change.before;
+      const after = change.After || change.after;
+      html += '<tr><td class="mono">' + esc(change.SourceKey || change.source_key || '') + '</td>' +
+        '<td>' + esc((change.Changes || change.changes || []).join(', ')) + '</td>' +
+        '<td>' + esc(before ? ((before.Decision || before.decision || '') + ' ' + shortID(before.ContentHash || before.content_hash || before.OriginalHash || before.original_hash || '')) : '—') + '</td>' +
+        '<td>' + esc(after ? ((after.Decision || after.decision || '') + ' ' + shortID(after.ContentHash || after.content_hash || after.OriginalHash || after.original_hash || '')) : '—') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 // ─── Tab: Resources ────────────────────────────────────────────────

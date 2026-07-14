@@ -68,7 +68,10 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/begin", Description: "Step 1: Start a generation session.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
 		{Name: "spec/confirm_destroys", Description: "Confirm and execute pending resource destroys.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_ids":{"type":"array","items":{"type":"string"},"description":"Resource IDs to confirm for deletion"}},"required":["session_id","resource_ids"]}`)},
 		{Name: "spec/next", Description: "Step 2: Get next wave of resources.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`)},
-		{Name: "spec/context", Description: "Step 3: Get the generation prompt for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`)},
+		{Name: "spec/context", Description: "Step 3: Create an immutable context attempt and get the generation prompt for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string"},"resource_id":{"type":"string"},"role":{"type":"string"},"budget_tokens":{"type":"integer"},"parent_attempt_id":{"type":"string"}},"required":["session_id","resource_id"]}`)},
+		{Name: "spec/context_attempts", Description: "List recent immutable generation context attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
+		{Name: "spec/context_inspect", Description: "Inspect the exact immutable context served for an attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_manifest_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
+		{Name: "spec/context_compare", Description: "Compare two context manifests structurally", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`)},
 		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
 		{Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files and runs the resource's mechanical validations — any failure, including a validation that cannot run, rejects the commit. There are no self-judged verdicts: behavioral verification happens via spec/verify.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"}},"required":["session_id","resource_id"]}`)},
@@ -175,6 +178,24 @@ type specSessionArgs struct {
 type specSessionResourceArgs struct {
 	SessionID  string `json:"session_id"`
 	ResourceID string `json:"resource_id"`
+}
+
+type specContextArgs struct {
+	SessionID       string `json:"session_id"`
+	ResourceID      string `json:"resource_id"`
+	Role            string `json:"role"`
+	BudgetTokens    int    `json:"budget_tokens"`
+	ParentAttemptID string `json:"parent_attempt_id"`
+}
+
+type specContextInspectArgs struct {
+	ContextManifestID string `json:"context_manifest_id"`
+	AttemptID         string `json:"attempt_id"`
+}
+
+type specContextCompareArgs struct {
+	LeftContextManifestID  string `json:"left_context_manifest_id"`
+	RightContextManifestID string `json:"right_context_manifest_id"`
 }
 
 type specConfirmDestroysArgs struct {
@@ -360,10 +381,13 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/context", Description: "Get the generation prompt for a resource. Returns system_prompt, prompt, and the project invariants to judge at commit time. Give the prompts to a generation sub-agent, then commit via spec/commit.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["session_id","resource_id"]}`),
-	}, specTool("context", func(ctx context.Context, a specSessionResourceArgs) (any, error) {
-		return s.spec.Context(ctx, a.SessionID, a.ResourceID)
+		Name: "spec/context", Description: "Create an immutable generation attempt and select goal-directed context for a resource. Returns attempt/context IDs, structured inclusion decisions, budgets, and legacy rendered prompts. A mandatory-budget block is recorded without dispatching.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"role":{"type":"string","description":"Agent role; defaults to resource_implementer"},"budget_tokens":{"type":"integer","description":"Optional requested context budget, clamped to engine bounds"},"parent_attempt_id":{"type":"string","description":"Optional explicit retry parent; defaults to the latest attempt for this session resource"}},"required":["session_id","resource_id"]}`),
+	}, specTool("context", func(ctx context.Context, a specContextArgs) (any, error) {
+		return s.spec.PrepareContext(ctx, specmod.ContextOptions{
+			SessionID: a.SessionID, ResourceID: a.ResourceID, Role: a.Role,
+			BudgetTokens: a.BudgetTokens, ParentAttemptID: a.ParentAttemptID,
+		})
 	}))
 
 	s.addTool(toolDef{
@@ -519,6 +543,27 @@ func (s *Server) registerSpecLifecycleTools() {
 
 // registerSpecQueryTools adds spec query and admin tools (status through prompt).
 func (s *Server) registerSpecQueryTools() {
+	s.addTool(toolDef{
+		Name: "spec/context_attempts", Description: "List recent immutable generation attempts with resource, role, retry, budget, context hash, and blocked status.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Maximum attempts to return (default 50)"}}}`),
+	}, specTool("context attempts", func(ctx context.Context, a specLimitArgs) (any, error) {
+		return s.spec.ListContextAttempts(ctx, a.Limit)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/context_inspect", Description: "Reconstruct the complete immutable context served to an agent, including included, truncated, and omitted sections and their reasons. Provide exactly one identifier.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"context_manifest_id":{"type":"string"},"attempt_id":{"type":"string"}}}`),
+	}, specTool("context inspect", func(ctx context.Context, a specContextInspectArgs) (any, error) {
+		return s.spec.InspectContext(ctx, a.ContextManifestID, a.AttemptID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/context_compare", Description: "Compare two immutable contexts by budget, selector/template versions, sources, decisions, and content hashes.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`),
+	}, specTool("context compare", func(ctx context.Context, a specContextCompareArgs) (any, error) {
+		return s.spec.CompareContexts(ctx, a.LeftContextManifestID, a.RightContextManifestID)
+	}))
+
 	s.addTool(toolDef{
 		Name: "spec/project_overview", Description: "Show the SQLite-backed project mission, required and optional goals, capabilities, acceptance requirements, completion state, blockers, and status history.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
