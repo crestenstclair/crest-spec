@@ -17,6 +17,7 @@ import (
 )
 
 type specStore interface {
+	ReconcileProjectIntent(ctx context.Context, snapshot store.ProjectIntentSnapshot) error
 	GetResource(id string) (*store.Resource, error)
 	ListResources() ([]store.Resource, error)
 	SetResource(r store.Resource) error

@@ -91,6 +91,10 @@ type stubStore struct {
 	listResourcesErr error
 }
 
+func (s *stubStore) ReconcileProjectIntent(context.Context, store.ProjectIntentSnapshot) error {
+	return nil
+}
+
 func (s *stubStore) GetResource(id string) (*store.Resource, error) { return nil, nil }
 func (s *stubStore) ListResources() ([]store.Resource, error)       { return nil, s.listResourcesErr }
 func (s *stubStore) SetResource(r store.Resource) error             { return nil }
@@ -98,7 +102,7 @@ func (s *stubStore) DeleteResource(id string) error                 { return nil
 func (s *stubStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) {
 	return nil, nil
 }
-func (s *stubStore) CountOtherFileOwners(path, resourceID string) (int64, error) { return 0, nil }
+func (s *stubStore) CountOtherFileOwners(path, resourceID string) (int64, error)    { return 0, nil }
 func (s *stubStore) SetGeneratedFile(f store.GeneratedFile) error                   { return nil }
 func (s *stubStore) DeleteGeneratedFiles(resourceID string) error                   { return nil }
 func (s *stubStore) SetDependency(sourceID, targetID, kind string) error            { return nil }
@@ -181,7 +185,7 @@ func (s *stubStore) ListDesigns() ([]store.Design, error)                       
 func (s *stubStore) InsertTask(id, resourceID, contextName, specHash, description string) error {
 	return nil
 }
-func (s *stubStore) GetTask(id string) (*store.BehavioralTask, error)              { return nil, nil }
+func (s *stubStore) GetTask(id string) (*store.BehavioralTask, error) { return nil, nil }
 func (s *stubStore) ListTasksByResource(resourceID string) ([]store.BehavioralTask, error) {
 	return nil, nil
 }
@@ -189,7 +193,7 @@ func (s *stubStore) SetTaskState(id, state string) error { return nil }
 func (s *stubStore) InsertCheck(id, taskID, resourceID, behavior, checkJSON string) error {
 	return nil
 }
-func (s *stubStore) GetCheck(id string) (*store.BehavioralCheck, error)        { return nil, nil }
+func (s *stubStore) GetCheck(id string) (*store.BehavioralCheck, error) { return nil, nil }
 func (s *stubStore) ListChecksByTask(taskID string) ([]store.BehavioralCheck, error) {
 	return nil, nil
 }

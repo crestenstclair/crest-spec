@@ -4,6 +4,29 @@
 
 package db
 
+type AcceptanceEvidence struct {
+	ScenarioID string
+	EvidenceID string
+}
+
+type AcceptanceScenario struct {
+	ID           string
+	CapabilityID string
+	ActorID      *string
+	Description  string
+	Ordinal      int64
+	SpecHash     string
+	Active       int64
+	UpdatedAt    string
+}
+
+type AcceptanceStep struct {
+	ScenarioID string
+	Ordinal    int64
+	Action     string
+	Observes   string
+}
+
 type AgentEvent struct {
 	ID           string
 	GenerationID *string
@@ -69,6 +92,11 @@ type ApplyAction struct {
 	DoneAt     *string
 }
 
+type CapabilityGoal struct {
+	CapabilityID string
+	GoalID       string
+}
+
 type Check struct {
 	ID         string
 	TaskID     string
@@ -78,6 +106,20 @@ type Check struct {
 	State      string
 	CreatedAt  string
 	UpdatedAt  string
+}
+
+type CompletionBlocker struct {
+	ID          string
+	ProjectName string
+	GoalID      *string
+	Category    string
+	Reason      string
+	SourceType  string
+	SourceID    string
+	Resolved    int64
+	Resolution  string
+	CreatedAt   string
+	ResolvedAt  *string
 }
 
 type Dependency struct {
@@ -92,6 +134,16 @@ type Design struct {
 	ContractJson string
 	CreatedAt    string
 	UpdatedAt    string
+}
+
+type EvidenceRequirement struct {
+	ID          string
+	ProjectName string
+	Kind        string
+	Description string
+	SpecHash    string
+	Active      int64
+	UpdatedAt   string
 }
 
 type GeneratedFile struct {
@@ -119,6 +171,28 @@ type Generation struct {
 	OutputTokens    *int64
 	CostUsd         *float64
 	CreatedAt       string
+}
+
+type GoalActor struct {
+	GoalID  string
+	ActorID string
+}
+
+type GoalDependency struct {
+	GoalID           string
+	DependencyGoalID string
+}
+
+type GoalStatusHistory struct {
+	ID         string
+	GoalID     string
+	FromStatus string
+	ToStatus   string
+	Reason     string
+	SourceType string
+	SourceID   string
+	SessionID  *string
+	CreatedAt  string
 }
 
 type InvariantCheck struct {
@@ -163,6 +237,94 @@ type Lock struct {
 	Holder     string
 	Pid        int64
 	AcquiredAt string
+}
+
+type ProjectActor struct {
+	ID          string
+	ProjectName string
+	Description string
+	SpecHash    string
+	Active      int64
+	UpdatedAt   string
+}
+
+type ProjectCapability struct {
+	ID          string
+	ProjectName string
+	Description string
+	SpecHash    string
+	Active      int64
+	UpdatedAt   string
+}
+
+type ProjectGoal struct {
+	ID           string
+	ProjectName  string
+	Description  string
+	Priority     string
+	Status       string
+	StatusReason string
+	SpecHash     string
+	Active       int64
+	CreatedAt    string
+	UpdatedAt    string
+}
+
+type ProjectNonGoal struct {
+	ID          string
+	ProjectName string
+	Description string
+	SpecHash    string
+	Active      int64
+	UpdatedAt   string
+}
+
+type ProjectRequiredGoal struct {
+	ProjectName string
+	GoalID      string
+	Ordinal     int64
+}
+
+type ProjectRequirement struct {
+	ID          string
+	ProjectName string
+	Kind        string
+	Description string
+	SpecHash    string
+	Active      int64
+	UpdatedAt   string
+}
+
+type ProjectState struct {
+	ProjectName      string
+	Mission          string
+	SpecHash         string
+	CompletionStatus string
+	Active           int64
+	CreatedAt        string
+	UpdatedAt        string
+}
+
+type ProjectStatusHistory struct {
+	ID          string
+	ProjectName string
+	FromStatus  string
+	ToStatus    string
+	Reason      string
+	SourceType  string
+	SourceID    string
+	SessionID   *string
+	CreatedAt   string
+}
+
+type RequirementCapability struct {
+	RequirementID string
+	CapabilityID  string
+}
+
+type RequirementGoal struct {
+	RequirementID string
+	GoalID        string
 }
 
 type Resource struct {
