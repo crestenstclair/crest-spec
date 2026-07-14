@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -92,6 +93,7 @@ func annotateGoalImpact(actions []PlannedAction, registry *cuepkg.Registry) {
 		action := &actions[index]
 		action.OperationID = operationID(*action)
 		action.Category = classifyCategory(*action, registry.Resources[action.ResourceID])
+		action.RecommendedRole = string(execution.RecommendedRole(action.Category))
 		resource, exists := registry.Resources[action.ResourceID]
 		if !exists || len(resource.Contributions) == 0 {
 			action.SharedInfrastructure = true

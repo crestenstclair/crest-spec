@@ -12,20 +12,16 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
-const defaultContextRole = "resource_implementer"
-
 // PrepareContext creates an immutable generation attempt and context manifest.
 // Selection, persistence, and the dispatched transition are one logical
 // operation: a blocked budget is recorded but never dispatches the resource.
 func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*ContextResult, error) {
-	if opts.Role == "" {
-		opts.Role = defaultContextRole
-	}
 	if opts.SessionID == "" || opts.ResourceID == "" {
 		return nil, fmt.Errorf("session_id and resource_id are required")
 	}
@@ -41,6 +37,13 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	action, ok := contextPlanAction(plan, opts.ResourceID)
 	if !ok {
 		return nil, fmt.Errorf("resource %s is not an operation in session %s", opts.ResourceID, opts.SessionID)
+	}
+	if opts.Role == "" {
+		opts.Role = action.RecommendedRole
+	}
+	rolePolicy, err := execution.LookupRole(opts.Role)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := s.store.GetSessionResource(opts.SessionID, opts.ResourceID); err != nil {
 		return nil, fmt.Errorf("resource %s is not dispatchable in session %s: %w", opts.ResourceID, opts.SessionID, err)
@@ -67,7 +70,11 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
 	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
 	candidates := s.contextCandidates(ctx, action, resource, planResult.Registry, runtimeContext, runtimeErr, systemPrompt, resourcePrompt)
-	selection := contextmanifest.Select(candidates, contextmanifest.BudgetForRole(opts.Role, opts.BudgetTokens))
+	budgetTokens := opts.BudgetTokens
+	if budgetTokens == 0 {
+		budgetTokens = rolePolicy.DefaultBudgetTokens
+	}
+	selection := contextmanifest.Select(candidates, budgetTokens)
 	templateHashes := map[string]string{
 		promptpkg.SystemTemplateVersion:   contextmanifest.Hash(systemPrompt),
 		promptpkg.ResourceTemplateVersion: contextmanifest.Hash(resourcePrompt),
@@ -122,6 +129,8 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	}
 	return &ContextResult{
 		AttemptID: persisted.Attempt.ID, ContextManifestID: persisted.ID, ContextHash: persisted.ContextHash,
+		Role: opts.Role, RecommendedRole: action.RecommendedRole, RolePolicyVersion: rolePolicy.Version,
+		ContextPolicy:   rolePolicy.ContextPolicy,
 		SelectorVersion: persisted.SelectorVersion, EstimatorVersion: persisted.EstimatorVersion,
 		TemplateHashes: persisted.TemplateHashes, BudgetTokens: persisted.BudgetTokens,
 		EstimatedTokens: persisted.EstimatedTokens, Blocked: persisted.Blocked, BlockedReason: persisted.BlockedReason,

@@ -74,6 +74,10 @@ func TestPrepareContextPersistsVerticalSliceWithDependenciesConsumersAndAcceptan
 	require.NotEmpty(t, result.AttemptID)
 	require.NotEmpty(t, result.ContextManifestID)
 	require.NotEmpty(t, result.ContextHash)
+	require.Equal(t, "resource_implementer", result.Role)
+	require.Equal(t, "resource_implementer", result.RecommendedRole)
+	require.Equal(t, "role-policy-v1", result.RolePolicyVersion)
+	require.Equal(t, "resource-implementation-v1", result.ContextPolicy)
 	require.False(t, result.Blocked)
 	require.Contains(t, result.Prompt, "Behavioral Acceptance and Evidence")
 	require.Contains(t, result.Prompt, "a requested frequency produces an audio frame")
@@ -116,6 +120,23 @@ func TestPrepareContextPersistsVerticalSliceWithDependenciesConsumersAndAcceptan
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	require.Equal(t, second.ContextManifestID, summaries[0].ID)
+}
+
+func TestPrepareContextRejectsUnknownRoleBeforeDispatch(t *testing.T) {
+	s, st, sessionID := newVerticalSliceContextSpec(t)
+	resourceID := "domainService.Audio.Renderer"
+
+	_, err := s.PrepareContext(context.Background(), ContextOptions{
+		SessionID: sessionID, ResourceID: resourceID, Role: "universal_coding_agent",
+	})
+	require.ErrorContains(t, err, `unsupported agent role "universal_coding_agent"`)
+
+	resourceState, stateErr := st.GetSessionResource(sessionID, resourceID)
+	require.NoError(t, stateErr)
+	require.Equal(t, "pending", resourceState.State)
+	manifests, listErr := st.ListContextManifests(context.Background(), 10)
+	require.NoError(t, listErr)
+	require.Empty(t, manifests)
 }
 
 func TestPrepareContextRecordsMandatoryBudgetBlockWithoutDispatch(t *testing.T) {

@@ -50,6 +50,10 @@ type ContextResult struct {
 	AttemptID         string
 	ContextManifestID string
 	ContextHash       string
+	Role              string
+	RecommendedRole   string
+	RolePolicyVersion string
+	ContextPolicy     string
 	SelectorVersion   string
 	EstimatorVersion  string
 	TemplateHashes    map[string]string

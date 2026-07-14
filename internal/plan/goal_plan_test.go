@@ -33,6 +33,7 @@ func TestGoalImpactAnnotationsAndSlicesAreDeterministic(t *testing.T) {
 	action := actions[0]
 	require.NotEmpty(t, action.OperationID)
 	require.Equal(t, "structural", action.Category)
+	require.Equal(t, "resource_implementer", action.RecommendedRole)
 	require.Equal(t, []string{"capability.run"}, action.Capabilities)
 	require.Equal(t, []string{"goal.ship"}, action.Goals)
 	require.Equal(t, []string{"the example runs"}, action.ExpectedBehavior)
@@ -56,4 +57,5 @@ func TestUnmappedOperationIsExplicitSharedInfrastructure(t *testing.T) {
 	annotateGoalImpact(actions, registry)
 	require.True(t, actions[0].SharedInfrastructure)
 	require.Equal(t, "corrective", actions[0].Category)
+	require.Equal(t, "minimal_diff_repair", actions[0].RecommendedRole)
 }
