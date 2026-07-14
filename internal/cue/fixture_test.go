@@ -87,34 +87,79 @@ func TestPhasesLoadAndResolve(t *testing.T) {
 	}
 }
 
-func TestPhaseFixturesShareCanonicalProductIntent(t *testing.T) {
+func TestPhaseFixturesAccumulateProductIntent(t *testing.T) {
 	canonical := loadFixture(t)
-	canonicalGoals, err := os.ReadFile(filepath.Join(fixtureSpecDir(), "goals.cue"))
-	require.NoError(t, err)
+	goalOrder := []string{
+		"produce_audible_synthesis",
+		"perform_polyphonic_music",
+		"run_realtime_audio",
+		"perform_multitimbral_music",
+		"perform_expressively",
+		"play_sample_based_instruments",
+		"shape_sound_with_effects",
+		"preserve_and_recall_sounds",
+		"operate_standalone_instrument",
+		"edit_live_instrument",
+	}
+	goalCountByPhase := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 10}
+	capabilityCountByPhase := []int{0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 11, 12}
+	requirementCountByPhase := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 10, 11}
 
 	base := filepath.Join(fixtureSpecDir(), "..", "phases")
+	var previous *Project
 	for phase := 1; phase <= 11; phase++ {
 		t.Run(fmt.Sprintf("phase-%d", phase), func(t *testing.T) {
 			dir := filepath.Join(base, fmt.Sprintf("phase-%d", phase))
 			project, err := Load(dir)
 			require.NoError(t, err)
 
-			// A replay fixture changes the observed implementation graph, not the
-			// project crest-spec is reconciling toward. Keeping the complete intent
-			// stable lets early replays report missing functionality and later ones
-			// show progress against the same definition of done.
+			// Replay phases are cumulative test inputs, not a crest-spec lifecycle.
+			// Each directory represents the intent declared by that design state:
+			// later states retain every prior outcome and add newly intended behavior.
 			require.Equal(t, canonical.Mission, project.Mission)
-			require.Equal(t, canonical.Actors, project.Actors)
-			require.Equal(t, canonical.Goals, project.Goals)
-			require.Equal(t, canonical.Capabilities, project.Capabilities)
-			require.Equal(t, canonical.Requirements, project.Requirements)
-			require.Equal(t, canonical.Evidence, project.Evidence)
-			require.Equal(t, canonical.NonGoals, project.NonGoals)
-			require.Equal(t, canonical.Completion, project.Completion)
-
-			replayGoals, err := os.ReadFile(filepath.Join(dir, "goals.cue"))
-			require.NoError(t, err)
-			require.Equal(t, string(canonicalGoals), string(replayGoals), "replay fixtures must not redefine product intent")
+			require.Len(t, project.Goals, goalCountByPhase[phase])
+			require.Len(t, project.Capabilities, capabilityCountByPhase[phase])
+			require.Len(t, project.Requirements, requirementCountByPhase[phase])
+			require.Len(t, project.Evidence, capabilityCountByPhase[phase])
+			for index, goalID := range goalOrder {
+				if index < goalCountByPhase[phase] {
+					require.Contains(t, project.Goals, goalID)
+				} else {
+					require.NotContains(t, project.Goals, goalID)
+				}
+			}
+			if previous != nil {
+				for goalID := range previous.Goals {
+					require.Contains(t, project.Goals, goalID, "phase %d must retain phase %d goal %s", phase, phase-1, goalID)
+				}
+				for capabilityID := range previous.Capabilities {
+					require.Contains(t, project.Capabilities, capabilityID, "phase %d must retain phase %d capability %s", phase, phase-1, capabilityID)
+				}
+				for requirementID := range previous.Requirements {
+					require.Contains(t, project.Requirements, requirementID, "phase %d must retain phase %d requirement %s", phase, phase-1, requirementID)
+				}
+				for evidenceID := range previous.Evidence {
+					require.Contains(t, project.Evidence, evidenceID, "phase %d must retain phase %d evidence %s", phase, phase-1, evidenceID)
+				}
+				for _, goalID := range previous.Completion.RequiredGoals {
+					require.Contains(t, project.Completion.RequiredGoals, goalID)
+				}
+				for _, checkID := range previous.Completion.ProjectChecks {
+					require.Contains(t, project.Completion.ProjectChecks, checkID)
+				}
+				if phase == 10 {
+					// The legacy plug-in declaration remains useful planner test data,
+					// but it is not crest-synth product intent and adds no goal.
+					require.Equal(t, previous.Goals, project.Goals)
+					require.Equal(t, previous.Capabilities, project.Capabilities)
+					require.Equal(t, previous.Requirements, project.Requirements)
+					require.Equal(t, previous.Evidence, project.Evidence)
+					require.Equal(t, previous.Completion, project.Completion)
+				}
+			}
+			require.NotContains(t, project.Goals, "host_as_plugin")
+			require.NotContains(t, project.Capabilities, "run_in_plugin_host")
+			previous = project
 		})
 	}
 }
