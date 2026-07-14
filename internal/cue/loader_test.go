@@ -115,6 +115,13 @@ func TestLoad_ProjectValidations(t *testing.T) {
 	dir := t.TempDir()
 	cue := `package p
 project: name: "v"
+project: mission: "Verify named project validations"
+project: actors: developer: {description: "the developer validating the project"}
+project: goals: valid_project: {description: "project validation succeeds", priority: "required", actors: ["actor.developer"], capabilities: ["capability.validate_project"], requirements: ["requirement.validation_runs"]}
+project: capabilities: validate_project: {description: "run project validation", goals: ["goal.valid_project"], acceptance: validation_passes: {description: "validation commands pass", actor: "actor.developer", evidence: ["evidence.validation_result"]}}
+project: requirements: validation_runs: {kind: "functional", description: "declared validation runs", goals: ["goal.valid_project"], capabilities: ["capability.validate_project"]}
+project: evidence: validation_result: {kind: "validation", description: "the validation result"}
+project: completion: requiredGoals: ["goal.valid_project"]
 project: validations: [
 	{kind: "compiles", command: ["cargo", "build"], description: "builds"},
 	{kind: "test", command: ["cargo", "test"]},

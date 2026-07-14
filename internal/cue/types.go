@@ -87,18 +87,99 @@ type Project struct {
 	// Mission is the project's why: what is being built, for whom, and the
 	// architectural intent. Injected into every generator's system prompt so
 	// leaf-level decisions are made against the whole, not in isolation.
-	Mission     string               `json:"mission,omitempty"`
-	Layers      []string             `json:"layers"`
-	LayerRules  map[string]LayerRule `json:"layerRules"`
-	Meta        Meta                 `json:"meta"`
-	Contexts    map[string]Context   `json:"contexts"`
-	Adapters    map[string]Adapter   `json:"adapters"`
-	AssetKinds  map[string]AssetKind `json:"assetKinds"`
-	Assets      map[string]Asset     `json:"assets"`
-	Invariants  FlexInvariants       `json:"invariants"`
-	ContextMap  FlexContextMap       `json:"contextMap"`
-	Validations []Validation         `json:"validations,omitempty"`
+	Mission      string                         `json:"mission"`
+	Actors       map[string]Actor               `json:"actors"`
+	Goals        map[string]Goal                `json:"goals"`
+	Capabilities map[string]Capability          `json:"capabilities"`
+	Requirements map[string]Requirement         `json:"requirements"`
+	Evidence     map[string]EvidenceRequirement `json:"evidence"`
+	NonGoals     map[string]string              `json:"nonGoals,omitempty"`
+	Completion   CompletionPolicy               `json:"completion"`
+	Layers       []string                       `json:"layers"`
+	LayerRules   map[string]LayerRule           `json:"layerRules"`
+	Meta         Meta                           `json:"meta"`
+	Contexts     map[string]Context             `json:"contexts"`
+	Adapters     map[string]Adapter             `json:"adapters"`
+	AssetKinds   map[string]AssetKind           `json:"assetKinds"`
+	Assets       map[string]Asset               `json:"assets"`
+	Invariants   FlexInvariants                 `json:"invariants"`
+	ContextMap   FlexContextMap                 `json:"contextMap"`
+	Validations  []Validation                   `json:"validations,omitempty"`
 }
+
+// Actor is a stable project participant referenced by goals and acceptance
+// scenarios. Map keys become canonical IDs in the form actor.<key>.
+type Actor struct {
+	Description string `json:"description"`
+}
+
+// Goal is a user- or system-level outcome. Its lifecycle status is derived
+// from plans and evidence; status is intentionally absent from the CUE model.
+type Goal struct {
+	Description  string   `json:"description"`
+	Priority     string   `json:"priority"`
+	Actors       []string `json:"actors,omitempty"`
+	DependsOn    []string `json:"dependsOn,omitempty"`
+	Capabilities []string `json:"capabilities"`
+	Requirements []string `json:"requirements,omitempty"`
+}
+
+// Capability is observable functionality that may contribute to more than
+// one goal and may be implemented by multiple architectural resources.
+type Capability struct {
+	Description string                        `json:"description"`
+	Goals       []string                      `json:"goals"`
+	Acceptance  map[string]AcceptanceScenario `json:"acceptance"`
+}
+
+// AcceptanceScenario is an ordered user/system journey with explicit evidence
+// requirements. Map keys become acceptance.<capability>.<key> IDs.
+type AcceptanceScenario struct {
+	Description string           `json:"description"`
+	Actor       string           `json:"actor,omitempty"`
+	Steps       []AcceptanceStep `json:"steps,omitempty"`
+	Evidence    []string         `json:"evidence"`
+}
+
+type AcceptanceStep struct {
+	Action   string `json:"action"`
+	Observes string `json:"observes"`
+}
+
+// Requirement captures functional or nonfunctional constraints separately
+// from the resources that implement them.
+type Requirement struct {
+	Kind         string   `json:"kind"`
+	Description  string   `json:"description"`
+	Goals        []string `json:"goals,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// EvidenceRequirement declares what kind of proof an acceptance scenario
+// needs. Concrete executable witness definitions are introduced in WS6.
+type EvidenceRequirement struct {
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+}
+
+type CompletionPolicy struct {
+	RequiredGoals []string `json:"requiredGoals"`
+	ProjectChecks []string `json:"projectChecks,omitempty"`
+}
+
+type CompletionStatus string
+
+const (
+	CompletionDeclared             CompletionStatus = "declared"
+	CompletionPlanned              CompletionStatus = "planned"
+	CompletionPartiallyImplemented CompletionStatus = "partially_implemented"
+	CompletionLocallyValidated     CompletionStatus = "locally_validated"
+	CompletionIntegrated           CompletionStatus = "integrated"
+	CompletionBehaviorallyVerified CompletionStatus = "behaviorally_verified"
+	CompletionComplete             CompletionStatus = "complete"
+	CompletionBlocked              CompletionStatus = "blocked"
+	CompletionRegressed            CompletionStatus = "regressed"
+)
 
 type LayerRule struct {
 	DependsOn []string `json:"dependsOn"`

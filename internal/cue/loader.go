@@ -53,6 +53,9 @@ func Load(specDir string) (*Project, error) {
 	if err := json.Unmarshal(jsonBytes, &p); err != nil {
 		return nil, fmt.Errorf("unmarshal project: %w", err)
 	}
+	if err := ValidateProjectIntent(&p); err != nil {
+		return nil, err
+	}
 
 	return &p, nil
 }
