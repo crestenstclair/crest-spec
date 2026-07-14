@@ -13,10 +13,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
-	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -47,10 +47,29 @@ type NextResult struct {
 }
 
 type ContextResult struct {
-	SystemPrompt string
-	Prompt       string
-	Instructions string
-	Invariants   []InvariantInfo
+	AttemptID         string
+	ContextManifestID string
+	ContextHash       string
+	SelectorVersion   string
+	EstimatorVersion  string
+	TemplateHashes    map[string]string
+	BudgetTokens      int
+	EstimatedTokens   int
+	Blocked           bool
+	BlockedReason     string
+	Sections          []contextmanifest.Section
+	SystemPrompt      string
+	Prompt            string
+	Instructions      string
+	Invariants        []InvariantInfo
+}
+
+type ContextOptions struct {
+	SessionID       string
+	ResourceID      string
+	Role            string
+	BudgetTokens    int
+	ParentAttemptID string
 }
 
 // InvariantInfo is a project invariant surfaced to the generator as a
@@ -376,61 +395,7 @@ func (s *Spec) pendingResourcesInWave(
 }
 
 func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*ContextResult, error) {
-	sess, err := s.store.GetSession(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("get session: %w", err)
-	}
-
-	var plan []planpkg.PlannedAction
-	if err := json.Unmarshal([]byte(sess.PlanJSON), &plan); err != nil {
-		return nil, fmt.Errorf("unmarshal plan: %w", err)
-	}
-
-	planResult, err := s.Plan(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
-	}
-
-	resource, ok := planResult.Registry.Resources[resourceID]
-	if !ok {
-		return nil, fmt.Errorf("resource not found: %s", resourceID)
-	}
-
-	// Transition resource to "dispatched" in session_resources
-	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
-	if sr != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateDispatched), sr.LastError, sr.LastOutput, sr.Attempts, sr.JobID)
-	}
-
-	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
-	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
-
-	runtimeCtx, _ := s.buildRuntimeContext(resource, planResult.Registry, sess.ApplyID)
-
-	// Feed the retry loop: a rejected/errored attempt leaves its failure on the
-	// session resource, and spec/resolve leaves triage guidance as a note on the
-	// resource itself. Both MUST reach the next generation prompt — without
-	// them a retry is a blind re-roll of the attempt that already failed.
-	if sr != nil && sr.LastError != "" {
-		runtimeCtx.WaveErrors = sr.LastError
-	}
-	if guidance, err := s.store.GetNote(resourceID, sess.ApplyID); err == nil && guidance != "" {
-		runtimeCtx.UserGuidance = guidance
-	}
-
-	fullPrompt := promptpkg.InjectRuntimeContext(resourcePrompt, runtimeCtx)
-
-	var invariants []InvariantInfo
-	for _, inv := range planResult.Registry.Project.Invariants {
-		invariants = append(invariants, InvariantInfo{Text: inv.Text, Rationale: inv.Meta.Rationale})
-	}
-
-	return &ContextResult{
-		SystemPrompt: systemPrompt,
-		Prompt:       fullPrompt,
-		Instructions: dispatchInstructions(resourceID),
-		Invariants:   invariants,
-	}, nil
+	return s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID})
 }
 
 func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string, model string) (*CommitResult, error) {

@@ -66,7 +66,7 @@ INSERT INTO context_sections (
 -- name: ListContextSections :many
 SELECT * FROM context_sections WHERE manifest_id = ? ORDER BY ordinal;
 
--- name: SetSessionResourceDispatchedTx :exec
+-- name: SetSessionResourceDispatchedTx :execrows
 UPDATE session_resources
 SET state = 'dispatched', phase = 'queued', dispatched_at = ?, updated_at = ?
 WHERE session_id = ? AND resource_id = ?;

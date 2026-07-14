@@ -97,6 +97,22 @@ func NormalizeBudget(requested int) int {
 	return requested
 }
 
+// BudgetForRole provides host-independent defaults while still applying the
+// engine's hard minimum and maximum to explicit host requests.
+func BudgetForRole(role string, requested int) int {
+	if requested != 0 {
+		return NormalizeBudget(requested)
+	}
+	switch role {
+	case "integration_implementer", "project_completion_reviewer":
+		return 49152
+	case "minimal_diff_repair", "failure_triage", "test_generator", "behavioral_witness_author":
+		return 24576
+	default:
+		return DefaultBudget
+	}
+}
+
 func EstimateTokens(content string) int {
 	if content == "" {
 		return 0
@@ -118,9 +134,12 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 	}
 
 	mandatoryTokens := 0
+	mandatoryContent := make(map[string]bool)
 	for _, candidate := range ordered {
-		if candidate.Mandatory && candidate.UnavailableReason == "" {
+		hash := Hash(candidate.Content)
+		if candidate.Mandatory && candidate.UnavailableReason == "" && !mandatoryContent[hash] {
 			mandatoryTokens += EstimateTokens(candidate.Content)
+			mandatoryContent[hash] = true
 		}
 	}
 	if mandatoryTokens > budget {
@@ -130,9 +149,11 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 
 	remaining := budget
 	seen := make(map[string]bool, len(ordered))
+	seenContent := make(map[string]string, len(ordered))
 	for _, candidate := range ordered {
 		section := baseSection(candidate, len(result.Sections))
 		identity := candidate.Kind + "\x00" + candidate.SourceKind + "\x00" + candidate.SourceID
+		contentHash := Hash(candidate.Content)
 		switch {
 		case candidate.UnavailableReason != "":
 			section.Decision = Omitted
@@ -140,11 +161,15 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 		case seen[identity]:
 			section.Decision = Omitted
 			section.Reason = "duplicate source identity"
+		case seenContent[contentHash] != "":
+			section.Decision = Omitted
+			section.Reason = "duplicate content hash; first source is " + seenContent[contentHash]
 		case result.Blocked:
 			section.Decision = Omitted
 			section.Reason = result.BlockedReason
 		default:
 			seen[identity] = true
+			seenContent[contentHash] = candidate.SourceKind + ":" + candidate.SourceID
 			tokens := EstimateTokens(candidate.Content)
 			if tokens <= remaining {
 				include(&section, candidate.Content, Included, candidate.InclusionReason)

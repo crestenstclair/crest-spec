@@ -39,16 +39,26 @@ func TestSelectRecordsUnavailableAndDuplicateSources(t *testing.T) {
 		{Kind: "code", Title: "Call sites", SourceKind: "discovery", SourceID: "calls", Priority: PriorityCode, UnavailableReason: "selector unavailable"},
 		{Kind: "code", Title: "A", SourceKind: "file", SourceID: "a.go", Content: "one", Priority: PriorityCode},
 		{Kind: "code", Title: "A duplicate", SourceKind: "file", SourceID: "a.go", Content: "two", Priority: PriorityCode},
+		{Kind: "example", Title: "Same content elsewhere", SourceKind: "file", SourceID: "example.go", Content: "one", Priority: PriorityConvention},
 	}, MinimumBudget)
 	require.Equal(t, Omitted, result.Sections[0].Decision)
 	require.Equal(t, "selector unavailable", result.Sections[0].Reason)
 	require.Equal(t, Included, result.Sections[1].Decision)
 	require.Equal(t, Omitted, result.Sections[2].Decision)
 	require.Equal(t, "duplicate source identity", result.Sections[2].Reason)
+	require.Equal(t, Omitted, result.Sections[3].Decision)
+	require.Contains(t, result.Sections[3].Reason, "duplicate content hash")
 }
 
 func TestNormalizeBudgetUsesStableBounds(t *testing.T) {
 	require.Equal(t, DefaultBudget, NormalizeBudget(0))
 	require.Equal(t, MinimumBudget, NormalizeBudget(1))
 	require.Equal(t, MaximumBudget, NormalizeBudget(MaximumBudget+1))
+}
+
+func TestBudgetForRoleUsesStableHostIndependentDefaults(t *testing.T) {
+	require.Equal(t, DefaultBudget, BudgetForRole("resource_implementer", 0))
+	require.Equal(t, 49152, BudgetForRole("integration_implementer", 0))
+	require.Equal(t, 24576, BudgetForRole("minimal_diff_repair", 0))
+	require.Equal(t, MinimumBudget, BudgetForRole("integration_implementer", 1))
 }

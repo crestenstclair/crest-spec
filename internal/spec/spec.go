@@ -60,6 +60,12 @@ type specStore interface {
 	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
 	UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error
 	SetSessionResourceDispatched(sessionID, resourceID string) error
+	CreateContextManifest(ctx context.Context, input store.ContextManifestWrite) (*store.ContextManifest, error)
+	GetContextManifest(ctx context.Context, id string) (*store.ContextManifest, error)
+	GetContextManifestByAttempt(ctx context.Context, attemptID string) (*store.ContextManifest, error)
+	ListContextManifests(ctx context.Context, limit int) ([]store.ContextManifest, error)
+	ListGenerationAttemptsBySession(ctx context.Context, sessionID string) ([]store.GenerationAttempt, error)
+	ListGenerationAttemptsByResource(ctx context.Context, resourceID string, limit int) ([]store.GenerationAttempt, error)
 	GetGeneration(id string) (*store.Generation, error)
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)

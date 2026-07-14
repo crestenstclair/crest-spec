@@ -531,7 +531,7 @@ func (q *Queries) PutContentBlob(ctx context.Context, arg PutContentBlobParams) 
 	return err
 }
 
-const setSessionResourceDispatchedTx = `-- name: SetSessionResourceDispatchedTx :exec
+const setSessionResourceDispatchedTx = `-- name: SetSessionResourceDispatchedTx :execrows
 UPDATE session_resources
 SET state = 'dispatched', phase = 'queued', dispatched_at = ?, updated_at = ?
 WHERE session_id = ? AND resource_id = ?
@@ -544,12 +544,15 @@ type SetSessionResourceDispatchedTxParams struct {
 	ResourceID   string
 }
 
-func (q *Queries) SetSessionResourceDispatchedTx(ctx context.Context, arg SetSessionResourceDispatchedTxParams) error {
-	_, err := q.db.ExecContext(ctx, setSessionResourceDispatchedTx,
+func (q *Queries) SetSessionResourceDispatchedTx(ctx context.Context, arg SetSessionResourceDispatchedTxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionResourceDispatchedTx,
 		arg.DispatchedAt,
 		arg.UpdatedAt,
 		arg.SessionID,
 		arg.ResourceID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

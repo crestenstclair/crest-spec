@@ -200,11 +200,16 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 	}
 
 	if input.Dispatch {
-		if err = q.SetSessionResourceDispatchedTx(ctx, db.SetSessionResourceDispatchedTxParams{
+		var affected int64
+		affected, err = q.SetSessionResourceDispatchedTx(ctx, db.SetSessionResourceDispatchedTxParams{
 			DispatchedAt: timestamp, UpdatedAt: timestamp,
 			SessionID: m.Attempt.SessionID, ResourceID: m.Attempt.ResourceID,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, fmt.Errorf("create context manifest: dispatch resource: %w", err)
+		}
+		if affected != 1 {
+			return nil, fmt.Errorf("create context manifest: dispatch resource: session resource not found")
 		}
 	}
 	if err = tx.Commit(); err != nil {
