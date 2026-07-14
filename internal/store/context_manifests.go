@@ -9,22 +9,24 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	"github.com/crestenstclair/crest-spec/internal/db"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 )
 
 // GenerationAttempt identifies one request for an agent to implement a
 // resource. Context is prepared before the host runs so even blocked attempts
 // remain inspectable.
 type GenerationAttempt struct {
-	ID              string
-	SessionID       string
-	ApplyID         string
-	ResourceID      string
-	PlanOperationID string
-	ParentAttemptID string
-	RetryNumber     int
-	Role            string
-	Status          string
-	CreatedAt       time.Time
+	ID                string
+	SessionID         string
+	ApplyID           string
+	ResourceID        string
+	PlanOperationID   string
+	ParentAttemptID   string
+	RetryNumber       int
+	Role              string
+	RolePolicyVersion string
+	Status            string
+	CreatedAt         time.Time
 }
 
 // ContextManifest is the immutable record of the exact context selected for a
@@ -151,6 +153,7 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 		ResourceID: m.Attempt.ResourceID, PlanOperationID: m.Attempt.PlanOperationID,
 		ParentAttemptID: parentID, RetryNumber: int64(m.Attempt.RetryNumber),
 		Role: m.Attempt.Role, Status: status, CreatedAt: timestamp,
+		RolePolicyVersion: m.Attempt.RolePolicyVersion,
 	}); err != nil {
 		return nil, fmt.Errorf("create context manifest: insert attempt: %w", err)
 	}
@@ -239,8 +242,12 @@ func validateContextManifest(m ContextManifest, dispatch bool) error {
 	if m.ID == "" || m.Attempt.ID == "" || m.Attempt.SessionID == "" || m.Attempt.ApplyID == "" || m.Attempt.ResourceID == "" {
 		return fmt.Errorf("create context manifest: manifest, attempt, session, apply, and resource identifiers are required")
 	}
-	if m.Attempt.Role == "" || m.SelectorVersion == "" || m.EstimatorVersion == "" || m.SelectionStrategy == "" || m.ContextHash == "" {
-		return fmt.Errorf("create context manifest: role, selector, estimator, strategy, and context hash are required")
+	if m.Attempt.Role == "" || m.Attempt.RolePolicyVersion == "" || m.SelectorVersion == "" || m.EstimatorVersion == "" || m.SelectionStrategy == "" || m.ContextHash == "" {
+		return fmt.Errorf("create context manifest: role, role policy, selector, estimator, strategy, and context hash are required")
+	}
+	policy, err := execution.LookupRole(m.Attempt.Role)
+	if err != nil || policy.Version != m.Attempt.RolePolicyVersion {
+		return fmt.Errorf("create context manifest: role policy is not supported")
 	}
 	if m.BudgetTokens <= 0 || m.EstimatedTokens < 0 || m.OriginalBytes < 0 || m.SelectedBytes < 0 {
 		return fmt.Errorf("create context manifest: context sizes are invalid")
@@ -320,7 +327,8 @@ func (s *Store) ListContextManifestSummaries(ctx context.Context, limit int) ([]
 				ID: row.AttemptID, SessionID: row.SessionID, ApplyID: row.ApplyID,
 				ResourceID: row.ResourceID, PlanOperationID: row.PlanOperationID,
 				ParentAttemptID: stringVal(row.ParentAttemptID), RetryNumber: int(row.RetryNumber),
-				Role: row.Role, Status: row.Status, CreatedAt: parseTime(row.CreatedAt),
+				Role: row.Role, RolePolicyVersion: row.RolePolicyVersion,
+				Status: row.Status, CreatedAt: parseTime(row.CreatedAt),
 			},
 			SelectorVersion: row.SelectorVersion, EstimatorVersion: row.EstimatorVersion,
 			SelectionStrategy: row.SelectionStrategy, BudgetTokens: int(row.BudgetTokens),
@@ -415,7 +423,8 @@ func dbGenerationAttempt(row db.GenerationAttempt) GenerationAttempt {
 	return GenerationAttempt{
 		ID: row.ID, SessionID: row.SessionID, ApplyID: row.ApplyID, ResourceID: row.ResourceID,
 		PlanOperationID: row.PlanOperationID, ParentAttemptID: stringVal(row.ParentAttemptID),
-		RetryNumber: int(row.RetryNumber), Role: row.Role, Status: row.Status, CreatedAt: parseTime(row.CreatedAt),
+		RetryNumber: int(row.RetryNumber), Role: row.Role, RolePolicyVersion: row.RolePolicyVersion,
+		Status: row.Status, CreatedAt: parseTime(row.CreatedAt),
 	}
 }
 

@@ -16,8 +16,8 @@ WHERE session_id = ? AND resource_id = ?;
 -- name: CreateGenerationAttempt :exec
 INSERT INTO generation_attempts (
     id, session_id, apply_id, resource_id, plan_operation_id,
-    parent_attempt_id, retry_number, role, status, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    parent_attempt_id, retry_number, role, status, created_at, role_policy_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetGenerationAttempt :one
 SELECT * FROM generation_attempts WHERE id = ?;
@@ -63,7 +63,7 @@ SELECT
     cm.original_bytes, cm.selected_bytes, cm.context_hash, cm.blocked,
     cm.blocked_reason, cm.created_at,
     ga.session_id, ga.apply_id, ga.resource_id, ga.plan_operation_id,
-    ga.parent_attempt_id, ga.retry_number, ga.role, ga.status
+    ga.parent_attempt_id, ga.retry_number, ga.role, ga.role_policy_version, ga.status
 FROM context_manifests cm
 JOIN generation_attempts ga ON ga.id = cm.attempt_id
 ORDER BY cm.created_at DESC, cm.id DESC

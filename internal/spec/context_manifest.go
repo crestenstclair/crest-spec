@@ -98,6 +98,7 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 			ID: uuid.NewString(), SessionID: opts.SessionID, ApplyID: sess.ApplyID,
 			ResourceID: opts.ResourceID, PlanOperationID: action.OperationID,
 			ParentAttemptID: opts.ParentAttemptID, Role: opts.Role,
+			RolePolicyVersion: rolePolicy.Version,
 		},
 		SelectorVersion: selection.SelectorVersion, EstimatorVersion: selection.EstimatorVersion,
 		SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: selection.BudgetTokens,

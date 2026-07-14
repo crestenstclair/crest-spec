@@ -32,6 +32,7 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 			Attempt: store.GenerationAttempt{
 				ID: "attempt-dashboard", SessionID: "session-dashboard", ApplyID: "apply-dashboard",
 				ResourceID: "resource.dashboard", PlanOperationID: "operation-dashboard", Role: "resource_implementer",
+				RolePolicyVersion: "role-policy-v1",
 			},
 			SelectorVersion: contextmanifest.SelectorVersion, EstimatorVersion: contextmanifest.EstimatorVersion,
 			SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: 4096, EstimatedTokens: 4,

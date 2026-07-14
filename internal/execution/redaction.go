@@ -26,6 +26,13 @@ func CanonicalRedacted(value any) (string, string, error) {
 	return string(encoded), hex.EncodeToString(sum[:]), nil
 }
 
+// RedactText removes credential-shaped material before operational text is
+// persisted. Structured host metadata should use CanonicalRedacted so secret
+// key names are also detected recursively.
+func RedactText(value string) string {
+	return bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
+}
+
 func redactValue(value any, key string) any {
 	if sensitiveKey(key) {
 		return "[REDACTED]"
