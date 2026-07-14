@@ -2,6 +2,7 @@ package cue
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -11,19 +12,24 @@ type Edge struct {
 }
 
 type Resource struct {
-	ID           string
-	Kind         string
-	ContextName  string
-	ParentID     string
-	Declaration  any
-	Meta         Meta
-	Dependencies []Edge
-	Validations  []Validation
+	ID            string
+	Kind          string
+	ContextName   string
+	ParentID      string
+	Declaration   any
+	Meta          Meta
+	Dependencies  []Edge
+	Validations   []Validation
+	Contributions []Contribution
 }
 
 type Registry struct {
-	Project   *Project
-	Resources map[string]Resource
+	Project              *Project
+	Resources            map[string]Resource
+	CapabilityResources  map[string][]string
+	ResourceCapabilities map[string][]string
+	GoalResources        map[string][]string
+	MissingCapabilities  []string
 }
 
 func (r *Registry) Has(id string) bool {
@@ -71,6 +77,9 @@ func NewRegistry(project *Project) (*Registry, error) {
 	reg.registerProjectAssets(project)
 
 	if err := reg.validateDependencies(); err != nil {
+		return nil, err
+	}
+	if err := reg.buildTraceability(); err != nil {
 		return nil, err
 	}
 
@@ -125,13 +134,14 @@ func (reg *Registry) registerContextValueObjects(ctxName, ctxID string, ctxMeta 
 	for voName, vo := range ctx.ValueObjects {
 		id := fmt.Sprintf("valueObject.%s.%s", ctxName, voName)
 		reg.Resources[id] = Resource{
-			ID:          id,
-			Kind:        "valueObject",
-			ContextName: ctxName,
-			ParentID:    ctxID,
-			Declaration: vo,
-			Meta:        mergeMeta(ctxMeta, vo.Meta),
-			Validations: vo.Validations,
+			ID:            id,
+			Kind:          "valueObject",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   vo,
+			Meta:          mergeMeta(ctxMeta, vo.Meta),
+			Validations:   vo.Validations,
+			Contributions: vo.ContributesTo,
 		}
 	}
 }
@@ -148,14 +158,15 @@ func (reg *Registry) registerAggregates(ctxName, ctxID string, ctxMeta Meta, ctx
 		deps = append(deps, publishesEdges(agg.Publishes)...)
 
 		reg.Resources[aggID] = Resource{
-			ID:           aggID,
-			Kind:         "aggregate",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  agg,
-			Meta:         aggMeta,
-			Dependencies: deps,
-			Validations:  agg.Validations,
+			ID:            aggID,
+			Kind:          "aggregate",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   agg,
+			Meta:          aggMeta,
+			Dependencies:  deps,
+			Validations:   agg.Validations,
+			Contributions: agg.ContributesTo,
 		}
 
 		reg.registerAggregateChildren(ctxName, aggID, aggName, aggMeta, agg)
@@ -166,40 +177,43 @@ func (reg *Registry) registerAggregateChildren(ctxName, aggID, aggName string, a
 	for entName, ent := range agg.Entities {
 		id := fmt.Sprintf("entity.%s.%s.%s", ctxName, aggName, entName)
 		reg.Resources[id] = Resource{
-			ID:          id,
-			Kind:        "entity",
-			ContextName: ctxName,
-			ParentID:    aggID,
-			Declaration: ent,
-			Meta:        mergeMeta(aggMeta, ent.Meta),
-			Validations: ent.Validations,
+			ID:            id,
+			Kind:          "entity",
+			ContextName:   ctxName,
+			ParentID:      aggID,
+			Declaration:   ent,
+			Meta:          mergeMeta(aggMeta, ent.Meta),
+			Validations:   ent.Validations,
+			Contributions: ent.ContributesTo,
 		}
 	}
 
 	for voName, vo := range agg.ValueObjects {
 		id := fmt.Sprintf("valueObject.%s.%s.%s", ctxName, aggName, voName)
 		reg.Resources[id] = Resource{
-			ID:          id,
-			Kind:        "valueObject",
-			ContextName: ctxName,
-			ParentID:    aggID,
-			Declaration: vo,
-			Meta:        mergeMeta(aggMeta, vo.Meta),
-			Validations: vo.Validations,
+			ID:            id,
+			Kind:          "valueObject",
+			ContextName:   ctxName,
+			ParentID:      aggID,
+			Declaration:   vo,
+			Meta:          mergeMeta(aggMeta, vo.Meta),
+			Validations:   vo.Validations,
+			Contributions: vo.ContributesTo,
 		}
 	}
 
 	for assetName, asset := range agg.Assets {
 		id := fmt.Sprintf("asset.%s.%s.%s", ctxName, aggName, assetName)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "asset",
-			ContextName:  ctxName,
-			ParentID:     aggID,
-			Declaration:  asset,
-			Meta:         mergeMeta(aggMeta, asset.Meta),
-			Dependencies: assetEdges(asset),
-			Validations:  asset.Validations,
+			ID:            id,
+			Kind:          "asset",
+			ContextName:   ctxName,
+			ParentID:      aggID,
+			Declaration:   asset,
+			Meta:          mergeMeta(aggMeta, asset.Meta),
+			Dependencies:  assetEdges(asset),
+			Validations:   asset.Validations,
+			Contributions: asset.ContributesTo,
 		}
 	}
 }
@@ -212,14 +226,15 @@ func (reg *Registry) registerRepositories(ctxName, ctxID string, ctxMeta Meta, c
 			deps = append(deps, Edge{TargetID: repo.Of, Kind: "of"})
 		}
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "repository",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  repo,
-			Meta:         mergeMeta(ctxMeta, repo.Meta),
-			Dependencies: deps,
-			Validations:  repo.Validations,
+			ID:            id,
+			Kind:          "repository",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   repo,
+			Meta:          mergeMeta(ctxMeta, repo.Meta),
+			Dependencies:  deps,
+			Validations:   repo.Validations,
+			Contributions: repo.ContributesTo,
 		}
 	}
 }
@@ -228,13 +243,14 @@ func (reg *Registry) registerPorts(ctxName, ctxID string, ctxMeta Meta, ctx Cont
 	for portName, port := range ctx.Ports {
 		id := fmt.Sprintf("port.%s.%s", ctxName, portName)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "port",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  port,
-			Meta:         mergeMeta(ctxMeta, port.Meta),
-			Dependencies: consumesEdges(port.Consumes),
+			ID:            id,
+			Kind:          "port",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   port,
+			Meta:          mergeMeta(ctxMeta, port.Meta),
+			Dependencies:  consumesEdges(port.Consumes),
+			Contributions: port.ContributesTo,
 		}
 	}
 }
@@ -246,28 +262,30 @@ func (reg *Registry) registerServices(ctxName, ctxID string, ctxMeta Meta, ctx C
 		deps = append(deps, consumesEdges(svc.Consumes)...)
 		deps = append(deps, publishesEdges(svc.Publishes)...)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "domainService",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  svc,
-			Meta:         mergeMeta(ctxMeta, svc.Meta),
-			Dependencies: deps,
-			Validations:  svc.Validations,
+			ID:            id,
+			Kind:          "domainService",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   svc,
+			Meta:          mergeMeta(ctxMeta, svc.Meta),
+			Dependencies:  deps,
+			Validations:   svc.Validations,
+			Contributions: svc.ContributesTo,
 		}
 	}
 
 	for svcName, svc := range ctx.ApplicationServices {
 		id := fmt.Sprintf("applicationService.%s.%s", ctxName, svcName)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "applicationService",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  svc,
-			Meta:         mergeMeta(ctxMeta, svc.Meta),
-			Dependencies: usesEdges(svc.Uses),
-			Validations:  svc.Validations,
+			ID:            id,
+			Kind:          "applicationService",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   svc,
+			Meta:          mergeMeta(ctxMeta, svc.Meta),
+			Dependencies:  usesEdges(svc.Uses),
+			Validations:   svc.Validations,
+			Contributions: svc.ContributesTo,
 		}
 	}
 }
@@ -276,14 +294,15 @@ func (reg *Registry) registerContextAssets(ctxName, ctxID string, ctxMeta Meta, 
 	for assetName, asset := range ctx.Assets {
 		id := fmt.Sprintf("asset.%s.%s", ctxName, assetName)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "asset",
-			ContextName:  ctxName,
-			ParentID:     ctxID,
-			Declaration:  asset,
-			Meta:         mergeMeta(ctxMeta, asset.Meta),
-			Dependencies: assetEdges(asset),
-			Validations:  asset.Validations,
+			ID:            id,
+			Kind:          "asset",
+			ContextName:   ctxName,
+			ParentID:      ctxID,
+			Declaration:   asset,
+			Meta:          mergeMeta(ctxMeta, asset.Meta),
+			Dependencies:  assetEdges(asset),
+			Validations:   asset.Validations,
+			Contributions: asset.ContributesTo,
 		}
 	}
 }
@@ -296,12 +315,13 @@ func (reg *Registry) registerAdapters(project *Project) {
 			deps = append(deps, Edge{TargetID: adapter.Implements, Kind: "implements"})
 		}
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "adapter",
-			Declaration:  adapter,
-			Meta:         mergeMeta(project.Meta, adapter.Meta),
-			Dependencies: deps,
-			Validations:  adapter.Validations,
+			ID:            id,
+			Kind:          "adapter",
+			Declaration:   adapter,
+			Meta:          mergeMeta(project.Meta, adapter.Meta),
+			Dependencies:  deps,
+			Validations:   adapter.Validations,
+			Contributions: adapter.ContributesTo,
 		}
 	}
 }
@@ -310,12 +330,13 @@ func (reg *Registry) registerProjectAssets(project *Project) {
 	for name, asset := range project.Assets {
 		id := fmt.Sprintf("asset.%s", name)
 		reg.Resources[id] = Resource{
-			ID:           id,
-			Kind:         "asset",
-			Declaration:  asset,
-			Meta:         mergeMeta(project.Meta, asset.Meta),
-			Dependencies: assetEdges(asset),
-			Validations:  asset.Validations,
+			ID:            id,
+			Kind:          "asset",
+			Declaration:   asset,
+			Meta:          mergeMeta(project.Meta, asset.Meta),
+			Dependencies:  assetEdges(asset),
+			Validations:   asset.Validations,
+			Contributions: asset.ContributesTo,
 		}
 	}
 }
@@ -333,6 +354,134 @@ func (reg *Registry) validateDependencies() error {
 		return fmt.Errorf("dangling references:\n  %s", strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+// buildTraceability validates the intent-to-implementation seam and creates
+// deterministic forward/reverse indexes. Contribution edges never become
+// dependency edges, so they cannot change generation waves.
+func (reg *Registry) buildTraceability() error {
+	reg.CapabilityResources = make(map[string][]string)
+	reg.ResourceCapabilities = make(map[string][]string)
+	reg.GoalResources = make(map[string][]string)
+
+	validCapabilities := make(map[string]bool, len(reg.Project.Capabilities))
+	for name := range reg.Project.Capabilities {
+		validCapabilities["capability."+name] = true
+	}
+
+	var errs []string
+	for _, resourceID := range sortedResourceIDs(reg.Resources) {
+		resource := reg.Resources[resourceID]
+		seen := make(map[string]bool)
+		for index, contribution := range resource.Contributions {
+			path := fmt.Sprintf("%s.contributesTo[%d]", resourceID, index)
+			if !validCapabilities[contribution.Capability] {
+				errs = append(errs, fmt.Sprintf("%s: capability %q not found", path, contribution.Capability))
+			}
+			if strings.TrimSpace(contribution.Contribution) == "" {
+				errs = append(errs, path+": contribution description is required")
+			}
+			if seen[contribution.Capability] {
+				errs = append(errs, fmt.Sprintf("%s: duplicate capability %q", path, contribution.Capability))
+				continue
+			}
+			seen[contribution.Capability] = true
+			if validCapabilities[contribution.Capability] {
+				reg.CapabilityResources[contribution.Capability] = append(reg.CapabilityResources[contribution.Capability], resourceID)
+				reg.ResourceCapabilities[resourceID] = append(reg.ResourceCapabilities[resourceID], contribution.Capability)
+			}
+		}
+		errs = append(errs, validateResourceProfile(resourceID, resource.Declaration)...)
+	}
+
+	for capabilityID, resources := range reg.CapabilityResources {
+		sort.Strings(resources)
+		reg.CapabilityResources[capabilityID] = resources
+	}
+	for resourceID, capabilities := range reg.ResourceCapabilities {
+		sort.Strings(capabilities)
+		reg.ResourceCapabilities[resourceID] = capabilities
+	}
+	for goalName, goal := range reg.Project.Goals {
+		goalID := "goal." + goalName
+		seen := make(map[string]bool)
+		for _, capabilityID := range goal.Capabilities {
+			for _, resourceID := range reg.CapabilityResources[capabilityID] {
+				if !seen[resourceID] {
+					reg.GoalResources[goalID] = append(reg.GoalResources[goalID], resourceID)
+					seen[resourceID] = true
+				}
+			}
+		}
+		sort.Strings(reg.GoalResources[goalID])
+	}
+	for capabilityID := range validCapabilities {
+		if len(reg.CapabilityResources[capabilityID]) == 0 {
+			reg.MissingCapabilities = append(reg.MissingCapabilities, capabilityID)
+		}
+	}
+	sort.Strings(reg.MissingCapabilities)
+	sort.Strings(errs)
+	if len(errs) > 0 {
+		return fmt.Errorf("invalid resource traceability:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
+}
+
+func validateResourceProfile(resourceID string, declaration any) []string {
+	var errs []string
+	switch value := declaration.(type) {
+	case Port:
+		if value.Direction != "" && value.Direction != "inbound" && value.Direction != "outbound" {
+			errs = append(errs, fmt.Sprintf(`%s.direction must be "inbound" or "outbound"`, resourceID))
+		}
+	case Adapter:
+		if value.Profile.Kind != "" && !boundaryProfileKinds[value.Profile.Kind] {
+			errs = append(errs, fmt.Sprintf("%s.profile.kind %q is unsupported", resourceID, value.Profile.Kind))
+		}
+		if value.Profile.Kind == "http" && (value.Profile.Method == "" || value.Profile.Path == "") {
+			errs = append(errs, resourceID+".profile: http adapters require method and path")
+		}
+	case Asset:
+		if value.Profile.Kind != "" && !assetProfileKinds[value.Profile.Kind] {
+			errs = append(errs, fmt.Sprintf("%s.profile.kind %q is unsupported", resourceID, value.Profile.Kind))
+		}
+	}
+	return errs
+}
+
+var boundaryProfileKinds = map[string]bool{
+	"http": true, "rpc": true, "ui": true, "cli": true,
+	"scheduler": true, "message_consumer": true, "message_publisher": true,
+	"persistence": true, "external_system": true, "device_input": true,
+	"device_output": true, "in_process": true,
+}
+
+var assetProfileKinds = map[string]bool{
+	"build_manifest": true, "configuration": true, "database_migration": true,
+	"infrastructure": true, "observability": true, "security_policy": true,
+	"deployment": true, "documentation": true, "verification_harness": true,
+}
+
+func sortedResourceIDs(resources map[string]Resource) []string {
+	ids := make([]string, 0, len(resources))
+	for id := range resources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (reg *Registry) ResourcesForCapability(capabilityID string) []string {
+	return append([]string(nil), reg.CapabilityResources[capabilityID]...)
+}
+
+func (reg *Registry) CapabilitiesForResource(resourceID string) []string {
+	return append([]string(nil), reg.ResourceCapabilities[resourceID]...)
+}
+
+func (reg *Registry) ResourcesForGoal(goalID string) []string {
+	return append([]string(nil), reg.GoalResources[goalID]...)
 }
 
 func usesEdges(uses []string) []Edge {

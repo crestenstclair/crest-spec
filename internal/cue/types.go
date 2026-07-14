@@ -215,71 +215,81 @@ type Context struct {
 }
 
 type Aggregate struct {
-	Root         bool                   `json:"root,omitempty"`
-	Purpose      string                 `json:"purpose,omitempty"`
-	State        map[string]string      `json:"state,omitempty"`
-	Commands     FlexMap                `json:"commands,omitempty"`
-	Events       FlexMap                `json:"events,omitempty"`
-	Invariants   []string               `json:"invariants,omitempty"`
-	Implements   string                 `json:"implements,omitempty"`
-	Publishes    []string               `json:"publishes,omitempty"`
-	Meta         Meta                   `json:"meta,omitempty"`
-	Entities     map[string]Entity      `json:"entities,omitempty"`
-	ValueObjects map[string]ValueObject `json:"valueObjects,omitempty"`
-	Validations  []Validation           `json:"validations,omitempty"`
-	Assets       map[string]Asset       `json:"assets,omitempty"`
+	Root          bool                   `json:"root,omitempty"`
+	Purpose       string                 `json:"purpose,omitempty"`
+	State         map[string]string      `json:"state,omitempty"`
+	Commands      FlexMap                `json:"commands,omitempty"`
+	Events        FlexMap                `json:"events,omitempty"`
+	Invariants    []string               `json:"invariants,omitempty"`
+	Implements    string                 `json:"implements,omitempty"`
+	Publishes     []string               `json:"publishes,omitempty"`
+	Meta          Meta                   `json:"meta,omitempty"`
+	Entities      map[string]Entity      `json:"entities,omitempty"`
+	ValueObjects  map[string]ValueObject `json:"valueObjects,omitempty"`
+	Validations   []Validation           `json:"validations,omitempty"`
+	Assets        map[string]Asset       `json:"assets,omitempty"`
+	ContributesTo []Contribution         `json:"contributesTo,omitempty"`
 }
 
 type Entity struct {
-	State       map[string]string `json:"state,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	State         map[string]string `json:"state,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type ValueObject struct {
-	From        string            `json:"from,omitempty"`
-	State       map[string]string `json:"state,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Invariants  []string          `json:"invariants,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	From          string            `json:"from,omitempty"`
+	State         map[string]string `json:"state,omitempty"`
+	Description   string            `json:"description,omitempty"`
+	Invariants    []string          `json:"invariants,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type Port struct {
-	Contract map[string]string `json:"contract,omitempty"`
-	Consumes []string          `json:"consumes,omitempty"`
-	Meta     Meta              `json:"meta,omitempty"`
+	Direction     string            `json:"direction,omitempty"`
+	Contract      map[string]string `json:"contract,omitempty"`
+	Consumes      []string          `json:"consumes,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type Adapter struct {
-	Implements  string       `json:"implements"`
-	Layer       string       `json:"layer,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Implements    string          `json:"implements"`
+	Layer         string          `json:"layer,omitempty"`
+	Profile       BoundaryProfile `json:"profile,omitempty"`
+	Meta          Meta            `json:"meta,omitempty"`
+	Validations   []Validation    `json:"validations,omitempty"`
+	ContributesTo []Contribution  `json:"contributesTo,omitempty"`
 }
 
 type Repository struct {
-	Of          string            `json:"of"`
-	Contract    map[string]string `json:"contract,omitempty"`
-	Meta        Meta              `json:"meta,omitempty"`
-	Validations []Validation      `json:"validations,omitempty"`
+	Of            string            `json:"of"`
+	Contract      map[string]string `json:"contract,omitempty"`
+	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
+	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 
 type DomainService struct {
-	Purpose     string       `json:"purpose,omitempty"`
-	Uses        []string     `json:"uses,omitempty"`
-	Consumes    []string     `json:"consumes,omitempty"`
-	Publishes   []string     `json:"publishes,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Purpose       string         `json:"purpose,omitempty"`
+	Uses          []string       `json:"uses,omitempty"`
+	Consumes      []string       `json:"consumes,omitempty"`
+	Publishes     []string       `json:"publishes,omitempty"`
+	Meta          Meta           `json:"meta,omitempty"`
+	Validations   []Validation   `json:"validations,omitempty"`
+	ContributesTo []Contribution `json:"contributesTo,omitempty"`
 }
 
 type ApplicationService struct {
-	Purpose     string               `json:"purpose,omitempty"`
-	Uses        []string             `json:"uses,omitempty"`
-	Operations  map[string]Operation `json:"operations,omitempty"`
-	Meta        Meta                 `json:"meta,omitempty"`
-	Validations []Validation         `json:"validations,omitempty"`
+	Purpose       string               `json:"purpose,omitempty"`
+	Uses          []string             `json:"uses,omitempty"`
+	Operations    map[string]Operation `json:"operations,omitempty"`
+	Meta          Meta                 `json:"meta,omitempty"`
+	Validations   []Validation         `json:"validations,omitempty"`
+	ContributesTo []Contribution       `json:"contributesTo,omitempty"`
 }
 
 type Operation struct {
@@ -296,12 +306,56 @@ type AssetKind struct {
 }
 
 type Asset struct {
-	Kind        string       `json:"kind"`
-	Description string       `json:"description,omitempty"`
-	Prompts     []string     `json:"prompts,omitempty"`
-	Targets     []string     `json:"targets,omitempty"`
-	Meta        Meta         `json:"meta,omitempty"`
-	Validations []Validation `json:"validations,omitempty"`
+	Kind          string         `json:"kind"`
+	Description   string         `json:"description,omitempty"`
+	Prompts       []string       `json:"prompts,omitempty"`
+	Targets       []string       `json:"targets,omitempty"`
+	Meta          Meta           `json:"meta,omitempty"`
+	Validations   []Validation   `json:"validations,omitempty"`
+	Profile       AssetProfile   `json:"profile,omitempty"`
+	ContributesTo []Contribution `json:"contributesTo,omitempty"`
+}
+
+// Contribution connects an implementation resource to observable project
+// functionality without changing resource dependency ordering.
+type Contribution struct {
+	Capability   string `json:"capability"`
+	Contribution string `json:"contribution"`
+}
+
+// BoundaryProfile describes delivery mechanics; the implemented port remains
+// the owner of the behavioral contract.
+type BoundaryProfile struct {
+	Kind          string   `json:"kind,omitempty"`
+	Method        string   `json:"method,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Topology      string   `json:"topology,omitempty"`
+	Device        string   `json:"device,omitempty"`
+	Medium        string   `json:"medium,omitempty"`
+	System        string   `json:"system,omitempty"`
+	Topic         string   `json:"topic,omitempty"`
+	Trigger       string   `json:"trigger,omitempty"`
+	Surfaces      []string `json:"surfaces,omitempty"`
+	Accessibility []string `json:"accessibility,omitempty"`
+}
+
+// AssetProfile gives recurring operational artifacts a structured vocabulary
+// while custom AssetKind continues to determine generated file shape.
+type AssetProfile struct {
+	Kind             string   `json:"kind,omitempty"`
+	Ecosystem        string   `json:"ecosystem,omitempty"`
+	Witness          string   `json:"witness,omitempty"`
+	Source           string   `json:"source,omitempty"`
+	SecretPolicy     string   `json:"secretPolicy,omitempty"`
+	FailurePolicy    string   `json:"failurePolicy,omitempty"`
+	Signals          []string `json:"signals,omitempty"`
+	Constraint       string   `json:"constraint,omitempty"`
+	Audience         string   `json:"audience,omitempty"`
+	RequiredExamples []string `json:"requiredExamples,omitempty"`
+	Predecessor      string   `json:"predecessor,omitempty"`
+	Compatibility    string   `json:"compatibility,omitempty"`
+	Rollback         string   `json:"rollback,omitempty"`
 }
 
 type Validation struct {
