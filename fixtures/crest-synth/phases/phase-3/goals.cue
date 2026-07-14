@@ -1,36 +1,29 @@
 package crestsynth
 
-// Required project intent. Capability-to-resource contributions are added by
-// the DDD traceability phase; this phase establishes completion intent.
+// Phase 3 establishes the product's defining constraint: the live audio
+// callback is connected to non-real-time control only through one lock-free seam.
 project: {
-	mission: "Generate a complete, playable crest-synth increment while preserving real-time safety and deterministic validation."
-	actors: developer: {description: "a developer building and verifying the synthesizer"}
-	goals: phase_complete: {
-		description:  "The declared synthesizer increment is implemented and mechanically verified"
-		priority:     "required"
-		actors:       ["actor.developer"]
-		capabilities: ["capability.generate_increment"]
-		requirements: ["requirement.validated_increment"]
+	mission: "A standalone, gamepad-friendly MIDI synthesizer for Steam Deck and desktop, built around a hard real-time audio core."
+	actors: performer: {description: "a musician hearing crest-synth through a physical audio device"}
+	goals: hear_live_realtime_audio: {
+		description: "A performer can stream synthesized MIDI playback through the default audio device without compromising the callback deadline"
+		priority: "required"
+		actors: ["actor.performer"]
+		capabilities: ["capability.stream_across_realtime_seam"]
+		requirements: ["requirement.callback_never_blocks"]
 	}
-	capabilities: generate_increment: {
-		description: "Generate the declared resources as a coherent, validated increment"
-		goals:       ["goal.phase_complete"]
-		acceptance: generated_and_validated: {
-			description: "Declared resources are generated and project validation passes"
-			actor:       "actor.developer"
-			evidence:    ["evidence.project_validation"]
+	capabilities: stream_across_realtime_seam: {
+		description: "Move events, latest parameter snapshots, and retired memory across lock-free boundaries and render through cpal"
+		goals: ["goal.hear_live_realtime_audio"]
+		acceptance: device_free_live_pipeline: {
+			description: "The complete live pipeline constructs and exchanges data without requiring an audio device in validation"
+			actor: "actor.performer"
+			steps: [{action: "push events and publish parameters", observes: "the audio side receives events and the latest snapshot without locking"}, {action: "construct live output", observes: "the cpal callback path is ready to stream"}]
+			evidence: ["evidence.live_pipeline_check"]
 		}
 	}
-	requirements: validated_increment: {
-		kind:         "functional"
-		description:  "The generated increment passes its declared mechanical validations"
-		goals:        ["goal.phase_complete"]
-		capabilities: ["capability.generate_increment"]
-	}
-	evidence: project_validation: {
-		kind:        "validation"
-		description: "The declared project validation commands pass"
-	}
-	completion: requiredGoals: ["goal.phase_complete"]
+	requirements: callback_never_blocks: {kind: "nonfunctional", description: "The audio callback never allocates, locks, blocks, performs I/O, or frees retired memory", goals: ["goal.hear_live_realtime_audio"], capabilities: ["capability.stream_across_realtime_seam"]}
+	evidence: live_pipeline_check: {kind: "integration_validation", description: "make check-live constructs and exercises the real-time pipeline without opening a device"}
+	nonGoals: {device_validation: "Automated validation does not depend on a particular host audio device"}
+	completion: {requiredGoals: ["goal.hear_live_realtime_audio"], projectChecks: ["validation.build", "validation.check_live"]}
 }
-

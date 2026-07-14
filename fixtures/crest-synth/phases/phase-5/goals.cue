@@ -1,36 +1,28 @@
 package crestsynth
 
-// Required project intent. Capability-to-resource contributions are added by
-// the DDD traceability phase; this phase establishes completion intent.
+// Phase 5 makes patches expressive through a modulation matrix evaluated as
+// part of rendering, including LFOs, envelopes, MIDI, and per-note expression.
 project: {
-	mission: "Generate a complete, playable crest-synth increment while preserving real-time safety and deterministic validation."
-	actors: developer: {description: "a developer building and verifying the synthesizer"}
-	goals: phase_complete: {
-		description:  "The declared synthesizer increment is implemented and mechanically verified"
-		priority:     "required"
-		actors:       ["actor.developer"]
-		capabilities: ["capability.generate_increment"]
-		requirements: ["requirement.validated_increment"]
+	mission: "A standalone, gamepad-friendly MIDI synthesizer for Steam Deck and desktop, built around a hard real-time audio core."
+	actors: performer: {description: "a musician using evolving and per-note expressive sound"}
+	goals: perform_expressive_sound: {
+		description: "A performer can hear modulation and per-note expression shape a patch while it plays"
+		priority: "required"
+		actors: ["actor.performer"]
+		capabilities: ["capability.apply_modulation_routes"]
+		requirements: ["requirement.bounded_modulation"]
 	}
-	capabilities: generate_increment: {
-		description: "Generate the declared resources as a coherent, validated increment"
-		goals:       ["goal.phase_complete"]
-		acceptance: generated_and_validated: {
-			description: "Declared resources are generated and project validation passes"
-			actor:       "actor.developer"
-			evidence:    ["evidence.project_validation"]
+	capabilities: apply_modulation_routes: {
+		description: "Evaluate envelopes, LFOs, MIDI and MPE sources through a per-patch routing matrix into synthesis destinations"
+		goals: ["goal.perform_expressive_sound"]
+		acceptance: audible_vibrato_and_sweep: {
+			description: "An LFO vibrato and filter sweep are audibly applied through declared routes"
+			actor: "actor.performer"
+			steps: [{action: "configure modulation routes", observes: "source values map to bounded destination offsets"}, {action: "render the patch", observes: "vibrato and filter motion are present in the output"}]
+			evidence: ["evidence.modulation_demo"]
 		}
 	}
-	requirements: validated_increment: {
-		kind:         "functional"
-		description:  "The generated increment passes its declared mechanical validations"
-		goals:        ["goal.phase_complete"]
-		capabilities: ["capability.generate_increment"]
-	}
-	evidence: project_validation: {
-		kind:        "validation"
-		description: "The declared project validation commands pass"
-	}
-	completion: requiredGoals: ["goal.phase_complete"]
+	requirements: bounded_modulation: {kind: "functional", description: "Modulation routes remain within declared bounds and per-note expression affects only its voice", goals: ["goal.perform_expressive_sound"], capabilities: ["capability.apply_modulation_routes"]}
+	evidence: modulation_demo: {kind: "behavioral_witness", description: "make demo-mod renders an arrangement with active LFO and filter routes"}
+	completion: {requiredGoals: ["goal.perform_expressive_sound"], projectChecks: ["validation.build", "validation.demo_mod"]}
 }
-

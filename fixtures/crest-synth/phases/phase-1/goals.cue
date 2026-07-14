@@ -1,36 +1,29 @@
 package crestsynth
 
-// Required project intent. Capability-to-resource contributions are added by
-// the DDD traceability phase; this phase establishes completion intent.
+// Phase 1 product slice: the first audible MIDI-to-audio spine. MIDI-file
+// playback is the hermetic stand-in for the external MIDI source added later.
 project: {
-	mission: "Generate a complete, playable crest-synth increment while preserving real-time safety and deterministic validation."
-	actors: developer: {description: "a developer building and verifying the synthesizer"}
-	goals: phase_complete: {
-		description:  "The declared synthesizer increment is implemented and mechanically verified"
-		priority:     "required"
-		actors:       ["actor.developer"]
-		capabilities: ["capability.generate_increment"]
-		requirements: ["requirement.validated_increment"]
+	mission: "A standalone, gamepad-friendly MIDI synthesizer for Steam Deck and desktop, built around a hard real-time audio core."
+	actors: performer: {description: "a musician listening to a MIDI performance through crest-synth"}
+	goals: hear_midi_performance: {
+		description: "A performer can turn a Standard MIDI File into an audible stereo performance"
+		priority: "required"
+		actors: ["actor.performer"]
+		capabilities: ["capability.render_midi_file"]
+		requirements: ["requirement.audible_bounded_output"]
 	}
-	capabilities: generate_increment: {
-		description: "Generate the declared resources as a coherent, validated increment"
-		goals:       ["goal.phase_complete"]
-		acceptance: generated_and_validated: {
-			description: "Declared resources are generated and project validation passes"
-			actor:       "actor.developer"
-			evidence:    ["evidence.project_validation"]
+	capabilities: render_midi_file: {
+		description: "Parse timed MIDI events, drive sine voices, and render a stereo WAV"
+		goals: ["goal.hear_midi_performance"]
+		acceptance: built_in_tune: {
+			description: "The built-in tune renders through the phase-1 voice path to a non-empty WAV"
+			actor: "actor.performer"
+			steps: [{action: "load the built-in tune", observes: "time-ordered MIDI events"}, {action: "render the events", observes: "an audible stereo WAV"}]
+			evidence: ["evidence.midi_demo"]
 		}
 	}
-	requirements: validated_increment: {
-		kind:         "functional"
-		description:  "The generated increment passes its declared mechanical validations"
-		goals:        ["goal.phase_complete"]
-		capabilities: ["capability.generate_increment"]
-	}
-	evidence: project_validation: {
-		kind:        "validation"
-		description: "The declared project validation commands pass"
-	}
-	completion: requiredGoals: ["goal.phase_complete"]
+	requirements: audible_bounded_output: {kind: "functional", description: "The rendered file contains non-silent stereo samples within the valid amplitude range", goals: ["goal.hear_midi_performance"], capabilities: ["capability.render_midi_file"]}
+	evidence: midi_demo: {kind: "behavioral_witness", description: "make demo-midi renders the built-in tune and its WAV assertions pass"}
+	nonGoals: {live_devices: "This slice is device-free; live MIDI and audio devices arrive after the real-time seam"}
+	completion: {requiredGoals: ["goal.hear_midi_performance"], projectChecks: ["validation.build", "validation.demo_midi"]}
 }
-

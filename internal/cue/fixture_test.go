@@ -87,6 +87,48 @@ func TestPhasesLoadAndResolve(t *testing.T) {
 	}
 }
 
+func TestPhaseGoalsDescribeTheCrestSynthProduct(t *testing.T) {
+	expectedGoal := map[int]string{
+		1:  "hear_midi_performance",
+		2:  "play_polyphonic_instrument",
+		3:  "hear_live_realtime_audio",
+		4:  "perform_multitimbral_arrangement",
+		5:  "perform_expressive_sound",
+		6:  "play_sample_instrument",
+		7:  "process_sound_with_effects",
+		8:  "preserve_and_recall_sound",
+		9:  "operate_standalone_instrument",
+		10: "use_in_plugin_host",
+		11: "edit_live_instrument",
+	}
+	base := filepath.Join(fixtureSpecDir(), "..", "phases")
+	for phase, goalID := range expectedGoal {
+		t.Run(fmt.Sprintf("phase-%d", phase), func(t *testing.T) {
+			dir := filepath.Join(base, fmt.Sprintf("phase-%d", phase))
+			project, err := Load(dir)
+			require.NoError(t, err)
+			require.Contains(t, project.Goals, goalID)
+			require.NotContains(t, project.Actors, "developer", "product actors must be crest-synth users")
+
+			content, err := os.ReadFile(filepath.Join(dir, "goals.cue"))
+			require.NoError(t, err)
+			lower := strings.ToLower(string(content))
+			for _, generic := range []string{"generate_increment", "phase_complete", "declared synthesizer increment", "developer building"} {
+				require.NotContains(t, lower, generic)
+			}
+		})
+	}
+}
+
+func TestFullFixtureGoalsUseMusicianActors(t *testing.T) {
+	project := loadFixture(t)
+	require.NotContains(t, project.Actors, "developer")
+	require.Contains(t, project.Actors, "performer")
+	require.Contains(t, project.Actors, "sound_designer")
+	require.Contains(t, project.Goals, "perform_instrument")
+	require.Contains(t, project.Goals, "edit_from_steam_deck")
+}
+
 // TestFixtureConfinesLanguageProfile enforces the language-confinement rule:
 // crate names may appear ONLY in manifest.cue (the Cargo.toml asset's
 // dependency list) and in adapter `framework:` fields. A crate name anywhere

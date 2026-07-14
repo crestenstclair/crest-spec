@@ -1,36 +1,29 @@
 package crestsynth
 
-// Required project intent. Capability-to-resource contributions are added by
-// the DDD traceability phase; this phase establishes completion intent.
+// Phase 10 is an alternate delivery boundary over the same engine, not a new
+// synthesis domain: a DAW host owns transport, MIDI, automation, and state I/O.
 project: {
-	mission: "Generate a complete, playable crest-synth increment while preserving real-time safety and deterministic validation."
-	actors: developer: {description: "a developer building and verifying the synthesizer"}
-	goals: phase_complete: {
-		description:  "The declared synthesizer increment is implemented and mechanically verified"
-		priority:     "required"
-		actors:       ["actor.developer"]
-		capabilities: ["capability.generate_increment"]
-		requirements: ["requirement.validated_increment"]
+	mission: "A standalone, gamepad-friendly MIDI synthesizer for Steam Deck and desktop, with an optional CLAP/VST3 host boundary over the same engine."
+	actors: producer: {description: "a musician using crest-synth as an instrument inside a DAW"}
+	goals: use_in_plugin_host: {
+		description: "A producer can load the crest-synth engine as a CLAP or VST3 instrument without forking its audio model"
+		priority: "required"
+		actors: ["actor.producer"]
+		capabilities: ["capability.process_through_plugin_host"]
+		requirements: ["requirement.stable_host_contract"]
 	}
-	capabilities: generate_increment: {
-		description: "Generate the declared resources as a coherent, validated increment"
-		goals:       ["goal.phase_complete"]
-		acceptance: generated_and_validated: {
-			description: "Declared resources are generated and project validation passes"
-			actor:       "actor.developer"
-			evidence:    ["evidence.project_validation"]
+	capabilities: process_through_plugin_host: {
+		description: "Map host MIDI, audio buffers, automation, parameters, and saved state onto the existing engine"
+		goals: ["goal.use_in_plugin_host"]
+		acceptance: host_lifecycle: {
+			description: "A host can initialize an instance, process MIDI/audio, automate stable parameters, and restore state"
+			actor: "actor.producer"
+			steps: [{action: "initialize and process a block", observes: "host MIDI produces bounded audio through the shared engine"}, {action: "save and restore plugin state", observes: "stable parameters and state round-trip"}]
+			evidence: ["evidence.plugin_contract"]
 		}
 	}
-	requirements: validated_increment: {
-		kind:         "functional"
-		description:  "The generated increment passes its declared mechanical validations"
-		goals:        ["goal.phase_complete"]
-		capabilities: ["capability.generate_increment"]
-	}
-	evidence: project_validation: {
-		kind:        "validation"
-		description: "The declared project validation commands pass"
-	}
-	completion: requiredGoals: ["goal.phase_complete"]
+	requirements: stable_host_contract: {kind: "functional", description: "Parameter IDs remain stable and the wrapper performs no blocking or allocation in process", goals: ["goal.use_in_plugin_host"], capabilities: ["capability.process_through_plugin_host"]}
+	evidence: plugin_contract: {kind: "integration_validation", description: "The nih-plug wrapper builds and its host-facing lifecycle, parameter, and state tests pass"}
+	nonGoals: {separate_plugin_engine: "The plugin wrapper reuses the standalone engine and does not define a second audio architecture"}
+	completion: {requiredGoals: ["goal.use_in_plugin_host"], projectChecks: ["validation.build", "validation.test"]}
 }
-
