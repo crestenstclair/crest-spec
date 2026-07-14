@@ -68,11 +68,13 @@ project: contexts: Effects: aggregates: EffectChain: {
 		"a bypassed slot passes its input through unchanged",
 		"the chain never exceeds maxSlots slots",
 	]
+	contributesTo: [{capability: "capability.mix_to_stereo", contribution: "owns the ordered, bypassable insert processing used by strips, aux buses, and the master"}]
 }
 
 project: contexts: Effects: domainServices: {
 	ChainRenderer: {
 		purpose: "processes a buffer through every non-bypassed slot of a chain in order"
 		uses: ["aggregate.Effects.EffectChain", "port.Effects.EffectProcessor"]
+		contributesTo: [{capability: "capability.mix_to_stereo", contribution: "executes effect slots in canonical signal-flow order"}]
 	}
 }

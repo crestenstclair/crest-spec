@@ -87,46 +87,58 @@ func TestPhasesLoadAndResolve(t *testing.T) {
 	}
 }
 
-func TestPhaseGoalsDescribeTheCrestSynthProduct(t *testing.T) {
-	expectedGoal := map[int]string{
-		1:  "hear_midi_performance",
-		2:  "play_polyphonic_instrument",
-		3:  "hear_live_realtime_audio",
-		4:  "perform_multitimbral_arrangement",
-		5:  "perform_expressive_sound",
-		6:  "play_sample_instrument",
-		7:  "process_sound_with_effects",
-		8:  "preserve_and_recall_sound",
-		9:  "operate_standalone_instrument",
-		10: "use_in_plugin_host",
-		11: "edit_live_instrument",
-	}
+func TestPhaseFixturesShareCanonicalProductIntent(t *testing.T) {
+	canonical := loadFixture(t)
+	canonicalGoals, err := os.ReadFile(filepath.Join(fixtureSpecDir(), "goals.cue"))
+	require.NoError(t, err)
+
 	base := filepath.Join(fixtureSpecDir(), "..", "phases")
-	for phase, goalID := range expectedGoal {
+	for phase := 1; phase <= 11; phase++ {
 		t.Run(fmt.Sprintf("phase-%d", phase), func(t *testing.T) {
 			dir := filepath.Join(base, fmt.Sprintf("phase-%d", phase))
 			project, err := Load(dir)
 			require.NoError(t, err)
-			require.Contains(t, project.Goals, goalID)
-			require.NotContains(t, project.Actors, "developer", "product actors must be crest-synth users")
 
-			content, err := os.ReadFile(filepath.Join(dir, "goals.cue"))
+			// A replay fixture changes the observed implementation graph, not the
+			// project crest-spec is reconciling toward. Keeping the complete intent
+			// stable lets early replays report missing functionality and later ones
+			// show progress against the same definition of done.
+			require.Equal(t, canonical.Mission, project.Mission)
+			require.Equal(t, canonical.Actors, project.Actors)
+			require.Equal(t, canonical.Goals, project.Goals)
+			require.Equal(t, canonical.Capabilities, project.Capabilities)
+			require.Equal(t, canonical.Requirements, project.Requirements)
+			require.Equal(t, canonical.Evidence, project.Evidence)
+			require.Equal(t, canonical.NonGoals, project.NonGoals)
+			require.Equal(t, canonical.Completion, project.Completion)
+
+			replayGoals, err := os.ReadFile(filepath.Join(dir, "goals.cue"))
 			require.NoError(t, err)
-			lower := strings.ToLower(string(content))
-			for _, generic := range []string{"generate_increment", "phase_complete", "declared synthesizer increment", "developer building"} {
-				require.NotContains(t, lower, generic)
-			}
+			require.Equal(t, string(canonicalGoals), string(replayGoals), "replay fixtures must not redefine product intent")
 		})
 	}
 }
 
-func TestFullFixtureGoalsUseMusicianActors(t *testing.T) {
+func TestFullFixtureGoalsModelTheStandaloneInstrument(t *testing.T) {
 	project := loadFixture(t)
 	require.NotContains(t, project.Actors, "developer")
 	require.Contains(t, project.Actors, "performer")
 	require.Contains(t, project.Actors, "sound_designer")
-	require.Contains(t, project.Goals, "perform_instrument")
-	require.Contains(t, project.Goals, "edit_from_steam_deck")
+	require.Contains(t, project.Goals, "perform_live")
+	require.Contains(t, project.Goals, "design_playable_sounds")
+	require.Contains(t, project.Goals, "preserve_work")
+	require.Contains(t, project.Goals, "operate_standalone")
+	require.Contains(t, project.NonGoals, "plugin_formats")
+	require.NotContains(t, project.Goals, "host_as_plugin")
+
+	registry, err := NewRegistry(project)
+	require.NoError(t, err)
+	require.Empty(t, registry.MissingCapabilities, "the whole-picture DDD model must implement every declared product capability")
+	require.Contains(t, registry.ResourcesForGoal("goal.perform_live"), "domainService.Patch.MidiDispatcher")
+	require.Contains(t, registry.ResourcesForGoal("goal.perform_live"), "domainService.Engine.EngineRenderer")
+	require.Contains(t, registry.ResourcesForGoal("goal.design_playable_sounds"), "aggregate.Patch.Patch")
+	require.Contains(t, registry.ResourcesForGoal("goal.preserve_work"), "aggregate.Preset.Session")
+	require.Contains(t, registry.ResourcesForGoal("goal.operate_standalone"), "adapter.GilrsGamepadInput")
 }
 
 // TestFixtureConfinesLanguageProfile enforces the language-confinement rule:

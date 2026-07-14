@@ -32,6 +32,7 @@ project: contexts: Mixer: aggregates: ChannelStrip: {
 		"a strip has at most 8 send taps",
 		"peak metering reflects the level after volume and pan are applied",
 	]
+	contributesTo: [{capability: "capability.mix_to_stereo", contribution: "provides independent gain, inserts, pan, mute, solo, sends, and metering for one patch"}]
 }
 
 project: contexts: Mixer: aggregates: MixBus: {
@@ -54,6 +55,7 @@ project: contexts: Mixer: domainServices: {
 	MixEngine: {
 		purpose: "one full mix pass: render strips, collect send taps into aux buses, process aux inserts, sum into the master bus, process master inserts and the limiter"
 		uses: ["aggregate.Mixer.ChannelStrip", "aggregate.Mixer.MixBus", "domainService.Effects.ChainRenderer"]
+		contributesTo: [{capability: "capability.mix_to_stereo", contribution: "coordinates the complete strip-to-aux-to-master signal path and final limiting"}]
 	}
 }
 

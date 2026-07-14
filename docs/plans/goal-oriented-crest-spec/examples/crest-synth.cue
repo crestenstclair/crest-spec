@@ -30,7 +30,7 @@ project: {
 
 	actors: {
 		performer: {
-			description: "a musician playing notes and controlling patches in real time"
+			description: "a musician playing notes from external MIDI hardware"
 		}
 		sound_designer: {
 			description: "a user editing voices, modulation, mixer state, and presets"
@@ -38,21 +38,23 @@ project: {
 	}
 
 	nonGoals: {
-		daw_plugin:       "VST/AU plugin hosting is excluded from this project"
+		daw_plugin:       "CLAP, VST3, AU, and other DAW plug-in formats are excluded from this standalone instrument"
 		cloud_sync:       "Preset and session cloud synchronization is excluded"
 		mobile_interface: "Phone and tablet interfaces are excluded"
+		onscreen_keyboard: "The editor changes parameters but does not trigger notes; performance comes from external MIDI"
+		midi_file_performance: "MIDI-file playback is verification input, not the product performance workflow"
 	}
 
 	requirements: {
 		audible_output: {
 			kind:         "functional"
-			description:  "A triggered note produces audible, non-clipping stereo output"
+			description:  "A note received from external MIDI produces audible, non-clipping stereo output"
 			goals:        ["goal.play_an_instrument"]
 			capabilities: ["capability.render_audible_polyphony"]
 		}
 		gamepad_parity: {
 			kind:         "functional"
-			description:  "Every editing and performance action available in the GUI is reachable by gamepad"
+			description:  "Every GUI editing action is reachable by gamepad; the GUI does not originate performance notes"
 			goals:        ["goal.operate_from_steam_deck"]
 			capabilities: ["capability.navigate_by_gamepad"]
 		}
@@ -72,7 +74,7 @@ project: {
 
 	goals: {
 		play_an_instrument: {
-			description: "A performer can trigger expressive polyphonic notes and hear safe stereo output"
+			description: "A performer can play expressive polyphonic notes from external MIDI and hear safe stereo output"
 			priority:    "required"
 			actors:      ["actor.performer"]
 			dependsOn:   []
@@ -116,7 +118,7 @@ project: {
 					description: "A note-on for A440 renders one second of audible, non-clipping output"
 					actor:       "actor.performer"
 					steps: [
-						{action: "trigger A4 with non-zero velocity", observes: "a voice becomes active"},
+						{action: "send A4 with non-zero velocity from external MIDI", observes: "the normalized event activates a voice"},
 						{action: "render one second", observes: "measured peak is greater than 0.1 and at most 1.0"},
 					]
 					evidence: ["evidence.audible_tone"]
@@ -380,8 +382,13 @@ project: adapters: {
 }
 
 project: contexts: Shell: {
-	purpose: "ports for audio, GUI, and gamepad boundaries"
+	purpose: "ports for external MIDI performance, audio output, GUI rendering, and gamepad editing"
 	ports: {
+		MidiInput: {
+			direction: "inbound"
+			contract: {connect: "(onEvent: MidiCallback) -> result<Connection, MidiError>"}
+			contributesTo: [{capability: "capability.render_audible_polyphony", contribution: "defines external performance events entering the engine"}]
+		}
 		AudioOutput: {
 			direction: "outbound"
 			contract: {open: "(callback: RenderCallback) -> result<Stream, AudioError>"}
@@ -401,6 +408,13 @@ project: contexts: Shell: {
 }
 
 project: adapters: {
+	MidirMidiInput: {
+		implements: "port.Shell.MidiInput"
+		layer:      "infrastructure"
+		profile:    {kind: "device_input", device: "external MIDI controller"}
+		meta:       {framework: "midir"}
+		contributesTo: [{capability: "capability.render_audible_polyphony", contribution: "normalizes MIDI hardware events for the accepted voice engine"}]
+	}
 	CpalAudioOutput: {
 		implements: "port.Shell.AudioOutput"
 		layer:      "infrastructure"

@@ -13,6 +13,7 @@ project: contexts: Preset: valueObjects: {
 	Preset: {
 		state: {id: "PresetId", meta: "PresetMetadata", version: "u32"}
 		description: "a versioned snapshot of one patch's complete configuration (voice, sample, mod, mixer, sends, inserts)"
+		contributesTo: [{capability: "capability.save_and_restore_sound_library", contribution: "defines the versioned representation of one complete patch"}]
 	}
 }
 
@@ -47,6 +48,7 @@ project: contexts: Preset: aggregates: Session: {
 	invariants: [
 		"restoring a session replaces all state atomically — a failed restore leaves prior state untouched",
 	]
+	contributesTo: [{capability: "capability.save_and_restore_sound_library", contribution: "owns atomic replacement of the complete instrument state"}]
 }
 
 project: contexts: Preset: ports: {
@@ -74,6 +76,7 @@ project: contexts: Preset: applicationServices: {
 	SessionManager: {
 		purpose: "save, load, list, and delete full sessions"
 		uses: ["aggregate.Preset.Session", "port.Preset.PresetStorage"]
+		contributesTo: [{capability: "capability.save_and_restore_sound_library", contribution: "coordinates complete-session persistence and restore"}]
 	}
 }
 

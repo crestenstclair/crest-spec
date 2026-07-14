@@ -17,7 +17,7 @@ It deliberately does not add generic workflow, state-machine, screen, endpoint, 
 - `Voice` is the stateful voice-lifecycle state machine because that behavior belongs to an aggregate.
 - `SessionManager` and `MixerController` are workflows because use-case coordination belongs to application services.
 - `MidiEvent` is the event schema because shared messages belong to value objects and port contracts.
-- `EguiRenderer`, `GilrsGamepadInput`, and `CpalAudioOutput` remain adapters; profiles only describe their UI/device boundary mechanics.
+- `MidirMidiInput`, `EguiRenderer`, `GilrsGamepadInput`, and `CpalAudioOutput` remain adapters; profiles only describe their MIDI/UI/device boundary mechanics.
 - `ToneTestMain` remains an asset; its verification-harness profile describes why the generated binary exists.
 
 ## Expected runtime trace
@@ -31,6 +31,8 @@ goal.play_an_instrument
   -> aggregate.Engine.Voice
   -> domainService.Engine.VoiceAllocator
   -> domainService.Engine.EngineRenderer
+  -> port.Shell.MidiInput
+  -> adapter.MidirMidiInput
   -> port.Shell.AudioOutput
   -> adapter.CpalAudioOutput
   -> asset.ToneTestMain
@@ -44,4 +46,3 @@ Calling `spec/context` for one of those resources creates the context manifest a
 ## Evaluation use
 
 After a historical run has complete context, execution, candidate, validation, and evidence provenance, WS7 may turn the attempt into an immutable SQLite evaluation case. The CUE sample does not declare evaluation runs because evaluation configuration and results are operational state, not intended project architecture.
-

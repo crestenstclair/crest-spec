@@ -30,6 +30,10 @@ project: contexts: Sample: aggregates: SampleSet: {
 	invariants: [
 		"resolving a note returns every zone whose key range and velocity range both match",
 	]
+	contributesTo: [
+		{capability: "capability.render_expressive_sound", contribution: "defines the zoned sample source rendered by sample-based patches"},
+		{capability: "capability.configure_complete_patch", contribution: "supplies the optional sample-set configuration owned by a complete patch"},
+	]
 }
 
 project: contexts: Sample: ports: {
@@ -55,6 +59,7 @@ project: contexts: Sample: domainServices: {
 	SamplePlayer: {
 		purpose: "plays a zone's sample at the correct pitch with the configured interpolation and loop mode"
 		uses: ["aggregate.Sample.SampleSet", "domainService.Sample.ZoneResolver"]
+		contributesTo: [{capability: "capability.render_expressive_sound", contribution: "renders matched sample zones at the requested pitch and velocity"}]
 	}
 }
 

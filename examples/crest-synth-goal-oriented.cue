@@ -5,24 +5,25 @@ package crestsynth
 // goals do not replace aggregates, services, ports, adapters, or assets.
 project: {
 	name:    "crest-synth-goal-oriented"
-	mission: "Let a performer play and edit a real-time software synthesizer from a desktop or Steam Deck."
+	mission: "Provide a standalone, gamepad-friendly MIDI synthesizer for Steam Deck and desktop, with external MIDI performance and a hard real-time audio core."
 
 	actors: {
-		performer: {description: "a musician performing and editing sounds"}
+		performer: {description: "a musician playing sounds from external MIDI hardware"}
+		sound_designer: {description: "a musician editing and recalling playable patches"}
 	}
 
 	goals: {
 		play_instrument: {
-			description: "A performer can trigger a note and hear safe stereo output"
+			description: "A performer can play a note from external MIDI and hear safe stereo output"
 			priority: "required"
 			actors: ["actor.performer"]
 			capabilities: ["capability.render_note", "capability.deliver_audio"]
 			requirements: ["requirement.realtime_safe"]
 		}
 		edit_by_gamepad: {
-			description: "A performer can edit a patch without keyboard or mouse"
+			description: "A sound designer can edit a patch with keyboard or gamepad and without mouse or touch"
 			priority: "required"
-			actors: ["actor.performer"]
+			actors: ["actor.sound_designer"]
 			dependsOn: ["goal.play_instrument"]
 			capabilities: ["capability.navigate_gamepad"]
 			requirements: ["requirement.input_parity"]
@@ -31,13 +32,13 @@ project: {
 
 	capabilities: {
 		render_note: {
-			description: "Allocate and render a polyphonic voice"
+			description: "Normalize external MIDI, allocate a polyphonic voice, and render its output"
 			goals: ["goal.play_instrument"]
 			acceptance: audible_a4: {
 				description: "A4 produces a non-clipping signal"
 				actor: "actor.performer"
 				steps: [
-					{action: "press A4", observes: "a voice becomes active"},
+					{action: "send A4 from external MIDI hardware", observes: "the normalized event activates a voice"},
 					{action: "render one second", observes: "stereo peak is audible and at most 1.0"},
 				]
 				evidence: ["evidence.audible_witness"]
@@ -56,8 +57,8 @@ project: {
 			description: "Map gamepad actions to every patch editor operation"
 			goals: ["goal.edit_by_gamepad"]
 			acceptance: edit_oscillator: {
-				description: "A gamepad opens the editor and changes the oscillator"
-				actor: "actor.performer"
+				description: "A gamepad opens the editor and changes the oscillator without triggering a performance note"
+				actor: "actor.sound_designer"
 				steps: [
 					{action: "open the editor by gamepad", observes: "the editor receives focus"},
 					{action: "change waveform", observes: "patch state and view state update"},
@@ -76,7 +77,7 @@ project: {
 		}
 		input_parity: {
 			kind: "functional"
-			description: "Every pointer editing action has a gamepad equivalent"
+			description: "Every editing action is reachable by keyboard and gamepad without mouse or touch"
 			goals: ["goal.edit_by_gamepad"]
 			capabilities: ["capability.navigate_gamepad"]
 		}
@@ -90,6 +91,9 @@ project: {
 
 	nonGoals: {
 		cloud_presets: "Cloud preset synchronization is intentionally excluded"
+		plugin_formats: "CLAP, VST3, AU, and other DAW plug-in formats are excluded"
+		onscreen_keyboard: "The editor changes parameters but does not trigger notes; performance comes from external MIDI"
+		midi_file_performance: "MIDI-file playback is a verification input, not the product performance workflow"
 	}
 	completion: {
 		requiredGoals: ["goal.play_instrument", "goal.edit_by_gamepad"]
@@ -128,8 +132,13 @@ project: {
 		}
 
 		Shell: {
-			purpose: "inbound controls and outbound presentation/device boundaries"
+			purpose: "external MIDI performance, editor controls, and outbound presentation/audio boundaries"
 			ports: {
+				MidiInput: {
+					direction: "inbound"
+					contract: {connect: "(onEvent: MidiCallback) -> Connection"}
+					contributesTo: [{capability: "capability.render_note", contribution: "owns the external performance-input contract"}]
+				}
 				AudioOutput: {
 					direction: "outbound"
 					contract: {open: "(callback: RenderCallback) -> Stream"}
@@ -156,6 +165,12 @@ project: {
 	}
 
 	adapters: {
+		MidirMidi: {
+			implements: "port.Shell.MidiInput"
+			layer: "infrastructure"
+			profile: {kind: "device_input", device: "external MIDI controller"}
+			contributesTo: [{capability: "capability.render_note", contribution: "normalizes external MIDI events entering the voice engine"}]
+		}
 		CpalAudio: {
 			implements: "port.Shell.AudioOutput"
 			layer: "infrastructure"
@@ -191,9 +206,9 @@ project: {
 		}
 		ToneWitness: {
 			kind: "rust-bin"
-			description: "render A4 and emit a measured observation"
+			description: "inject a normalized external-MIDI A4 event, render it, and emit a measured observation"
 			profile: {kind: "verification_harness", witness: "evidence.audible_witness"}
-			targets: ["domainService.Engine.VoiceMixer", "adapter.CpalAudio"]
+			targets: ["adapter.MidirMidi", "domainService.Engine.VoiceMixer", "adapter.CpalAudio"]
 			contributesTo: [{capability: "capability.render_note", contribution: "provides executable end-to-end acceptance evidence"}]
 		}
 		SteamDeckGuide: {
