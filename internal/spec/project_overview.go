@@ -13,6 +13,7 @@ type ProjectOverviewResult struct {
 	Blockers       []store.CompletionBlocker           `json:"blockers"`
 	ProjectHistory []store.StatusTransition            `json:"project_history"`
 	GoalHistory    map[string][]store.StatusTransition `json:"goal_history"`
+	Contributions  []store.PersistedContribution       `json:"contributions"`
 }
 
 // ProjectOverview reconciles current declarations, then reads the canonical
@@ -26,6 +27,11 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 	if err != nil {
 		return nil, fmt.Errorf("project intent: %w", err)
 	}
+	registry, err := cuepkg.NewRegistry(project)
+	if err != nil {
+		return nil, fmt.Errorf("build project registry: %w", err)
+	}
+	snapshot.ResourceTrace = resourceTraceSnapshot(registry)
 	if err := s.store.ReconcileProjectIntent(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
 	}
@@ -41,7 +47,11 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 	if err != nil {
 		return nil, err
 	}
-	result := &ProjectOverviewResult{Project: intent, Blockers: blockers, ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition)}
+	contributions, err := s.store.ListResourceContributions(ctx, project.Name)
+	if err != nil {
+		return nil, err
+	}
+	result := &ProjectOverviewResult{Project: intent, Blockers: blockers, ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition), Contributions: contributions}
 	for _, goal := range intent.Goals {
 		history, err := s.store.ListGoalStatusHistory(ctx, goal.ID)
 		if err != nil {

@@ -23,6 +23,7 @@ type ProjectIntentSnapshot struct {
 	Evidence      []IntentEvidence
 	NonGoals      []IntentNonGoal
 	RequiredGoals []string
+	ResourceTrace []IntentResourceTrace
 }
 
 type IntentActor struct {
@@ -274,6 +275,9 @@ func (s *Store) ReconcileProjectIntent(ctx context.Context, snapshot ProjectInte
 		if err = q.InsertProjectRequiredGoal(ctx, db.InsertProjectRequiredGoalParams{ProjectName: project, GoalID: goalID, Ordinal: int64(ordinal)}); err != nil {
 			return wrap("link required goal "+goalID, err)
 		}
+	}
+	if err = reconcileResourceTrace(ctx, q, snapshot, timestamp); err != nil {
+		return wrap("reconcile resource traceability", err)
 	}
 
 	if err = tx.Commit(); err != nil {

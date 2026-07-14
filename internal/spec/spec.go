@@ -22,6 +22,8 @@ type specStore interface {
 	ListGoalStatusHistory(ctx context.Context, goalID string) ([]store.StatusTransition, error)
 	ListProjectStatusHistory(ctx context.Context, projectName string) ([]store.StatusTransition, error)
 	ListCompletionBlockers(ctx context.Context, projectName string) ([]store.CompletionBlocker, error)
+	ListResourceContributions(ctx context.Context, projectName string) ([]store.PersistedContribution, error)
+	ListContributionsByResource(ctx context.Context, resourceID string) ([]store.PersistedContribution, error)
 	GetResource(id string) (*store.Resource, error)
 	ListResources() ([]store.Resource, error)
 	SetResource(r store.Resource) error

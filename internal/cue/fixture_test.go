@@ -49,6 +49,20 @@ func TestFixtureLoadsAndResolves(t *testing.T) {
 	require.NoError(t, err, "every cross-reference in the fixture must resolve")
 }
 
+func TestGoalOrientedCrestSynthExampleLoadsAndTraces(t *testing.T) {
+	dir := filepath.Join(filepath.Dir(fixtureSpecDir()), "..", "..", "examples")
+	project, err := Load(dir)
+	require.NoError(t, err)
+	registry, err := NewRegistry(project)
+	require.NoError(t, err)
+	require.Empty(t, registry.MissingCapabilities)
+	require.Contains(t, registry.ResourcesForGoal("goal.play_instrument"), "aggregate.Engine.Voice")
+	require.Contains(t, registry.ResourcesForGoal("goal.edit_by_gamepad"), "adapter.EguiPatchView")
+	require.Equal(t, "outbound", project.Contexts["Shell"].Ports["AudioOutput"].Direction)
+	require.Equal(t, "device_output", project.Adapters["CpalAudio"].Profile.Kind)
+	require.Equal(t, "verification_harness", project.Assets["ToneWitness"].Profile.Kind)
+}
+
 // TestPhasesLoadAndResolve: phases/phase-N/ are the ORIGINAL phased spec,
 // hydrated — each directory holds base.cue + the cumulative phase files +
 // the winning override per asset, resolved (what the retired

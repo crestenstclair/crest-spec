@@ -106,6 +106,12 @@ func (s *stubStore) ListProjectStatusHistory(context.Context, string) ([]store.S
 func (s *stubStore) ListCompletionBlockers(context.Context, string) ([]store.CompletionBlocker, error) {
 	return nil, nil
 }
+func (s *stubStore) ListResourceContributions(context.Context, string) ([]store.PersistedContribution, error) {
+	return nil, nil
+}
+func (s *stubStore) ListContributionsByResource(context.Context, string) ([]store.PersistedContribution, error) {
+	return nil, nil
+}
 
 func (s *stubStore) GetResource(id string) (*store.Resource, error) { return nil, nil }
 func (s *stubStore) ListResources() ([]store.Resource, error)       { return nil, s.listResourcesErr }

@@ -85,3 +85,34 @@ func sortedIntentKeys[T any](values map[string]T) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+func resourceTraceSnapshot(registry *cuepkg.Registry) []store.IntentResourceTrace {
+	var traces []store.IntentResourceTrace
+	for _, resourceID := range sortedIntentKeys(registry.Resources) {
+		resource := registry.Resources[resourceID]
+		trace := store.IntentResourceTrace{ResourceID: resource.ID, ResourceKind: resource.Kind}
+		for _, contribution := range resource.Contributions {
+			trace.Contributions = append(trace.Contributions, store.IntentContribution{CapabilityID: contribution.Capability, Description: contribution.Contribution})
+		}
+		switch declaration := resource.Declaration.(type) {
+		case cuepkg.Port:
+			if declaration.Direction != "" {
+				trace.Boundary = &store.IntentBoundaryProfile{Direction: declaration.Direction}
+			}
+		case cuepkg.Adapter:
+			if declaration.Profile.Kind != "" {
+				profile := declaration.Profile
+				trace.Boundary = &store.IntentBoundaryProfile{Kind: profile.Kind, Method: profile.Method, Path: profile.Path, Protocol: profile.Protocol, Topology: profile.Topology, Device: profile.Device, Medium: profile.Medium, System: profile.System, Topic: profile.Topic, Trigger: profile.Trigger, Surfaces: append([]string(nil), profile.Surfaces...), Accessibility: append([]string(nil), profile.Accessibility...)}
+			}
+		case cuepkg.Asset:
+			if declaration.Profile.Kind != "" {
+				profile := declaration.Profile
+				trace.Asset = &store.IntentAssetProfile{Kind: profile.Kind, Ecosystem: profile.Ecosystem, Witness: profile.Witness, Source: profile.Source, SecretPolicy: profile.SecretPolicy, FailurePolicy: profile.FailurePolicy, Constraint: profile.Constraint, Audience: profile.Audience, Predecessor: profile.Predecessor, Compatibility: profile.Compatibility, Rollback: profile.Rollback, Signals: append([]string(nil), profile.Signals...), RequiredExamples: append([]string(nil), profile.RequiredExamples...)}
+			}
+		}
+		if len(trace.Contributions) > 0 || trace.Boundary != nil || trace.Asset != nil {
+			traces = append(traces, trace)
+		}
+	}
+	return traces
+}

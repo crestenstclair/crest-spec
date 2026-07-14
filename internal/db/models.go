@@ -338,6 +338,70 @@ type Resource struct {
 	SettledAt       string
 }
 
+type ResourceAssetProfile struct {
+	ResourceID     string
+	ProjectName    string
+	ProfileKind    string
+	Ecosystem      string
+	Witness        string
+	Source         string
+	SecretPolicy   string
+	FailurePolicy  string
+	ConstraintText string
+	Audience       string
+	Predecessor    string
+	Compatibility  string
+	Rollback       string
+	SpecHash       string
+	Active         int64
+	UpdatedAt      string
+}
+
+type ResourceAssetProfileItem struct {
+	ResourceID string
+	ItemKind   string
+	Ordinal    int64
+	Value      string
+}
+
+type ResourceBoundaryProfile struct {
+	ResourceID   string
+	ProjectName  string
+	ResourceKind string
+	Direction    string
+	ProfileKind  string
+	Method       string
+	Path         string
+	Protocol     string
+	Topology     string
+	Device       string
+	Medium       string
+	SystemName   string
+	Topic        string
+	TriggerName  string
+	SpecHash     string
+	Active       int64
+	UpdatedAt    string
+}
+
+type ResourceBoundaryProfileItem struct {
+	ResourceID string
+	ItemKind   string
+	Ordinal    int64
+	Value      string
+}
+
+type ResourceCapabilityContribution struct {
+	ProjectName  string
+	ResourceID   string
+	ResourceKind string
+	CapabilityID string
+	Contribution string
+	SpecHash     string
+	Active       int64
+	UpdatedAt    string
+}
+
 type SessionResource struct {
 	SessionID    string
 	ResourceID   string

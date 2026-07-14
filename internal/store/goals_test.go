@@ -27,6 +27,15 @@ func TestReconcileProjectIntentRoundTripAndTombstones(t *testing.T) {
 	require.Equal(t, []string{"goal.play_notes"}, got.Capabilities[1].Goals)
 	require.Equal(t, []IntentAcceptanceStep{{Action: "Press a key", Observes: "A note sounds"}}, got.Acceptance[0].Steps)
 	require.Equal(t, []string{"evidence.note_witness"}, got.Acceptance[0].Evidence)
+	contributions, err := st.ListResourceContributions(context.Background(), snapshot.ProjectName)
+	require.NoError(t, err)
+	require.Len(t, contributions, 2)
+	require.Equal(t, "adapter.AudioOutput", contributions[0].ResourceID)
+
+	profileRows, err := st.ReadOnlyQuery("SELECT profile_kind, device FROM resource_boundary_profiles WHERE resource_id = 'adapter.AudioOutput'")
+	require.NoError(t, err)
+	require.Equal(t, "device_output", profileRows[0]["profile_kind"])
+	require.Equal(t, "system audio", profileRows[0]["device"])
 
 	// A subsequent spec removes an optional goal. The current projection omits
 	// it, while its stable row remains tombstoned for historical references.
@@ -101,5 +110,10 @@ func testProjectIntentSnapshot() ProjectIntentSnapshot {
 			{ID: "non_goal.cloud_hosting", Description: "Cloud hosting is excluded"},
 		},
 		RequiredGoals: []string{"goal.play_notes"},
+		ResourceTrace: []IntentResourceTrace{
+			{ResourceID: "aggregate.Engine.Voice", ResourceKind: "aggregate", Contributions: []IntentContribution{{CapabilityID: "capability.play", Description: "owns the sounding voice lifecycle"}}},
+			{ResourceID: "adapter.AudioOutput", ResourceKind: "adapter", Contributions: []IntentContribution{{CapabilityID: "capability.play", Description: "delivers samples to the device"}}, Boundary: &IntentBoundaryProfile{Kind: "device_output", Device: "system audio"}},
+			{ResourceID: "asset.Guide", ResourceKind: "asset", Asset: &IntentAssetProfile{Kind: "documentation", Audience: "musicians", RequiredExamples: []string{"play a note"}}},
+		},
 	}
 }
