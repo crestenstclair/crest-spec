@@ -53,6 +53,7 @@ func cmdDashboard(flags cliFlags) {
 
 	// API routes
 	mux.HandleFunc("GET /api/status", d.handleStatus)
+	mux.HandleFunc("GET /api/v1/project", d.handleProjectOverview)
 	mux.HandleFunc("GET /api/plan", d.handlePlan)
 	mux.HandleFunc("GET /api/resources", d.handleResources)
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
@@ -173,6 +174,15 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.writeJSON(w, resp)
+}
+
+func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request) {
+	overview, err := d.spec.ProjectOverview(r.Context())
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, overview)
 }
 
 func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {

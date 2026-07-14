@@ -85,6 +85,7 @@ type specHandler interface {
 	Amend(ctx context.Context, sessionID, resourceID string) error
 	Skip(ctx context.Context, sessionID, resourceID, reason string) error
 	Status(ctx context.Context) (*specmod.StatusResult, error)
+	ProjectOverview(ctx context.Context) (*specmod.ProjectOverviewResult, error)
 	Log(ctx context.Context, limit int) ([]storemod.Apply, error)
 	History(ctx context.Context, resourceID string, limit int) ([]storemod.Generation, error)
 	GraphInfo(ctx context.Context) (*specmod.GraphResult, error)

@@ -35,7 +35,9 @@ UPDATE project_goals SET active = 0, updated_at = ? WHERE project_name = ?;
 INSERT INTO project_goals (
     id, project_name, description, priority, status, status_reason,
     spec_hash, active, created_at, updated_at
-) VALUES (?, ?, ?, ?, 'declared', '', ?, 1, ?, ?)
+) VALUES (?, ?, ?, ?, 'declared',
+    'goal is declared but no active implementation plan targets it',
+    ?, 1, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     project_name = excluded.project_name,
     description = excluded.description,
@@ -46,6 +48,20 @@ ON CONFLICT(id) DO UPDATE SET
 
 -- name: GetProjectGoal :one
 SELECT * FROM project_goals WHERE id = ?;
+
+-- name: UpdateProjectGoalStatus :exec
+UPDATE project_goals
+SET status = ?, status_reason = ?, updated_at = ?
+WHERE id = ? AND active = 1;
+
+-- name: InsertGoalStatusHistory :exec
+INSERT INTO goal_status_history (
+    id, goal_id, from_status, to_status, reason,
+    source_type, source_id, session_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListGoalStatusHistory :many
+SELECT * FROM goal_status_history WHERE goal_id = ? ORDER BY created_at, id;
 
 -- name: ListProjectGoals :many
 SELECT * FROM project_goals
@@ -227,6 +243,25 @@ ORDER BY capability_goals.capability_id, capability_goals.goal_id;
 
 -- name: ListProjectRequiredGoals :many
 SELECT * FROM project_required_goals WHERE project_name = ? ORDER BY ordinal, goal_id;
+
+-- name: UpdateProjectCompletionStatus :exec
+UPDATE project_state
+SET completion_status = ?, completion_reason = ?, updated_at = ?
+WHERE project_name = ? AND active = 1;
+
+-- name: InsertProjectStatusHistory :exec
+INSERT INTO project_status_history (
+    id, project_name, from_status, to_status, reason,
+    source_type, source_id, session_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListProjectStatusHistory :many
+SELECT * FROM project_status_history WHERE project_name = ? ORDER BY created_at, id;
+
+-- name: ListCompletionBlockers :many
+SELECT * FROM completion_blockers
+WHERE project_name = ? AND resolved = 0
+ORDER BY goal_id, category, created_at, id;
 
 -- name: ListGoalActors :many
 SELECT goal_actors.* FROM goal_actors

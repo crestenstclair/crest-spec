@@ -18,6 +18,10 @@ import (
 
 type specStore interface {
 	ReconcileProjectIntent(ctx context.Context, snapshot store.ProjectIntentSnapshot) error
+	GetProjectIntent(ctx context.Context, projectName string) (*store.ProjectIntentState, error)
+	ListGoalStatusHistory(ctx context.Context, goalID string) ([]store.StatusTransition, error)
+	ListProjectStatusHistory(ctx context.Context, projectName string) ([]store.StatusTransition, error)
+	ListCompletionBlockers(ctx context.Context, projectName string) ([]store.CompletionBlocker, error)
 	GetResource(id string) (*store.Resource, error)
 	ListResources() ([]store.Resource, error)
 	SetResource(r store.Resource) error

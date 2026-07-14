@@ -72,6 +72,9 @@ func (f *fakeSpec) Skip(ctx context.Context, sessionID, resourceID, reason strin
 func (f *fakeSpec) Status(ctx context.Context) (*specmod.StatusResult, error) {
 	return &specmod.StatusResult{}, nil
 }
+func (f *fakeSpec) ProjectOverview(ctx context.Context) (*specmod.ProjectOverviewResult, error) {
+	return &specmod.ProjectOverviewResult{}, nil
+}
 func (f *fakeSpec) Log(ctx context.Context, limit int) ([]storemod.Apply, error) { return nil, nil }
 func (f *fakeSpec) History(ctx context.Context, resourceID string, limit int) ([]storemod.Generation, error) {
 	return nil, nil
@@ -250,6 +253,7 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	for _, kept := range []string{
 		"spec/plan", "spec/begin", "spec/next", "spec/context",
 		"spec/commit", "spec/finish", "spec/evolve", "spec/sql",
+		"spec/project_overview",
 		"spec/unlock", "spec/apply_amendments", "spec/list_amendments",
 		"spec/graduate_amendment",
 	} {

@@ -303,6 +303,7 @@ type ProjectState struct {
 	Active           int64
 	CreatedAt        string
 	UpdatedAt        string
+	CompletionReason string
 }
 
 type ProjectStatusHistory struct {

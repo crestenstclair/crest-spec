@@ -223,7 +223,7 @@ func (q *Queries) GetProjectGoal(ctx context.Context, id string) (ProjectGoal, e
 }
 
 const getProjectState = `-- name: GetProjectState :one
-SELECT project_name, mission, spec_hash, completion_status, active, created_at, updated_at FROM project_state WHERE project_name = ?
+SELECT project_name, mission, spec_hash, completion_status, active, created_at, updated_at, completion_reason FROM project_state WHERE project_name = ?
 `
 
 func (q *Queries) GetProjectState(ctx context.Context, projectName string) (ProjectState, error) {
@@ -237,6 +237,7 @@ func (q *Queries) GetProjectState(ctx context.Context, projectName string) (Proj
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CompletionReason,
 	)
 	return i, err
 }
@@ -318,6 +319,40 @@ func (q *Queries) InsertGoalDependency(ctx context.Context, arg InsertGoalDepend
 	return err
 }
 
+const insertGoalStatusHistory = `-- name: InsertGoalStatusHistory :exec
+INSERT INTO goal_status_history (
+    id, goal_id, from_status, to_status, reason,
+    source_type, source_id, session_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertGoalStatusHistoryParams struct {
+	ID         string
+	GoalID     string
+	FromStatus string
+	ToStatus   string
+	Reason     string
+	SourceType string
+	SourceID   string
+	SessionID  *string
+	CreatedAt  string
+}
+
+func (q *Queries) InsertGoalStatusHistory(ctx context.Context, arg InsertGoalStatusHistoryParams) error {
+	_, err := q.db.ExecContext(ctx, insertGoalStatusHistory,
+		arg.ID,
+		arg.GoalID,
+		arg.FromStatus,
+		arg.ToStatus,
+		arg.Reason,
+		arg.SourceType,
+		arg.SourceID,
+		arg.SessionID,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertProjectRequiredGoal = `-- name: InsertProjectRequiredGoal :exec
 INSERT INTO project_required_goals (project_name, goal_id, ordinal) VALUES (?, ?, ?)
 `
@@ -330,6 +365,40 @@ type InsertProjectRequiredGoalParams struct {
 
 func (q *Queries) InsertProjectRequiredGoal(ctx context.Context, arg InsertProjectRequiredGoalParams) error {
 	_, err := q.db.ExecContext(ctx, insertProjectRequiredGoal, arg.ProjectName, arg.GoalID, arg.Ordinal)
+	return err
+}
+
+const insertProjectStatusHistory = `-- name: InsertProjectStatusHistory :exec
+INSERT INTO project_status_history (
+    id, project_name, from_status, to_status, reason,
+    source_type, source_id, session_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertProjectStatusHistoryParams struct {
+	ID          string
+	ProjectName string
+	FromStatus  string
+	ToStatus    string
+	Reason      string
+	SourceType  string
+	SourceID    string
+	SessionID   *string
+	CreatedAt   string
+}
+
+func (q *Queries) InsertProjectStatusHistory(ctx context.Context, arg InsertProjectStatusHistoryParams) error {
+	_, err := q.db.ExecContext(ctx, insertProjectStatusHistory,
+		arg.ID,
+		arg.ProjectName,
+		arg.FromStatus,
+		arg.ToStatus,
+		arg.Reason,
+		arg.SourceType,
+		arg.SourceID,
+		arg.SessionID,
+		arg.CreatedAt,
+	)
 	return err
 }
 
@@ -497,6 +566,47 @@ func (q *Queries) ListCapabilityGoals(ctx context.Context, projectName string) (
 	return items, nil
 }
 
+const listCompletionBlockers = `-- name: ListCompletionBlockers :many
+SELECT id, project_name, goal_id, category, reason, source_type, source_id, resolved, resolution, created_at, resolved_at FROM completion_blockers
+WHERE project_name = ? AND resolved = 0
+ORDER BY goal_id, category, created_at, id
+`
+
+func (q *Queries) ListCompletionBlockers(ctx context.Context, projectName string) ([]CompletionBlocker, error) {
+	rows, err := q.db.QueryContext(ctx, listCompletionBlockers, projectName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CompletionBlocker
+	for rows.Next() {
+		var i CompletionBlocker
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectName,
+			&i.GoalID,
+			&i.Category,
+			&i.Reason,
+			&i.SourceType,
+			&i.SourceID,
+			&i.Resolved,
+			&i.Resolution,
+			&i.CreatedAt,
+			&i.ResolvedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvidenceRequirements = `-- name: ListEvidenceRequirements :many
 SELECT id, project_name, kind, description, spec_hash, active, updated_at FROM evidence_requirements
 WHERE project_name = ? AND active = 1 ORDER BY id
@@ -580,6 +690,43 @@ func (q *Queries) ListGoalDependencies(ctx context.Context, projectName string) 
 	for rows.Next() {
 		var i GoalDependency
 		if err := rows.Scan(&i.GoalID, &i.DependencyGoalID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGoalStatusHistory = `-- name: ListGoalStatusHistory :many
+SELECT id, goal_id, from_status, to_status, reason, source_type, source_id, session_id, created_at FROM goal_status_history WHERE goal_id = ? ORDER BY created_at, id
+`
+
+func (q *Queries) ListGoalStatusHistory(ctx context.Context, goalID string) ([]GoalStatusHistory, error) {
+	rows, err := q.db.QueryContext(ctx, listGoalStatusHistory, goalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GoalStatusHistory
+	for rows.Next() {
+		var i GoalStatusHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.GoalID,
+			&i.FromStatus,
+			&i.ToStatus,
+			&i.Reason,
+			&i.SourceType,
+			&i.SourceID,
+			&i.SessionID,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -801,6 +948,43 @@ func (q *Queries) ListProjectRequirements(ctx context.Context, projectName strin
 	return items, nil
 }
 
+const listProjectStatusHistory = `-- name: ListProjectStatusHistory :many
+SELECT id, project_name, from_status, to_status, reason, source_type, source_id, session_id, created_at FROM project_status_history WHERE project_name = ? ORDER BY created_at, id
+`
+
+func (q *Queries) ListProjectStatusHistory(ctx context.Context, projectName string) ([]ProjectStatusHistory, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectStatusHistory, projectName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectStatusHistory
+	for rows.Next() {
+		var i ProjectStatusHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectName,
+			&i.FromStatus,
+			&i.ToStatus,
+			&i.Reason,
+			&i.SourceType,
+			&i.SourceID,
+			&i.SessionID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRequirementCapabilities = `-- name: ListRequirementCapabilities :many
 SELECT requirement_capabilities.requirement_id, requirement_capabilities.capability_id FROM requirement_capabilities
 JOIN project_requirements ON project_requirements.id = requirement_capabilities.requirement_id
@@ -859,6 +1043,52 @@ func (q *Queries) ListRequirementGoals(ctx context.Context, projectName string) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateProjectCompletionStatus = `-- name: UpdateProjectCompletionStatus :exec
+UPDATE project_state
+SET completion_status = ?, completion_reason = ?, updated_at = ?
+WHERE project_name = ? AND active = 1
+`
+
+type UpdateProjectCompletionStatusParams struct {
+	CompletionStatus string
+	CompletionReason string
+	UpdatedAt        string
+	ProjectName      string
+}
+
+func (q *Queries) UpdateProjectCompletionStatus(ctx context.Context, arg UpdateProjectCompletionStatusParams) error {
+	_, err := q.db.ExecContext(ctx, updateProjectCompletionStatus,
+		arg.CompletionStatus,
+		arg.CompletionReason,
+		arg.UpdatedAt,
+		arg.ProjectName,
+	)
+	return err
+}
+
+const updateProjectGoalStatus = `-- name: UpdateProjectGoalStatus :exec
+UPDATE project_goals
+SET status = ?, status_reason = ?, updated_at = ?
+WHERE id = ? AND active = 1
+`
+
+type UpdateProjectGoalStatusParams struct {
+	Status       string
+	StatusReason string
+	UpdatedAt    string
+	ID           string
+}
+
+func (q *Queries) UpdateProjectGoalStatus(ctx context.Context, arg UpdateProjectGoalStatusParams) error {
+	_, err := q.db.ExecContext(ctx, updateProjectGoalStatus,
+		arg.Status,
+		arg.StatusReason,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
 }
 
 const upsertAcceptanceScenario = `-- name: UpsertAcceptanceScenario :exec
@@ -995,7 +1225,9 @@ const upsertProjectGoal = `-- name: UpsertProjectGoal :exec
 INSERT INTO project_goals (
     id, project_name, description, priority, status, status_reason,
     spec_hash, active, created_at, updated_at
-) VALUES (?, ?, ?, ?, 'declared', '', ?, 1, ?, ?)
+) VALUES (?, ?, ?, ?, 'declared',
+    'goal is declared but no active implementation plan targets it',
+    ?, 1, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     project_name = excluded.project_name,
     description = excluded.description,

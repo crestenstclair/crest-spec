@@ -94,6 +94,18 @@ type stubStore struct {
 func (s *stubStore) ReconcileProjectIntent(context.Context, store.ProjectIntentSnapshot) error {
 	return nil
 }
+func (s *stubStore) GetProjectIntent(context.Context, string) (*store.ProjectIntentState, error) {
+	return nil, nil
+}
+func (s *stubStore) ListGoalStatusHistory(context.Context, string) ([]store.StatusTransition, error) {
+	return nil, nil
+}
+func (s *stubStore) ListProjectStatusHistory(context.Context, string) ([]store.StatusTransition, error) {
+	return nil, nil
+}
+func (s *stubStore) ListCompletionBlockers(context.Context, string) ([]store.CompletionBlocker, error) {
+	return nil, nil
+}
 
 func (s *stubStore) GetResource(id string) (*store.Resource, error) { return nil, nil }
 func (s *stubStore) ListResources() ([]store.Resource, error)       { return nil, s.listResourcesErr }

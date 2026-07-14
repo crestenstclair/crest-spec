@@ -86,6 +86,7 @@ type ProjectIntentState struct {
 	Mission          string
 	SpecHash         string
 	CompletionStatus string
+	CompletionReason string
 	Actors           []IntentActor
 	Goals            []PersistedGoal
 	Capabilities     []IntentCapability
@@ -349,7 +350,7 @@ func (s *Store) GetProjectIntent(ctx context.Context, projectName string) (*Proj
 		return nil, fmt.Errorf("list required goals: %w", err)
 	}
 
-	out := &ProjectIntentState{ProjectName: state.ProjectName, Mission: state.Mission, SpecHash: state.SpecHash, CompletionStatus: state.CompletionStatus}
+	out := &ProjectIntentState{ProjectName: state.ProjectName, Mission: state.Mission, SpecHash: state.SpecHash, CompletionStatus: state.CompletionStatus, CompletionReason: state.CompletionReason}
 	for _, actor := range actors {
 		out.Actors = append(out.Actors, IntentActor{ID: actor.ID, Description: actor.Description})
 	}
