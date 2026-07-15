@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +25,54 @@ func curatedEvaluationCase() CuratedEvaluationCase {
 		},
 		ExpectedOutcome: map[string]any{"accepted": true, "retries": 1},
 	}
+}
+
+func concurrentEvaluationStore(t *testing.T) *Store {
+	t.Helper()
+	st, err := New(filepath.Join(t.TempDir(), "evaluations.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	return st
+}
+
+func TestEvaluationCaseCreationConvergesUnderConcurrency(t *testing.T) {
+	st := concurrentEvaluationStore(t)
+	ctx := context.Background()
+	const workers = 8
+
+	start := make(chan struct{})
+	results := make(chan *EvaluationCase, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			created, err := st.CreateCuratedEvaluationCase(ctx, curatedEvaluationCase())
+			results <- created
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var identityID string
+	for created := range results {
+		require.NotNil(t, created)
+		if identityID == "" {
+			identityID = created.ID
+		}
+		assert.Equal(t, identityID, created.ID)
+	}
+	cases, err := st.ListEvaluationCases(ctx, workers)
+	require.NoError(t, err)
+	assert.Len(t, cases, 1)
 }
 
 func TestEvaluationCasesAreStableAndDatasetsSealImmutably(t *testing.T) {
@@ -56,10 +107,97 @@ func TestEvaluationCasesAreStableAndDatasetsSealImmutably(t *testing.T) {
 	assert.Equal(t, sealed.IdentityHash, resealed.IdentityHash)
 }
 
-func TestEvaluationConfigurationIdentityIsRedactedAndOrderIndependent(t *testing.T) {
-	st := testStore(t)
+func TestEvaluationDatasetMembershipUsesAtomicOrdinals(t *testing.T) {
+	st := concurrentEvaluationStore(t)
 	ctx := context.Background()
-	input := EvaluationConfiguration{
+	const workers = 8
+
+	dataset, err := st.CreateEvaluationDataset(ctx, "concurrent cases", "membership ordering")
+	require.NoError(t, err)
+	cases := make([]*EvaluationCase, 0, workers)
+	for index := range workers {
+		input := curatedEvaluationCase()
+		input.ResourceID = fmt.Sprintf("aggregate.Engine.Voice.%d", index)
+		created, createErr := st.CreateCuratedEvaluationCase(ctx, input)
+		require.NoError(t, createErr)
+		cases = append(cases, created)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for _, evaluationCase := range cases {
+		wg.Add(1)
+		go func(caseID string) {
+			defer wg.Done()
+			<-start
+			errs <- st.AddEvaluationDatasetCase(ctx, dataset.ID, caseID, "held_out")
+		}(evaluationCase.ID)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	populated, err := st.GetEvaluationDataset(ctx, dataset.ID)
+	require.NoError(t, err)
+	require.Len(t, populated.Cases, workers)
+	for index, member := range populated.Cases {
+		assert.Equal(t, index, member.Ordinal)
+	}
+}
+
+func TestEvaluationDatasetSealIncludesEverySuccessfulConcurrentAddition(t *testing.T) {
+	st := concurrentEvaluationStore(t)
+	ctx := context.Background()
+	base, err := st.CreateCuratedEvaluationCase(ctx, curatedEvaluationCase())
+	require.NoError(t, err)
+	extraInput := curatedEvaluationCase()
+	extraInput.ResourceID = "aggregate.Engine.ConcurrentVoice"
+	extra, err := st.CreateCuratedEvaluationCase(ctx, extraInput)
+	require.NoError(t, err)
+
+	for iteration := range 12 {
+		dataset, createErr := st.CreateEvaluationDataset(
+			ctx,
+			fmt.Sprintf("seal race %d", iteration),
+			"successful additions must be included in the sealed identity",
+		)
+		require.NoError(t, createErr)
+		require.NoError(t, st.AddEvaluationDatasetCase(ctx, dataset.ID, base.ID, "held_out"))
+
+		start := make(chan struct{})
+		addResult := make(chan error, 1)
+		sealResult := make(chan error, 1)
+		go func() {
+			<-start
+			addResult <- st.AddEvaluationDatasetCase(ctx, dataset.ID, extra.ID, "held_out")
+		}()
+		go func() {
+			<-start
+			_, sealErr := st.SealEvaluationDataset(ctx, dataset.ID)
+			sealResult <- sealErr
+		}()
+		close(start)
+
+		addErr := <-addResult
+		require.NoError(t, <-sealResult)
+		sealed, getErr := st.GetEvaluationDataset(ctx, dataset.ID)
+		require.NoError(t, getErr)
+		assert.Equal(t, "sealed", sealed.Status)
+		if addErr == nil {
+			assert.Len(t, sealed.Cases, 2)
+		} else {
+			assert.ErrorContains(t, addErr, "dataset is sealed")
+			assert.Len(t, sealed.Cases, 1)
+		}
+	}
+}
+
+func baseEvaluationConfiguration() EvaluationConfiguration {
+	return EvaluationConfiguration{
 		Name: "candidate selector", PlannerVersion: "planner-v2",
 		PlannerPolicy:          map[string]any{"vertical_slices": true},
 		ContextSelectorVersion: "selector-v2", ContextBudgetTokens: 32000,
@@ -69,6 +207,12 @@ func TestEvaluationConfigurationIdentityIsRedactedAndOrderIndependent(t *testing
 		InferenceConfig: map[string]any{"temperature": 0.2, "api_key": "top-secret"},
 		LearningIDs:     []string{"learning-b", "learning-a", "learning-a"},
 	}
+}
+
+func TestEvaluationConfigurationIdentityIsRedactedAndOrderIndependent(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	input := baseEvaluationConfiguration()
 	first, err := st.CreateEvaluationConfiguration(ctx, input)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"learning-a", "learning-b"}, first.LearningIDs)
@@ -81,6 +225,46 @@ func TestEvaluationConfigurationIdentityIsRedactedAndOrderIndependent(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, second.ID)
 	assert.Equal(t, first.IdentityHash, second.IdentityHash)
+}
+
+func TestEvaluationConfigurationCreationConvergesUnderConcurrency(t *testing.T) {
+	st := concurrentEvaluationStore(t)
+	ctx := context.Background()
+	const workers = 8
+
+	start := make(chan struct{})
+	results := make(chan *EvaluationConfiguration, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			created, err := st.CreateEvaluationConfiguration(ctx, baseEvaluationConfiguration())
+			results <- created
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var identityID string
+	for created := range results {
+		require.NotNil(t, created)
+		if identityID == "" {
+			identityID = created.ID
+		}
+		assert.Equal(t, identityID, created.ID)
+	}
+	configurations, err := st.ListEvaluationConfigurations(ctx, workers)
+	require.NoError(t, err)
+	assert.Len(t, configurations, 1)
 }
 
 func TestHistoricalEvaluationCaseRecordsIneligibility(t *testing.T) {

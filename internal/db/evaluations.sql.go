@@ -9,26 +9,28 @@ import (
 	"context"
 )
 
-const addEvaluationDatasetCase = `-- name: AddEvaluationDatasetCase :exec
+const addEvaluationDatasetCase = `-- name: AddEvaluationDatasetCase :execrows
 INSERT INTO evaluation_dataset_cases (dataset_id, case_id, split, ordinal)
-VALUES (?, ?, ?, ?)
+SELECT ?1, ?2, ?3,
+       COALESCE(MAX(membership.ordinal) + 1, 0)
+FROM evaluation_datasets dataset
+LEFT JOIN evaluation_dataset_cases membership ON membership.dataset_id = dataset.id
+WHERE dataset.id = ?1 AND dataset.status = 'draft'
+GROUP BY dataset.id
 `
 
 type AddEvaluationDatasetCaseParams struct {
 	DatasetID string
 	CaseID    string
 	Split     string
-	Ordinal   int64
 }
 
-func (q *Queries) AddEvaluationDatasetCase(ctx context.Context, arg AddEvaluationDatasetCaseParams) error {
-	_, err := q.db.ExecContext(ctx, addEvaluationDatasetCase,
-		arg.DatasetID,
-		arg.CaseID,
-		arg.Split,
-		arg.Ordinal,
-	)
-	return err
+func (q *Queries) AddEvaluationDatasetCase(ctx context.Context, arg AddEvaluationDatasetCaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addEvaluationDatasetCase, arg.DatasetID, arg.CaseID, arg.Split)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const cancelEvaluationAssignment = `-- name: CancelEvaluationAssignment :execrows

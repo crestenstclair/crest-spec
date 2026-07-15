@@ -45,9 +45,14 @@ SELECT * FROM evaluation_datasets WHERE id = ?;
 -- name: ListEvaluationDatasets :many
 SELECT * FROM evaluation_datasets ORDER BY created_at DESC, id DESC LIMIT ?;
 
--- name: AddEvaluationDatasetCase :exec
+-- name: AddEvaluationDatasetCase :execrows
 INSERT INTO evaluation_dataset_cases (dataset_id, case_id, split, ordinal)
-VALUES (?, ?, ?, ?);
+SELECT sqlc.arg(dataset_id), sqlc.arg(case_id), sqlc.arg(split),
+       COALESCE(MAX(membership.ordinal) + 1, 0)
+FROM evaluation_datasets dataset
+LEFT JOIN evaluation_dataset_cases membership ON membership.dataset_id = dataset.id
+WHERE dataset.id = sqlc.arg(dataset_id) AND dataset.status = 'draft'
+GROUP BY dataset.id;
 
 -- name: ListEvaluationDatasetCases :many
 SELECT membership.*, evaluation_cases.identity_hash, evaluation_cases.provenance,

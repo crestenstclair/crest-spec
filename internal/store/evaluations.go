@@ -266,7 +266,11 @@ func (s *Store) createEvaluationCase(ctx context.Context, input CuratedEvaluatio
 	}); err != nil {
 		return nil, err
 	}
-	return s.GetEvaluationCase(ctx, id)
+	row, err := s.queries.GetEvaluationCaseByIdentity(ctx, identityHash)
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateEvaluationCase(ctx, row)
 }
 
 func (s *Store) GetEvaluationCase(ctx context.Context, id string) (*EvaluationCase, error) {
@@ -341,29 +345,61 @@ func (s *Store) AddEvaluationDatasetCase(ctx context.Context, datasetID, caseID,
 	if split != "training" && split != "development" && split != "held_out" {
 		return fmt.Errorf("add evaluation dataset case: invalid split %q", split)
 	}
+	affected, err := s.queries.AddEvaluationDatasetCase(ctx, db.AddEvaluationDatasetCaseParams{
+		DatasetID: datasetID, CaseID: caseID, Split: split,
+	})
+	if err != nil {
+		return err
+	}
+	if affected == 1 {
+		return nil
+	}
 	dataset, err := s.queries.GetEvaluationDataset(ctx, datasetID)
 	if err != nil {
 		return mapNotFound(err)
 	}
-	if dataset.Status != "draft" {
-		return fmt.Errorf("add evaluation dataset case: dataset is %s", dataset.Status)
-	}
-	members, err := s.queries.ListEvaluationDatasetCases(ctx, datasetID)
-	if err != nil {
-		return err
-	}
-	return s.queries.AddEvaluationDatasetCase(ctx, db.AddEvaluationDatasetCaseParams{
-		DatasetID: datasetID, CaseID: caseID, Split: split, Ordinal: int64(len(members)),
-	})
+	return fmt.Errorf("add evaluation dataset case: dataset is %s", dataset.Status)
 }
 
 func (s *Store) SealEvaluationDataset(ctx context.Context, datasetID string) (*EvaluationDataset, error) {
-	dataset, err := s.GetEvaluationDataset(ctx, datasetID)
+	tx, err := s.sqlDB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if dataset.Status == "sealed" {
-		return dataset, nil
+	defer tx.Rollback()
+
+	// Take the SQLite write lock before reading membership. Additions use one
+	// guarded INSERT statement, so either they complete before this lock and are
+	// included in the identity, or they observe the sealed status afterwards.
+	lockResult, err := tx.ExecContext(ctx,
+		`UPDATE evaluation_datasets SET status = status WHERE id = ? AND status = 'draft'`,
+		datasetID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	locked, err := lockResult.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if locked != 1 {
+		if err := tx.Rollback(); err != nil {
+			return nil, err
+		}
+		dataset, getErr := s.GetEvaluationDataset(ctx, datasetID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if dataset.Status == "sealed" {
+			return dataset, nil
+		}
+		return nil, fmt.Errorf("seal evaluation dataset: dataset is %s", dataset.Status)
+	}
+
+	qtx := s.queries.WithTx(tx)
+	dataset, err := getEvaluationDataset(ctx, qtx, datasetID)
+	if err != nil {
+		return nil, err
 	}
 	if len(dataset.Cases) == 0 {
 		return nil, fmt.Errorf("seal evaluation dataset: at least one case is required")
@@ -379,17 +415,27 @@ func (s *Store) SealEvaluationDataset(ctx context.Context, datasetID string) (*E
 		return nil, err
 	}
 	timestamp := now()
-	affected, err := s.queries.SealEvaluationDataset(ctx, db.SealEvaluationDatasetParams{
+	affected, err := qtx.SealEvaluationDataset(ctx, db.SealEvaluationDatasetParams{
 		IdentityHash: identityHash, SealedAt: &timestamp, ID: datasetID,
 	})
-	if err != nil || affected != 1 {
-		return nil, fmt.Errorf("seal evaluation dataset: affected=%d: %w", affected, err)
+	if err != nil {
+		return nil, fmt.Errorf("seal evaluation dataset: %w", err)
+	}
+	if affected != 1 {
+		return nil, fmt.Errorf("seal evaluation dataset: affected=%d", affected)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s.GetEvaluationDataset(ctx, datasetID)
 }
 
 func (s *Store) GetEvaluationDataset(ctx context.Context, id string) (*EvaluationDataset, error) {
-	row, err := s.queries.GetEvaluationDataset(ctx, id)
+	return getEvaluationDataset(ctx, s.queries, id)
+}
+
+func getEvaluationDataset(ctx context.Context, queries *db.Queries, id string) (*EvaluationDataset, error) {
+	row, err := queries.GetEvaluationDataset(ctx, id)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -397,7 +443,7 @@ func (s *Store) GetEvaluationDataset(ctx context.Context, id string) (*Evaluatio
 		ID: row.ID, Name: row.Name, Description: row.Description, IdentityHash: row.IdentityHash,
 		Status: row.Status, CreatedAt: parseTime(row.CreatedAt), SealedAt: parseOptionalTime(row.SealedAt),
 	}
-	members, err := s.queries.ListEvaluationDatasetCases(ctx, id)
+	members, err := queries.ListEvaluationDatasetCases(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +514,10 @@ func (s *Store) CreateEvaluationConfiguration(ctx context.Context, input Evaluat
 	if err != nil {
 		return nil, err
 	}
-	learningJSON, _ := json.Marshal(input.LearningIDs)
+	learningJSON, err := json.Marshal(input.LearningIDs)
+	if err != nil {
+		return nil, err
+	}
 	timestamp := now()
 	if err := s.putEvaluationBlob(ctx, identityHash, payloadJSON, timestamp); err != nil {
 		return nil, err
@@ -485,7 +534,11 @@ func (s *Store) CreateEvaluationConfiguration(ctx context.Context, input Evaluat
 	}); err != nil {
 		return nil, err
 	}
-	return s.GetEvaluationConfiguration(ctx, id)
+	row, err := s.queries.GetEvaluationConfigurationByIdentity(ctx, identityHash)
+	if err != nil {
+		return nil, err
+	}
+	return s.hydrateEvaluationConfiguration(ctx, row)
 }
 
 func (s *Store) GetEvaluationConfiguration(ctx context.Context, id string) (*EvaluationConfiguration, error) {
