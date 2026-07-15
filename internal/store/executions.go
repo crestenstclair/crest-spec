@@ -53,6 +53,12 @@ type ExecutionManifest struct {
 	SystemInstructionsHash string
 	ContextHash            string
 	HostSessionID          string
+	HostCommitRef          string
+	GoalIDs                []string
+	CapabilityIDs          []string
+	GoalProgress           map[string]any
+	GoalProgressJSON       string
+	GoalProgressHash       string
 	Status                 string
 	DispositionReason      string
 	StartedAt              time.Time
@@ -94,24 +100,28 @@ type ExecutionTransition struct {
 	CostUSD           float64
 	Failure           *FailureClassificationWrite
 	HandoffTargetRole string
+	HostCommitRef     string
+	GoalProgress      map[string]any
 }
 
 type CandidateDisposition struct {
-	ExecutionID  string
-	Accepted     bool
-	Reason       string
-	Details      map[string]any
-	Resource     *Resource
-	Files        []GeneratedFile
-	Dependencies []Dependency
-	Notes        string
-	Attempts     int
-	DurationMS   int64
-	InputTokens  int64
-	OutputTokens int64
-	CostUSD      float64
-	Failure      *FailureClassificationWrite
-	HandoffRole  string
+	ExecutionID   string
+	Accepted      bool
+	Reason        string
+	Details       map[string]any
+	Resource      *Resource
+	Files         []GeneratedFile
+	Dependencies  []Dependency
+	Notes         string
+	Attempts      int
+	DurationMS    int64
+	InputTokens   int64
+	OutputTokens  int64
+	CostUSD       float64
+	Failure       *FailureClassificationWrite
+	HandoffRole   string
+	HostCommitRef string
+	GoalProgress  map[string]any
 }
 
 type CandidateSet struct {
@@ -201,7 +211,14 @@ func (s *Store) StartExecution(ctx context.Context, manifest ExecutionManifest) 
 		if err := sameExecutionRequest(existing, manifest); err != nil {
 			return nil, err
 		}
-		return s.GetExecutionManifest(ctx, existing.ID)
+		hydrated, hydrateErr := s.GetExecutionManifest(ctx, existing.ID)
+		if hydrateErr != nil {
+			return nil, hydrateErr
+		}
+		if !equalStrings(hydrated.GoalIDs, manifest.GoalIDs) || !equalStrings(hydrated.CapabilityIDs, manifest.CapabilityIDs) {
+			return nil, fmt.Errorf("start execution: idempotency key %q was already used for different goal impact", manifest.IdempotencyKey)
+		}
+		return hydrated, nil
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, fmt.Errorf("start execution: inspect idempotency key: %w", getErr)
 	}
@@ -272,6 +289,16 @@ func (s *Store) StartExecution(ctx context.Context, manifest ExecutionManifest) 
 			return nil, fmt.Errorf("start execution: insert tool %q: %w", tool.Name, err)
 		}
 	}
+	for _, goalID := range manifest.GoalIDs {
+		if err := q.AddExecutionGoal(ctx, db.AddExecutionGoalParams{ExecutionID: manifest.ID, GoalID: goalID}); err != nil {
+			return nil, fmt.Errorf("start execution: link goal %s: %w", goalID, err)
+		}
+	}
+	for _, capabilityID := range manifest.CapabilityIDs {
+		if err := q.AddExecutionCapability(ctx, db.AddExecutionCapabilityParams{ExecutionID: manifest.ID, CapabilityID: capabilityID}); err != nil {
+			return nil, fmt.Errorf("start execution: link capability %s: %w", capabilityID, err)
+		}
+	}
 	if err := createExecutionEvent(ctx, q, manifest.ID, "", manifest.Status, "execution_started", map[string]any{
 		"attempt_id": manifest.AttemptID, "role": manifest.Role, "protocol_version": manifest.ProtocolVersion,
 	}, timestamp); err != nil {
@@ -331,6 +358,15 @@ func prepareExecutionManifest(manifest ExecutionManifest) (ExecutionManifest, er
 	}
 	manifest.SystemInstructions = execution.RedactText(manifest.SystemInstructions)
 	manifest.SystemInstructionsHash = contextmanifest.Hash(manifest.SystemInstructions)
+	sort.Strings(manifest.GoalIDs)
+	manifest.GoalIDs = dedupeStoreStrings(manifest.GoalIDs)
+	sort.Strings(manifest.CapabilityIDs)
+	manifest.CapabilityIDs = dedupeStoreStrings(manifest.CapabilityIDs)
+	manifest.GoalProgressJSON, manifest.GoalProgressHash, err = execution.CanonicalRedacted(map[string]any{})
+	if err != nil {
+		return manifest, fmt.Errorf("start execution: initial goal progress: %w", err)
+	}
+	manifest.GoalProgress = map[string]any{}
 	return manifest, nil
 }
 
@@ -349,7 +385,20 @@ func executionManifestParams(manifest ExecutionManifest, timestamp string) db.Cr
 		HostSessionID: manifest.HostSessionID, Status: string(execution.StatusExecuting),
 		DispositionReason: "", StartedAt: timestamp, DurationMs: 0, InputTokens: 0, OutputTokens: 0,
 		CostUsd: 0, CreatedAt: timestamp, UpdatedAt: timestamp,
+		HostCommitRef: "", GoalProgressJson: manifest.GoalProgressJSON, GoalProgressHash: manifest.GoalProgressHash,
 	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameExecutionRequest(row db.ExecutionManifest, manifest ExecutionManifest) error {
@@ -446,7 +495,9 @@ func (s *Store) SubmitCandidate(ctx context.Context, executionID string, files [
 	if affected, updateErr := q.UpdateExecutionManifestStatus(ctx, db.UpdateExecutionManifestStatusParams{
 		Status: string(execution.StatusCandidateSubmitted), DispositionReason: "", DurationMs: 0,
 		InputTokens: 0, OutputTokens: 0, CostUsd: 0, UpdatedAt: timestamp,
-		ID: executionID, Status_2: string(execution.StatusExecuting),
+		HostCommitRef: manifestRow.HostCommitRef, GoalProgressJson: manifestRow.GoalProgressJson,
+		GoalProgressHash: manifestRow.GoalProgressHash,
+		ID:               executionID, Status_2: string(execution.StatusExecuting),
 	}); updateErr != nil || affected != 1 {
 		return nil, fmt.Errorf("submit candidate: transition execution: affected=%d: %w", affected, updateErr)
 	}
@@ -527,10 +578,23 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 	if input.ToStatus.Terminal() {
 		completedAt = &timestamp
 	}
+	hostCommitRef := row.HostCommitRef
+	if input.HostCommitRef != "" {
+		hostCommitRef = input.HostCommitRef
+	}
+	progressJSON, progressHash := row.GoalProgressJson, row.GoalProgressHash
+	if input.GoalProgress != nil {
+		progressJSON, progressHash, err = execution.CanonicalRedacted(input.GoalProgress)
+		if err != nil {
+			return nil, fmt.Errorf("transition execution: goal progress: %w", err)
+		}
+	}
 	affected, err := q.UpdateExecutionManifestStatus(ctx, db.UpdateExecutionManifestStatusParams{
 		Status: string(input.ToStatus), DispositionReason: input.Reason, CompletedAt: completedAt,
 		DurationMs: input.DurationMS, InputTokens: input.InputTokens, OutputTokens: input.OutputTokens,
-		CostUsd: input.CostUSD, UpdatedAt: timestamp, ID: input.ExecutionID, Status_2: row.Status,
+		CostUsd: input.CostUSD, UpdatedAt: timestamp, HostCommitRef: hostCommitRef,
+		GoalProgressJson: progressJSON, GoalProgressHash: progressHash,
+		ID: input.ExecutionID, Status_2: row.Status,
 	})
 	if err != nil || affected != 1 {
 		return nil, fmt.Errorf("transition execution: concurrent transition: affected=%d: %w", affected, err)
@@ -666,10 +730,19 @@ func (s *Store) FinalizeCandidate(ctx context.Context, input CandidateDispositio
 		}
 	}
 	completedAt := timestamp
+	progressJSON, progressHash := manifest.GoalProgressJson, manifest.GoalProgressHash
+	if input.GoalProgress != nil {
+		progressJSON, progressHash, err = execution.CanonicalRedacted(input.GoalProgress)
+		if err != nil {
+			return nil, fmt.Errorf("finalize candidate: goal progress: %w", err)
+		}
+	}
 	if changed, updateErr := q.UpdateExecutionManifestStatus(ctx, db.UpdateExecutionManifestStatusParams{
 		Status: string(toStatus), DispositionReason: input.Reason, CompletedAt: &completedAt,
 		DurationMs: input.DurationMS, InputTokens: input.InputTokens, OutputTokens: input.OutputTokens,
-		CostUsd: input.CostUSD, UpdatedAt: timestamp, ID: manifest.ID, Status_2: manifest.Status,
+		CostUsd: input.CostUSD, UpdatedAt: timestamp, HostCommitRef: input.HostCommitRef,
+		GoalProgressJson: progressJSON, GoalProgressHash: progressHash,
+		ID: manifest.ID, Status_2: manifest.Status,
 	}); updateErr != nil || changed != 1 {
 		return nil, fmt.Errorf("finalize candidate: execution transition: affected=%d: %w", changed, updateErr)
 	}
@@ -732,6 +805,29 @@ func (s *Store) FinalizeCandidate(ctx context.Context, input CandidateDispositio
 			}); err != nil {
 				return nil, fmt.Errorf("finalize candidate: note: %w", err)
 			}
+		}
+		ancestorID := stringVal(attempt.ParentAttemptID)
+		for ancestorID != "" {
+			failures, listErr := q.ListFailureClassificationsByAttempt(ctx, ancestorID)
+			if listErr != nil {
+				return nil, fmt.Errorf("finalize candidate: list ancestor failures: %w", listErr)
+			}
+			for _, failure := range failures {
+				if failure.ResolvedAt != nil {
+					continue
+				}
+				if _, resolveErr := q.ResolveFailureClassification(ctx, db.ResolveFailureClassificationParams{
+					Resolution: "resolved by accepted retry", ResolvedByAttempt: &attempt.ID,
+					ResolvedAt: &timestamp, ID: failure.ID,
+				}); resolveErr != nil {
+					return nil, fmt.Errorf("finalize candidate: resolve ancestor failure: %w", resolveErr)
+				}
+			}
+			ancestor, getErr := q.GetGenerationAttempt(ctx, ancestorID)
+			if getErr != nil {
+				return nil, fmt.Errorf("finalize candidate: ancestor attempt: %w", getErr)
+			}
+			ancestorID = stringVal(ancestor.ParentAttemptID)
 		}
 	}
 
@@ -883,6 +979,8 @@ func (s *Store) hydrateExecutionManifest(ctx context.Context, row db.ExecutionMa
 		ToolPermissionsHash: row.ToolPermissionsHash, TemplateHashesJSON: row.TemplateHashesJson,
 		TemplateHashesHash: row.TemplateHashesHash, SystemInstructionsHash: row.SystemInstructionsBlob,
 		ContextHash: row.ContextHash, HostSessionID: row.HostSessionID, Status: row.Status,
+		HostCommitRef: row.HostCommitRef, GoalProgressJSON: row.GoalProgressJson,
+		GoalProgressHash:  row.GoalProgressHash,
 		DispositionReason: row.DispositionReason, StartedAt: parseTime(row.StartedAt),
 		CompletedAt: parseOptionalTime(row.CompletedAt), DurationMS: row.DurationMs,
 		InputTokens: row.InputTokens, OutputTokens: row.OutputTokens, CostUSD: row.CostUsd,
@@ -896,6 +994,17 @@ func (s *Store) hydrateExecutionManifest(ctx context.Context, row db.ExecutionMa
 	}
 	if err := json.Unmarshal([]byte(row.TemplateHashesJson), &manifest.TemplateHashes); err != nil {
 		return nil, fmt.Errorf("hydrate execution: template hashes: %w", err)
+	}
+	if err := json.Unmarshal([]byte(row.GoalProgressJson), &manifest.GoalProgress); err != nil {
+		return nil, fmt.Errorf("hydrate execution: goal progress: %w", err)
+	}
+	manifest.GoalIDs, err = s.queries.ListExecutionGoals(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate execution: goals: %w", err)
+	}
+	manifest.CapabilityIDs, err = s.queries.ListExecutionCapabilities(ctx, row.ID)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate execution: capabilities: %w", err)
 	}
 	blob, err := s.queries.GetContentBlob(ctx, row.SystemInstructionsBlob)
 	if err != nil {

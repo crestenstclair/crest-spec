@@ -235,6 +235,11 @@ type EvidenceRequirement struct {
 	UpdatedAt   string
 }
 
+type ExecutionCapability struct {
+	ExecutionID  string
+	CapabilityID string
+}
+
 type ExecutionEvent struct {
 	ID          string
 	ExecutionID string
@@ -244,6 +249,11 @@ type ExecutionEvent struct {
 	DetailsJson string
 	DetailsHash string
 	CreatedAt   string
+}
+
+type ExecutionGoal struct {
+	ExecutionID string
+	GoalID      string
 }
 
 type ExecutionManifest struct {
@@ -281,6 +291,9 @@ type ExecutionManifest struct {
 	CostUsd                float64
 	CreatedAt              string
 	UpdatedAt              string
+	HostCommitRef          string
+	GoalProgressJson       string
+	GoalProgressHash       string
 }
 
 type ExecutionTool struct {

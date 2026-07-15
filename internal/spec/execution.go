@@ -20,6 +20,7 @@ type ExecutionStartOptions struct {
 	ProtocolVersion    string
 	IdempotencyKey     string
 	ContextHash        string
+	Role               string
 	HostName           string
 	HostVersion        string
 	Provider           string
@@ -30,6 +31,14 @@ type ExecutionStartOptions struct {
 	TemplateHashes     map[string]string
 	SystemInstructions string
 	HostSessionID      string
+}
+
+type CommitMetadata struct {
+	DurationMS    int64
+	InputTokens   int64
+	OutputTokens  int64
+	CostUSD       float64
+	HostCommitRef string
 }
 
 type ExecutionReportOptions struct {
@@ -43,6 +52,21 @@ type ExecutionReportOptions struct {
 	CostUSD      float64
 	Category     string
 	Confidence   float64
+}
+
+// FailureClassifyOptions represents an append-only advisory or human failure
+// classification. Human corrections use OverrideOf to preserve the original
+// classification instead of rewriting history.
+type FailureClassifyOptions struct {
+	AttemptID         string
+	Category          string
+	Origin            string
+	Confidence        float64
+	EvidenceSource    string
+	EvidenceReference string
+	Evidence          string
+	OverrideOf        string
+	GoalIDs           []string
 }
 
 func (s *Spec) StartExecution(ctx context.Context, opts ExecutionStartOptions) (*store.ExecutionManifest, error) {
@@ -63,6 +87,17 @@ func (s *Spec) StartExecution(ctx context.Context, opts ExecutionStartOptions) (
 	if opts.Model == "" {
 		opts.Model = s.cfg.GenerateModel
 	}
+	if opts.Role != "" && opts.Role != manifest.Attempt.Role {
+		return nil, fmt.Errorf("execution start: role %s does not match prepared role %s", opts.Role, manifest.Attempt.Role)
+	}
+	session, err := s.store.GetSession(manifest.Attempt.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("execution start: session: %w", err)
+	}
+	action, ok := actionForSession(session, manifest.Attempt.ResourceID)
+	if !ok || action.OperationID != manifest.Attempt.PlanOperationID {
+		return nil, fmt.Errorf("execution start: persisted plan operation is unavailable")
+	}
 	return s.store.StartExecution(ctx, store.ExecutionManifest{
 		AttemptID: opts.AttemptID, ContextManifestID: manifest.ID,
 		ProtocolVersion: opts.ProtocolVersion, IdempotencyKey: opts.IdempotencyKey,
@@ -72,6 +107,7 @@ func (s *Spec) StartExecution(ctx context.Context, opts ExecutionStartOptions) (
 		InferenceConfig: opts.InferenceConfig, AgentConfig: opts.AgentConfig, Tools: opts.Tools,
 		TemplateHashes: opts.TemplateHashes, SystemInstructions: opts.SystemInstructions,
 		ContextHash: opts.ContextHash, HostSessionID: opts.HostSessionID,
+		GoalIDs: action.Goals, CapabilityIDs: action.Capabilities,
 	})
 }
 
@@ -148,9 +184,57 @@ func (s *Spec) ListHandoffs(ctx context.Context, attemptID string, limit int) ([
 	return s.store.ListPendingAttemptHandoffs(ctx, limit)
 }
 
+func (s *Spec) ClassifyFailure(ctx context.Context, opts FailureClassifyOptions) (*store.FailureClassification, error) {
+	if opts.Origin != "host" && opts.Origin != "human" {
+		return nil, fmt.Errorf("classify failure: origin must be host or human")
+	}
+	if opts.OverrideOf != "" && opts.Origin != "human" {
+		return nil, fmt.Errorf("classify failure: only a human classification may override an earlier record")
+	}
+	category := execution.FailureCategory(opts.Category)
+	if err := execution.ValidateFailureCategory(category); err != nil {
+		return nil, fmt.Errorf("classify failure: %w", err)
+	}
+	manifest, manifestErr := s.store.GetExecutionManifestByAttempt(ctx, opts.AttemptID)
+	if opts.Origin == "host" {
+		if manifestErr != nil {
+			return nil, fmt.Errorf("classify failure: governed execution is required: %w", manifestErr)
+		}
+		policy, err := execution.LookupRole(manifest.Role)
+		if err != nil || !policy.Allows(execution.ActionClassifyFailure) {
+			return nil, fmt.Errorf("classify failure: role %s cannot classify failures", manifest.Role)
+		}
+	}
+	confidence := opts.Confidence
+	if confidence == 0 {
+		confidence = 1
+	}
+	executionID := ""
+	goals := opts.GoalIDs
+	if manifestErr == nil {
+		executionID = manifest.ID
+		if len(goals) == 0 {
+			goals = manifest.GoalIDs
+		}
+	}
+	return s.store.CreateFailureClassification(ctx, store.FailureClassificationWrite{
+		AttemptID: opts.AttemptID, ExecutionID: executionID, Category: category,
+		Origin: opts.Origin, Confidence: confidence, EvidenceSource: opts.EvidenceSource,
+		EvidenceReference: opts.EvidenceReference, Evidence: opts.Evidence,
+		OverrideOf: opts.OverrideOf, GoalIDs: goals,
+	})
+}
+
+// ResolveFailure records an explicit resolution. Accepted descendant attempts
+// resolve ancestor failures automatically; this operation covers human fixes
+// such as specification, validation, or infrastructure repair.
+func (s *Spec) ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error {
+	return s.store.ResolveFailureClassification(ctx, id, resolution, resolvedByAttempt)
+}
+
 // CommitAttempt is the only governed candidate-commit path. Identity and model
 // are derived from the immutable attempt/execution chain, never caller fields.
-func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []CommitFile, notes string) (*CommitResult, error) {
+func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []CommitFile, notes string, metadata CommitMetadata) (*CommitResult, error) {
 	executionManifest, err := s.store.GetExecutionManifestByAttempt(ctx, attemptID)
 	if err != nil {
 		return nil, fmt.Errorf("commit attempt: execution_start is required: %w", err)
@@ -227,6 +311,9 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 		_, finalizeErr := s.store.FinalizeCandidate(ctx, store.CandidateDisposition{
 			ExecutionID: executionManifest.ID, Reason: failureMessage,
 			Details: map[string]any{"validations": validations}, Attempts: contextManifest.Attempt.RetryNumber,
+			DurationMS: metadata.DurationMS, InputTokens: metadata.InputTokens,
+			OutputTokens: metadata.OutputTokens, CostUSD: metadata.CostUSD, HostCommitRef: metadata.HostCommitRef,
+			GoalProgress: executionGoalProgress(action, "blocked", failureMessage),
 			Failure: &store.FailureClassificationWrite{
 				Category: category, Origin: "engine", Confidence: 1, EvidenceSource: "mechanical_validation",
 				EvidenceReference: executionManifest.ID, Evidence: string(evidence), GoalIDs: action.Goals,
@@ -266,6 +353,9 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 			DeclarationHash: declarationHash, EffectiveHash: hashes[resourceID], Model: executionManifest.Model,
 		},
 		Files: acceptedFiles, Dependencies: dependencies, Notes: notes,
+		DurationMS: metadata.DurationMS, InputTokens: metadata.InputTokens,
+		OutputTokens: metadata.OutputTokens, CostUSD: metadata.CostUSD, HostCommitRef: metadata.HostCommitRef,
+		GoalProgress: executionGoalProgress(action, "advanced", "accepted resource candidate"),
 	})
 	if err != nil {
 		return nil, err
@@ -275,6 +365,18 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 		Committed: true, Validations: validations, AttemptID: attemptID,
 		ExecutionID: executionManifest.ID, CandidateID: candidate.ID,
 	}, nil
+}
+
+func executionGoalProgress(action planpkg.PlannedAction, status, reason string) map[string]any {
+	goals := make([]map[string]string, 0, len(action.Goals))
+	for _, goalID := range action.Goals {
+		goals = append(goals, map[string]string{"goal_id": goalID, "status": status, "reason": reason})
+	}
+	capabilities := make([]map[string]string, 0, len(action.Capabilities))
+	for _, capabilityID := range action.Capabilities {
+		capabilities = append(capabilities, map[string]string{"capability_id": capabilityID, "status": status, "reason": reason})
+	}
+	return map[string]any{"goals": goals, "capabilities": capabilities}
 }
 
 func (s *Spec) snapshotCommitFiles(files []CommitFile) ([]store.CandidateFile, error) {

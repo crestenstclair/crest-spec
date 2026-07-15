@@ -88,6 +88,7 @@ type ApplyAction struct {
 type Generation struct {
 	ID              string
 	ExecutionID     string
+	Legacy          bool
 	ApplyID         string
 	ResourceID      string
 	PromptText      string
@@ -772,6 +773,7 @@ func dbGenerationToGeneration(g db.Generation) Generation {
 	return Generation{
 		ID:              g.ID,
 		ExecutionID:     stringVal(g.ExecutionID),
+		Legacy:          g.ExecutionID == nil,
 		ApplyID:         stringVal(g.ApplyID),
 		ResourceID:      g.ResourceID,
 		PromptText:      g.PromptText,

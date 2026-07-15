@@ -9,8 +9,9 @@ INSERT INTO execution_manifests (
     template_hashes_json, template_hashes_hash,
     system_instructions_blob, context_hash, host_session_id,
     status, disposition_reason, started_at, completed_at,
-    duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at,
+    host_commit_ref, goal_progress_json, goal_progress_hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateGenerationAttemptStatus :execrows
 UPDATE generation_attempts SET status = ? WHERE id = ? AND status = ?;
@@ -37,8 +38,21 @@ SELECT * FROM execution_manifests ORDER BY created_at DESC, id DESC LIMIT ?;
 -- name: UpdateExecutionManifestStatus :execrows
 UPDATE execution_manifests
 SET status = ?, disposition_reason = ?, completed_at = ?, duration_ms = ?,
-    input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ?
+    input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ?,
+    host_commit_ref = ?, goal_progress_json = ?, goal_progress_hash = ?
 WHERE id = ? AND status = ?;
+
+-- name: AddExecutionGoal :exec
+INSERT INTO execution_goals (execution_id, goal_id) VALUES (?, ?);
+
+-- name: ListExecutionGoals :many
+SELECT goal_id FROM execution_goals WHERE execution_id = ? ORDER BY goal_id;
+
+-- name: AddExecutionCapability :exec
+INSERT INTO execution_capabilities (execution_id, capability_id) VALUES (?, ?);
+
+-- name: ListExecutionCapabilities :many
+SELECT capability_id FROM execution_capabilities WHERE execution_id = ? ORDER BY capability_id;
 
 -- name: CreateExecutionTool :exec
 INSERT INTO execution_tools (execution_id, name, permission, ordinal)

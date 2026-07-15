@@ -306,14 +306,17 @@ func (d *dashboard) handleExecutionComparison(w http.ResponseWriter, r *http.Req
 	d.writeJSON(w, map[string]any{
 		"left": left, "right": right,
 		"changes": map[string]bool{
-			"host":      left.Execution.HostName != right.Execution.HostName,
-			"model":     left.Execution.Model != right.Execution.Model,
-			"role":      left.Execution.Role != right.Execution.Role,
-			"context":   left.Execution.ContextHash != right.Execution.ContextHash,
-			"templates": left.Execution.TemplateHashesHash != right.Execution.TemplateHashesHash,
-			"tools":     left.Execution.ToolPermissionsHash != right.Execution.ToolPermissionsHash,
-			"settings":  left.Execution.InferenceConfigHash != right.Execution.InferenceConfigHash || left.Execution.AgentConfigHash != right.Execution.AgentConfigHash,
-			"outcome":   left.Execution.Status != right.Execution.Status,
+			"host":            left.Execution.HostName != right.Execution.HostName,
+			"model":           left.Execution.Model != right.Execution.Model,
+			"role":            left.Execution.Role != right.Execution.Role,
+			"context":         left.Execution.ContextHash != right.Execution.ContextHash,
+			"templates":       left.Execution.TemplateHashesHash != right.Execution.TemplateHashesHash,
+			"tools":           left.Execution.ToolPermissionsHash != right.Execution.ToolPermissionsHash,
+			"settings":        left.Execution.InferenceConfigHash != right.Execution.InferenceConfigHash || left.Execution.AgentConfigHash != right.Execution.AgentConfigHash,
+			"goal_impact":     strings.Join(left.Execution.GoalIDs, "\x00") != strings.Join(right.Execution.GoalIDs, "\x00") || strings.Join(left.Execution.CapabilityIDs, "\x00") != strings.Join(right.Execution.CapabilityIDs, "\x00"),
+			"goal_progress":   left.Execution.GoalProgressHash != right.Execution.GoalProgressHash,
+			"host_commit_ref": left.Execution.HostCommitRef != right.Execution.HostCommitRef,
+			"outcome":         left.Execution.Status != right.Execution.Status,
 		},
 	})
 }

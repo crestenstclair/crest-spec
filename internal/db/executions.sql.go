@@ -52,6 +52,34 @@ func (q *Queries) AcceptCandidateFile(ctx context.Context, arg AcceptCandidateFi
 	return err
 }
 
+const addExecutionCapability = `-- name: AddExecutionCapability :exec
+INSERT INTO execution_capabilities (execution_id, capability_id) VALUES (?, ?)
+`
+
+type AddExecutionCapabilityParams struct {
+	ExecutionID  string
+	CapabilityID string
+}
+
+func (q *Queries) AddExecutionCapability(ctx context.Context, arg AddExecutionCapabilityParams) error {
+	_, err := q.db.ExecContext(ctx, addExecutionCapability, arg.ExecutionID, arg.CapabilityID)
+	return err
+}
+
+const addExecutionGoal = `-- name: AddExecutionGoal :exec
+INSERT INTO execution_goals (execution_id, goal_id) VALUES (?, ?)
+`
+
+type AddExecutionGoalParams struct {
+	ExecutionID string
+	GoalID      string
+}
+
+func (q *Queries) AddExecutionGoal(ctx context.Context, arg AddExecutionGoalParams) error {
+	_, err := q.db.ExecContext(ctx, addExecutionGoal, arg.ExecutionID, arg.GoalID)
+	return err
+}
+
 const addFailureGoal = `-- name: AddFailureGoal :exec
 INSERT INTO failure_goals (failure_id, goal_id) VALUES (?, ?)
 `
@@ -256,8 +284,9 @@ INSERT INTO execution_manifests (
     template_hashes_json, template_hashes_hash,
     system_instructions_blob, context_hash, host_session_id,
     status, disposition_reason, started_at, completed_at,
-    duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at,
+    host_commit_ref, goal_progress_json, goal_progress_hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateExecutionManifestParams struct {
@@ -295,6 +324,9 @@ type CreateExecutionManifestParams struct {
 	CostUsd                float64
 	CreatedAt              string
 	UpdatedAt              string
+	HostCommitRef          string
+	GoalProgressJson       string
+	GoalProgressHash       string
 }
 
 func (q *Queries) CreateExecutionManifest(ctx context.Context, arg CreateExecutionManifestParams) error {
@@ -333,6 +365,9 @@ func (q *Queries) CreateExecutionManifest(ctx context.Context, arg CreateExecuti
 		arg.CostUsd,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.HostCommitRef,
+		arg.GoalProgressJson,
+		arg.GoalProgressHash,
 	)
 	return err
 }
@@ -497,7 +532,7 @@ func (q *Queries) GetCandidateSetByExecution(ctx context.Context, executionID st
 }
 
 const getExecutionManifest = `-- name: GetExecutionManifest :one
-SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at FROM execution_manifests WHERE id = ?
+SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at, host_commit_ref, goal_progress_json, goal_progress_hash FROM execution_manifests WHERE id = ?
 `
 
 func (q *Queries) GetExecutionManifest(ctx context.Context, id string) (ExecutionManifest, error) {
@@ -538,12 +573,15 @@ func (q *Queries) GetExecutionManifest(ctx context.Context, id string) (Executio
 		&i.CostUsd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HostCommitRef,
+		&i.GoalProgressJson,
+		&i.GoalProgressHash,
 	)
 	return i, err
 }
 
 const getExecutionManifestByAttempt = `-- name: GetExecutionManifestByAttempt :one
-SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at FROM execution_manifests WHERE attempt_id = ?
+SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at, host_commit_ref, goal_progress_json, goal_progress_hash FROM execution_manifests WHERE attempt_id = ?
 `
 
 func (q *Queries) GetExecutionManifestByAttempt(ctx context.Context, attemptID string) (ExecutionManifest, error) {
@@ -584,12 +622,15 @@ func (q *Queries) GetExecutionManifestByAttempt(ctx context.Context, attemptID s
 		&i.CostUsd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HostCommitRef,
+		&i.GoalProgressJson,
+		&i.GoalProgressHash,
 	)
 	return i, err
 }
 
 const getExecutionManifestByIdempotencyKey = `-- name: GetExecutionManifestByIdempotencyKey :one
-SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at FROM execution_manifests WHERE idempotency_key = ?
+SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at, host_commit_ref, goal_progress_json, goal_progress_hash FROM execution_manifests WHERE idempotency_key = ?
 `
 
 func (q *Queries) GetExecutionManifestByIdempotencyKey(ctx context.Context, idempotencyKey string) (ExecutionManifest, error) {
@@ -630,6 +671,9 @@ func (q *Queries) GetExecutionManifestByIdempotencyKey(ctx context.Context, idem
 		&i.CostUsd,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HostCommitRef,
+		&i.GoalProgressJson,
+		&i.GoalProgressHash,
 	)
 	return i, err
 }
@@ -768,6 +812,33 @@ func (q *Queries) ListCandidateFiles(ctx context.Context, candidateID string) ([
 	return items, nil
 }
 
+const listExecutionCapabilities = `-- name: ListExecutionCapabilities :many
+SELECT capability_id FROM execution_capabilities WHERE execution_id = ? ORDER BY capability_id
+`
+
+func (q *Queries) ListExecutionCapabilities(ctx context.Context, executionID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listExecutionCapabilities, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var capability_id string
+		if err := rows.Scan(&capability_id); err != nil {
+			return nil, err
+		}
+		items = append(items, capability_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExecutionEvents = `-- name: ListExecutionEvents :many
 SELECT id, execution_id, from_status, to_status, event_kind, details_json, details_hash, created_at FROM execution_events WHERE execution_id = ? ORDER BY created_at, id
 `
@@ -794,6 +865,33 @@ func (q *Queries) ListExecutionEvents(ctx context.Context, executionID string) (
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExecutionGoals = `-- name: ListExecutionGoals :many
+SELECT goal_id FROM execution_goals WHERE execution_id = ? ORDER BY goal_id
+`
+
+func (q *Queries) ListExecutionGoals(ctx context.Context, executionID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listExecutionGoals, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var goal_id string
+		if err := rows.Scan(&goal_id); err != nil {
+			return nil, err
+		}
+		items = append(items, goal_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -951,7 +1049,7 @@ func (q *Queries) ListPendingAttemptHandoffs(ctx context.Context, limit int64) (
 }
 
 const listRecentExecutionManifests = `-- name: ListRecentExecutionManifests :many
-SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at FROM execution_manifests ORDER BY created_at DESC, id DESC LIMIT ?
+SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at, host_commit_ref, goal_progress_json, goal_progress_hash FROM execution_manifests ORDER BY created_at DESC, id DESC LIMIT ?
 `
 
 func (q *Queries) ListRecentExecutionManifests(ctx context.Context, limit int64) ([]ExecutionManifest, error) {
@@ -998,6 +1096,9 @@ func (q *Queries) ListRecentExecutionManifests(ctx context.Context, limit int64)
 			&i.CostUsd,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HostCommitRef,
+			&i.GoalProgressJson,
+			&i.GoalProgressHash,
 		); err != nil {
 			return nil, err
 		}
@@ -1114,7 +1215,8 @@ func (q *Queries) UpdateCandidateSetDisposition(ctx context.Context, arg UpdateC
 const updateExecutionManifestStatus = `-- name: UpdateExecutionManifestStatus :execrows
 UPDATE execution_manifests
 SET status = ?, disposition_reason = ?, completed_at = ?, duration_ms = ?,
-    input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ?
+    input_tokens = ?, output_tokens = ?, cost_usd = ?, updated_at = ?,
+    host_commit_ref = ?, goal_progress_json = ?, goal_progress_hash = ?
 WHERE id = ? AND status = ?
 `
 
@@ -1127,6 +1229,9 @@ type UpdateExecutionManifestStatusParams struct {
 	OutputTokens      int64
 	CostUsd           float64
 	UpdatedAt         string
+	HostCommitRef     string
+	GoalProgressJson  string
+	GoalProgressHash  string
 	ID                string
 	Status_2          string
 }
@@ -1141,6 +1246,9 @@ func (q *Queries) UpdateExecutionManifestStatus(ctx context.Context, arg UpdateE
 		arg.OutputTokens,
 		arg.CostUsd,
 		arg.UpdatedAt,
+		arg.HostCommitRef,
+		arg.GoalProgressJson,
+		arg.GoalProgressHash,
 		arg.ID,
 		arg.Status_2,
 	)

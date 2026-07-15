@@ -1233,7 +1233,9 @@ async function toggleExecutionDrilldown(executionID, index) {
       host: manifest.HostName, host_version: manifest.HostVersion, provider: manifest.Provider,
       model: manifest.Model, host_session_id: manifest.HostSessionID,
       inference: manifest.InferenceConfig, agent: manifest.AgentConfig,
-      template_hashes: manifest.TemplateHashes, context_hash: manifest.ContextHash
+      template_hashes: manifest.TemplateHashes, context_hash: manifest.ContextHash,
+      goals: manifest.GoalIDs, capabilities: manifest.CapabilityIDs,
+      goal_progress: manifest.GoalProgress, host_commit_ref: manifest.HostCommitRef
     }, null, 2)) + '</pre>' +
     '<h3 style="margin-top:12px">Tools and permissions</h3><pre>' + esc(JSON.stringify(tools, null, 2)) + '</pre>' +
     '<h3 style="margin-top:12px">System instructions snapshot</h3><pre>' + esc(manifest.SystemInstructions || '') + '</pre>';
@@ -1261,8 +1263,9 @@ async function toggleExecutionDrilldown(executionID, index) {
   if (generation) {
     html += '<h3 style="margin-top:12px">Legacy generation projection</h3><pre>' + esc(JSON.stringify(generation, null, 2)) + '</pre>';
   }
-  html += '<div style="margin-top:12px;font-size:11px;color:var(--text-muted)">Chain: goal → plan operation ' +
-    esc(manifest.PlanOperationID || '') + ' → resource ' + esc(manifest.ResourceID || '') + ' → attempt ' +
+  html += '<div style="margin-top:12px;font-size:11px;color:var(--text-muted)">Chain: goals ' +
+    esc((manifest.GoalIDs || []).join(', ') || '—') + ' → plan operation ' + esc(manifest.PlanOperationID || '') +
+    ' → resource ' + esc(manifest.ResourceID || '') + ' → attempt ' +
     esc(attemptID) + ' → context ' + esc(contextID) + ' → execution ' + esc(executionID) +
     (candidate ? ' → candidate ' + esc(candidate.ID || candidate.id || '') : '') + '</div></div>';
   td.innerHTML = html;

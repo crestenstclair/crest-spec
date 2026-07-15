@@ -19,7 +19,10 @@ const commitTestSpecCUE = `package crestsynth
 project: name: "rt"
 project: meta: language: "go"
 project: contexts: Audio: purpose: "audio"
-project: contexts: Audio: valueObjects: Tone: {from: "f64"}
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	contributesTo: [{capability: "capability.exercise_resource", contribution: "represents the valid result under test"}]
+}
 project: invariants: [{text: "no global state"}]
 `
 
@@ -112,7 +115,7 @@ func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	replayed, err := s.CommitAttempt(context.Background(), result.AttemptID, files, "")
+	replayed, err := s.CommitAttempt(context.Background(), result.AttemptID, files, "", CommitMetadata{})
 	require.NoError(t, err)
 	require.True(t, replayed.Committed)
 	require.Equal(t, result.CandidateID, replayed.CandidateID)

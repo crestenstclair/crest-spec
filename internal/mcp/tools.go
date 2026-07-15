@@ -79,6 +79,8 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/executions", Description: "List execution manifests", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
 		{Name: "spec/execution_inspect", Description: "Inspect one execution manifest", InputSchema: json.RawMessage(`{"type":"object","properties":{"execution_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
 		{Name: "spec/failures", Description: "List classified failures", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
+		{Name: "spec/failure_classify", Description: "Append an evidence-backed failure classification", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"category":{"type":"string"},"origin":{"type":"string"},"evidence_source":{"type":"string"}},"required":["attempt_id","category","origin","evidence_source"]}`)},
+		{Name: "spec/failure_resolve", Description: "Record an explicit failure resolution", InputSchema: json.RawMessage(`{"type":"object","properties":{"failure_id":{"type":"string"},"resolution":{"type":"string"}},"required":["failure_id","resolution"]}`)},
 		{Name: "spec/handoffs", Description: "List role handoffs", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
 		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
@@ -236,7 +238,12 @@ type specCommitArgs struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"files"`
-	Notes string `json:"notes"`
+	Notes         string  `json:"notes"`
+	DurationMS    int64   `json:"duration_ms"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	HostCommitRef string  `json:"host_commit_ref"`
 }
 
 type specExecutionStartArgs struct {
@@ -244,6 +251,7 @@ type specExecutionStartArgs struct {
 	ProtocolVersion    string                   `json:"protocol_version"`
 	IdempotencyKey     string                   `json:"idempotency_key"`
 	ContextHash        string                   `json:"context_hash"`
+	Role               string                   `json:"role"`
 	HostName           string                   `json:"host_name"`
 	HostVersion        string                   `json:"host_version"`
 	Provider           string                   `json:"provider"`
@@ -277,6 +285,24 @@ type specExecutionInspectArgs struct {
 type specAttemptLimitArgs struct {
 	AttemptID string `json:"attempt_id"`
 	Limit     int    `json:"limit"`
+}
+
+type specFailureClassifyArgs struct {
+	AttemptID         string   `json:"attempt_id"`
+	Category          string   `json:"category"`
+	Origin            string   `json:"origin"`
+	Confidence        float64  `json:"confidence"`
+	EvidenceSource    string   `json:"evidence_source"`
+	EvidenceReference string   `json:"evidence_reference"`
+	Evidence          string   `json:"evidence"`
+	OverrideOf        string   `json:"override_of"`
+	GoalIDs           []string `json:"goal_ids"`
+}
+
+type specFailureResolveArgs struct {
+	FailureID         string `json:"failure_id"`
+	Resolution        string `json:"resolution"`
+	ResolvedByAttempt string `json:"resolved_by_attempt"`
 }
 
 type specResolveArgs struct {
@@ -438,11 +464,11 @@ func (s *Server) registerSpecLifecycleTools() {
 
 	s.addTool(toolDef{
 		Name: "spec/execution_start", Description: "Register the exact host, model, tools, settings, templates, system instructions, and context hash before an agent executes an attempt. Required before spec/commit.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"protocol_version":{"type":"string","const":"crest-execution-v1"},"idempotency_key":{"type":"string"},"context_hash":{"type":"string"},"host_name":{"type":"string"},"host_version":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"inference_config":{"type":"object"},"agent_config":{"type":"object"},"tools":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"permission":{"type":"string"}},"required":["name","permission"]}},"template_hashes":{"type":"object","additionalProperties":{"type":"string"}},"system_instructions":{"type":"string"},"host_session_id":{"type":"string"}},"required":["attempt_id","protocol_version","idempotency_key","context_hash","host_name","model","template_hashes"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"protocol_version":{"type":"string","const":"crest-execution-v1"},"idempotency_key":{"type":"string"},"context_hash":{"type":"string"},"role":{"type":"string"},"host_name":{"type":"string"},"host_version":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"inference_config":{"type":"object"},"agent_config":{"type":"object"},"tools":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"permission":{"type":"string"}},"required":["name","permission"]}},"template_hashes":{"type":"object","additionalProperties":{"type":"string"}},"system_instructions":{"type":"string"},"host_session_id":{"type":"string"}},"required":["attempt_id","protocol_version","idempotency_key","context_hash","role","host_name","model","template_hashes"]}`),
 	}, specTool("execution start", func(ctx context.Context, a specExecutionStartArgs) (any, error) {
 		return s.spec.StartExecution(ctx, specmod.ExecutionStartOptions{
 			AttemptID: a.AttemptID, ProtocolVersion: a.ProtocolVersion, IdempotencyKey: a.IdempotencyKey,
-			ContextHash: a.ContextHash, HostName: a.HostName, HostVersion: a.HostVersion,
+			ContextHash: a.ContextHash, Role: a.Role, HostName: a.HostName, HostVersion: a.HostVersion,
 			Provider: a.Provider, Model: a.Model, InferenceConfig: a.InferenceConfig,
 			AgentConfig: a.AgentConfig, Tools: a.Tools, TemplateHashes: a.TemplateHashes,
 			SystemInstructions: a.SystemInstructions, HostSessionID: a.HostSessionID,
@@ -476,7 +502,7 @@ func (s *Server) registerSpecLifecycleTools() {
 
 	s.addTool(toolDef{
 		Name: "spec/commit", Description: "Submit candidate files for a prepared and started attempt. Session, resource, role, model, and context are derived from SQLite; mechanical validation accepts or rejects the immutable candidate.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string","description":"Attempt returned by spec/context and registered by spec/execution_start"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["attempt_id"]}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string","description":"Attempt returned by spec/context and registered by spec/execution_start"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"duration_ms":{"type":"integer"},"input_tokens":{"type":"integer"},"output_tokens":{"type":"integer"},"cost_usd":{"type":"number"},"host_commit_ref":{"type":"string"}},"required":["attempt_id"]}`),
 	}, s.handleSpecCommit)
 
 	s.addTool(toolDef{
@@ -663,6 +689,24 @@ func (s *Server) registerSpecQueryTools() {
 	}))
 
 	s.addTool(toolDef{
+		Name: "spec/failure_classify", Description: "Append an evidence-backed host triage or human override classification. Host classifications require a failure_triage execution; overrides preserve the original record.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"category":{"type":"string"},"origin":{"type":"string","enum":["host","human"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence_source":{"type":"string"},"evidence_reference":{"type":"string"},"evidence":{"type":"string"},"override_of":{"type":"string"},"goal_ids":{"type":"array","items":{"type":"string"}}},"required":["attempt_id","category","origin","evidence_source"]}`),
+	}, specTool("failure classify", func(ctx context.Context, a specFailureClassifyArgs) (any, error) {
+		return s.spec.ClassifyFailure(ctx, specmod.FailureClassifyOptions{
+			AttemptID: a.AttemptID, Category: a.Category, Origin: a.Origin, Confidence: a.Confidence,
+			EvidenceSource: a.EvidenceSource, EvidenceReference: a.EvidenceReference,
+			Evidence: a.Evidence, OverrideOf: a.OverrideOf, GoalIDs: a.GoalIDs,
+		})
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/failure_resolve", Description: "Record the explicit resolution of a failure classification; accepted retry descendants are resolved automatically.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"failure_id":{"type":"string"},"resolution":{"type":"string"},"resolved_by_attempt":{"type":"string"}},"required":["failure_id","resolution"]}`),
+	}, specToolErr("failure resolve", map[string]bool{"resolved": true}, func(ctx context.Context, a specFailureResolveArgs) error {
+		return s.spec.ResolveFailure(ctx, a.FailureID, a.Resolution, a.ResolvedByAttempt)
+	}))
+
+	s.addTool(toolDef{
 		Name: "spec/handoffs", Description: "List pending role handoffs or the handoff history for one source attempt.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`),
 	}, specTool("handoffs", func(ctx context.Context, a specAttemptLimitArgs) (any, error) {
@@ -838,7 +882,10 @@ func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage) too
 	for i, f := range p.Files {
 		files[i] = specmod.CommitFile{Path: f.Path, Content: f.Content}
 	}
-	result, err := s.spec.CommitAttempt(ctx, p.AttemptID, files, p.Notes)
+	result, err := s.spec.CommitAttempt(ctx, p.AttemptID, files, p.Notes, specmod.CommitMetadata{
+		DurationMS: p.DurationMS, InputTokens: p.InputTokens, OutputTokens: p.OutputTokens,
+		CostUSD: p.CostUSD, HostCommitRef: p.HostCommitRef,
+	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("commit: %v", err))
 	}

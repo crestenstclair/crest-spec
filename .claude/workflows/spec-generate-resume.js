@@ -133,6 +133,7 @@ Then run this loop (at most ${maxRetries + 1} attempts):
      protocol_version: "crest-execution-v1",
      idempotency_key: "claude-code:" + Context.AttemptID,
      context_hash: Context.ContextHash,
+     role: Context.Role,
      host_name: "claude-code",
      host_version: "workflow-resume-v1",
      provider: "anthropic",

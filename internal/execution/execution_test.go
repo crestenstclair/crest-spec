@@ -36,6 +36,9 @@ func TestCanonicalRedactionIsRecursiveCaseInsensitiveAndStable(t *testing.T) {
 	input := map[string]any{
 		"temperature": 0.2,
 		"API_Key":     "very-secret",
+		"token_config": map[string]any{
+			"TOKEN": "also-secret", "max_tokens": 4096,
+		},
 		"nested": map[string]any{
 			"aUtHoRiZaTiOn": "Bearer token-value",
 			"headers":       []any{map[string]any{"client-secret": "hidden"}, "Bearer another-token"},
@@ -46,12 +49,15 @@ func TestCanonicalRedactionIsRecursiveCaseInsensitiveAndStable(t *testing.T) {
 	require.NotContains(t, encoded, "very-secret")
 	require.NotContains(t, encoded, "token-value")
 	require.NotContains(t, encoded, "another-token")
+	require.NotContains(t, encoded, "also-secret")
+	require.Contains(t, encoded, `"max_tokens":4096`)
 	require.Contains(t, encoded, "[REDACTED]")
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal([]byte(encoded), &decoded))
 
 	encodedAgain, hashAgain, err := CanonicalRedacted(map[string]any{
 		"nested": input["nested"], "API_Key": "different-secret", "temperature": 0.2,
+		"token_config": map[string]any{"TOKEN": "different-token", "max_tokens": 4096},
 	})
 	require.NoError(t, err)
 	require.Equal(t, encoded, encodedAgain)

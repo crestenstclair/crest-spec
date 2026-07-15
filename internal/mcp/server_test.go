@@ -85,10 +85,16 @@ func (f *fakeSpec) ListExecutions(ctx context.Context, limit int) ([]storemod.Ex
 func (f *fakeSpec) ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error) {
 	return nil, nil
 }
+func (f *fakeSpec) ClassifyFailure(ctx context.Context, opts specmod.FailureClassifyOptions) (*storemod.FailureClassification, error) {
+	return &storemod.FailureClassification{AttemptID: opts.AttemptID, Category: opts.Category, Origin: opts.Origin}, nil
+}
+func (f *fakeSpec) ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error {
+	return nil
+}
 func (f *fakeSpec) ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error) {
 	return nil, nil
 }
-func (f *fakeSpec) CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string) (*specmod.CommitResult, error) {
+func (f *fakeSpec) CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string, metadata specmod.CommitMetadata) (*specmod.CommitResult, error) {
 	f.lastAttempt = attemptID
 	f.lastFiles = files
 	f.lastNotes = notes
@@ -257,6 +263,13 @@ func TestInitialize(t *testing.T) {
 	assert.Contains(t, caps, "tools")
 	assert.Contains(t, caps, "resources")
 	assert.Contains(t, caps, "prompts")
+	experimental, ok := caps["experimental"].(map[string]any)
+	require.True(t, ok)
+	protocol, ok := experimental["crestExecution"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, executionpkg.ProtocolVersion, protocol["protocolVersion"])
+	assert.Equal(t, executionpkg.RolePolicyVersion, protocol["rolePolicyVersion"])
+	assert.Equal(t, false, protocol["legacyCommit"])
 }
 
 func toolNameSet(t *testing.T, srv *Server) map[string]bool {
@@ -303,6 +316,8 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/execution_roles"])
 	assert.True(t, names["spec/execution_inspect"])
 	assert.True(t, names["spec/failures"])
+	assert.True(t, names["spec/failure_classify"])
+	assert.True(t, names["spec/failure_resolve"])
 	assert.True(t, names["spec/handoffs"])
 
 	// Spot-check kept spec tools.
@@ -332,12 +347,22 @@ func TestCommitToolForwardsArgs(t *testing.T) {
 func TestExecutionStartToolForwardsGovernedInputs(t *testing.T) {
 	fake := &fakeSpec{}
 	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
-	args := json.RawMessage(`{"attempt_id":"attempt-1","protocol_version":"crest-execution-v1","idempotency_key":"request-1","context_hash":"context-hash","host_name":"claude-code","model":"claude-sonnet","template_hashes":{"system":"template-hash"},"tools":[{"name":"filesystem","permission":"project"}]}`)
+	args := json.RawMessage(`{"attempt_id":"attempt-1","protocol_version":"crest-execution-v1","idempotency_key":"request-1","context_hash":"context-hash","role":"resource_implementer","host_name":"claude-code","model":"claude-sonnet","template_hashes":{"system":"template-hash"},"tools":[{"name":"filesystem","permission":"project"}]}`)
 	result := srv.toolFns["spec/execution_start"](context.Background(), args)
 	require.False(t, result.IsError)
 	require.Equal(t, "attempt-1", fake.lastExecutionStart.AttemptID)
 	require.Equal(t, "crest-execution-v1", fake.lastExecutionStart.ProtocolVersion)
+	require.Equal(t, "resource_implementer", fake.lastExecutionStart.Role)
 	require.Equal(t, "filesystem", fake.lastExecutionStart.Tools[0].Name)
+}
+
+func TestFailureClassifyToolReturnsAppendOnlyClassification(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"attempt_id":"attempt-1","category":"missing_context","origin":"host","confidence":0.8,"evidence_source":"triage"}`)
+	result := srv.toolFns["spec/failure_classify"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Contains(t, result.Content[0].Text, `"Category":"missing_context"`)
 }
 
 func TestContextToolCreatesAttemptWithSelectionOptions(t *testing.T) {

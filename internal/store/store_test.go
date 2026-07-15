@@ -53,6 +53,15 @@ func TestNew_AllTablesExist(t *testing.T) {
 		"agent_notes",
 		"lock",
 		"schema_migrations",
+		"execution_manifests",
+		"execution_tools",
+		"execution_events",
+		"execution_goals",
+		"execution_capabilities",
+		"candidate_sets",
+		"candidate_files",
+		"failure_classifications",
+		"attempt_handoffs",
 	}
 
 	for _, table := range expected {
@@ -558,6 +567,7 @@ func TestGenerationCRUD(t *testing.T) {
 	require.Len(t, gens, 1)
 	assert.Equal(t, "accepted", gens[0].Outcome)
 	assert.Equal(t, int64(1500), gens[0].DurationMS)
+	assert.True(t, gens[0].Legacy)
 }
 
 func TestSessionCRUD(t *testing.T) {

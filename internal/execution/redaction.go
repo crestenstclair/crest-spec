@@ -71,6 +71,11 @@ func redactValue(value any, key string) any {
 
 func sensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(key))
+	// A bare token field is common in host configuration, but matching every
+	// key containing "token" would redact harmless settings such as max_tokens.
+	if normalized == "token" || normalized == "authtoken" || normalized == "sessiontoken" || normalized == "bearertoken" {
+		return true
+	}
 	for _, marker := range []string{
 		"authorization", "accesstoken", "refreshtoken", "apikey", "password",
 		"passwd", "secret", "credential", "cookie", "privatekey", "clientsecret",

@@ -93,7 +93,7 @@ func cmdAdopt() {
 			}
 			var res *specmod.CommitResult
 			if err == nil {
-				res, err = sp.CommitAttempt(ctx, prepared.AttemptID, claims, "adopted from existing on-disk code")
+				res, err = sp.CommitAttempt(ctx, prepared.AttemptID, claims, "adopted from existing on-disk code", specmod.CommitMetadata{})
 			}
 			switch {
 			case err != nil:

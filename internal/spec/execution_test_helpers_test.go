@@ -33,5 +33,5 @@ func commitTestAttempt(
 		TemplateHashes: prepared.TemplateHashes, SystemInstructions: prepared.SystemPrompt,
 	})
 	require.NoError(t, err)
-	return s.CommitAttempt(ctx, prepared.AttemptID, files, notes)
+	return s.CommitAttempt(ctx, prepared.AttemptID, files, notes, CommitMetadata{})
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 )
 
@@ -20,6 +21,13 @@ func (s *Server) handleInitialize(ctx context.Context, id any, params json.RawMe
 				"tools":     map[string]any{},
 				"resources": map[string]any{},
 				"prompts":   map[string]any{},
+				"experimental": map[string]any{
+					"crestExecution": map[string]any{
+						"protocolVersion":   execution.ProtocolVersion,
+						"rolePolicyVersion": execution.RolePolicyVersion,
+						"legacyCommit":      false,
+					},
+				},
 			},
 			"serverInfo": map[string]any{
 				"name":    "crest-spec",

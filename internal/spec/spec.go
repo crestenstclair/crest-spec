@@ -77,6 +77,7 @@ type specStore interface {
 	GetCandidateSetByAttempt(ctx context.Context, attemptID string) (*store.CandidateSet, error)
 	GetLatestRejectedCandidate(ctx context.Context, sessionID, resourceID string) (*store.CandidateSet, error)
 	CreateFailureClassification(ctx context.Context, input store.FailureClassificationWrite) (*store.FailureClassification, error)
+	ResolveFailureClassification(ctx context.Context, id, resolution, resolvedByAttempt string) error
 	ListFailureClassificationsByAttempt(ctx context.Context, attemptID string) ([]store.FailureClassification, error)
 	ListFailureClassifications(ctx context.Context, limit int) ([]store.FailureClassification, error)
 	CreateAttemptHandoff(ctx context.Context, handoff store.AttemptHandoff) (*store.AttemptHandoff, error)

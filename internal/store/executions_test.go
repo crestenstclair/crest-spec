@@ -15,6 +15,7 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.NoError(t, st.ReconcileProjectIntent(ctx, ProjectIntentSnapshot{
 		ProjectName: "synth", Mission: "make sound", SpecHash: "spec-hash",
 		Goals:         []IntentGoal{{ID: "goal.play", Description: "play a note", Priority: "required"}},
+		Capabilities:  []IntentCapability{{ID: "capability.play", Description: "render a note", Goals: []string{"goal.play"}}},
 		RequiredGoals: []string{"goal.play"},
 	}))
 	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
@@ -23,6 +24,8 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	input := testExecutionManifest()
+	input.GoalIDs = []string{"goal.play"}
+	input.CapabilityIDs = []string{"capability.play"}
 	started, err := st.StartExecution(ctx, input)
 	require.NoError(t, err)
 	require.Equal(t, string(execution.StatusExecuting), started.Status)
@@ -33,6 +36,8 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.Len(t, started.Tools, 2)
 	require.Equal(t, "filesystem", started.Tools[0].Name)
 	require.Equal(t, "execution_started", started.Events[0].Kind)
+	require.Equal(t, []string{"goal.play"}, started.GoalIDs)
+	require.Equal(t, []string{"capability.play"}, started.CapabilityIDs)
 
 	// A network retry returns the original record, while reusing the key with
 	// changed governed inputs fails closed.
@@ -111,6 +116,38 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "accepted", handoffs[0].Status)
 	require.Equal(t, "attempt-2", handoffs[0].TargetAttemptID)
+
+	retryExecution := testExecutionManifest()
+	retryExecution.AttemptID = "attempt-2"
+	retryExecution.ContextManifestID = "manifest-2"
+	retryExecution.IdempotencyKey = "host-request-2"
+	retryExecution.Role = "minimal_diff_repair"
+	retryExecution.ContextPolicy = "minimal-diff-repair-v1"
+	retryExecution.GoalIDs = []string{"goal.play"}
+	retryExecution.CapabilityIDs = []string{"capability.play"}
+	retry, err := st.StartExecution(ctx, retryExecution)
+	require.NoError(t, err)
+	retryCandidate, err := st.SubmitCandidate(ctx, retry.ID, []CandidateFile{{
+		Path: "synth.go", Content: "package synth\nfunc Play() {}\n", WriteIntent: "modify",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{ExecutionID: retry.ID, ToStatus: execution.StatusValidating})
+	require.NoError(t, err)
+	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: retry.ID, Accepted: true, Reason: "retry passed",
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Files: []GeneratedFile{{
+			Path: "synth.go", ResourceID: "resource.synth", ContentHash: retryCandidate.Files[0].ContentHash,
+			PromptHash: retry.ContextHash, Model: "test-model",
+		}},
+		Attempts: 2,
+	})
+	require.NoError(t, err)
+	resolvedFailures, err := st.ListFailureClassificationsByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Equal(t, "resolved by accepted retry", resolvedFailures[0].Resolution)
+	require.Equal(t, "attempt-2", resolvedFailures[0].ResolvedByAttempt)
+	require.NotNil(t, resolvedFailures[0].ResolvedAt)
 }
 
 func TestExecutionRejectsMismatchedContextAndIllegalTransitions(t *testing.T) {
@@ -178,9 +215,12 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 		}},
 		Dependencies: []Dependency{{SourceID: "resource.synth", TargetID: "resource.clock", Kind: "uses"}},
 		Notes:        "keep the oscillator deterministic", Attempts: 1, DurationMS: 30,
+		HostCommitRef: "commit-abc", GoalProgress: map[string]any{"goal.play": "advanced"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, string(execution.StatusAccepted), accepted.Status)
+	require.Equal(t, "commit-abc", accepted.HostCommitRef)
+	require.Equal(t, "advanced", accepted.GoalProgress["goal.play"])
 	resource, err := st.GetResource("resource.synth")
 	require.NoError(t, err)
 	require.Equal(t, "effective", resource.EffectiveHash)
@@ -201,6 +241,7 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 	require.NoError(t, err)
 	require.Len(t, generationRows, 1)
 	require.Equal(t, started.ID, generationRows[0].ExecutionID)
+	require.False(t, generationRows[0].Legacy)
 	require.Equal(t, "accepted", generationRows[0].Outcome)
 }
 

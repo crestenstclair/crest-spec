@@ -111,4 +111,6 @@ func TestDashboardIncludesContextInspectorInterface(t *testing.T) {
 	require.Contains(t, html, "Execution Inspector")
 	require.Contains(t, html, "compareSelectedExecutions")
 	require.Contains(t, html, "/api/v1/executions")
+	require.Contains(t, html, "goal_progress")
+	require.Contains(t, html, "host_commit_ref")
 }

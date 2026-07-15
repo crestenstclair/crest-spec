@@ -90,8 +90,10 @@ type specHandler interface {
 	InspectExecution(ctx context.Context, id, attemptID string) (*storemod.ExecutionManifest, error)
 	ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error)
 	ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error)
+	ClassifyFailure(ctx context.Context, opts specmod.FailureClassifyOptions) (*storemod.FailureClassification, error)
+	ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error
 	ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error)
-	CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string) (*specmod.CommitResult, error)
+	CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string, metadata specmod.CommitMetadata) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
 	Note(ctx context.Context, sessionID, resourceID, content string) error
