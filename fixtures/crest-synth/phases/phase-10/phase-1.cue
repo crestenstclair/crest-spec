@@ -39,7 +39,7 @@ project: assetKinds: "rust-bin-target": {
 project: assets: MidiFileLoader: {
 	kind:        "rust-module-declaration"
 	description: "src/midi_file/: parses Standard MIDI Files into time-ordered kernel MidiEvents"
-	uses: ["valueObject.Kernel.MidiEvent", "valueObject.Kernel.MidiEventKind", "valueObject.Kernel.NoteNumber", "valueObject.Kernel.Velocity", "valueObject.Kernel.ChannelAddress", "valueObject.Kernel.MidiGroup", "valueObject.Kernel.MidiChannel", "valueObject.Kernel.NoteId"]
+	targets: ["valueObject.Kernel.MidiEvent", "valueObject.Kernel.MidiEventKind", "valueObject.Kernel.NoteNumber", "valueObject.Kernel.Velocity", "valueObject.Kernel.ChannelAddress", "valueObject.Kernel.MidiGroup", "valueObject.Kernel.MidiChannel", "valueObject.Kernel.NoteId"]
 	prompts: [
 		"Create a module at src/midi_file/ (mod.rs plus submodules as needed); declare it from src/lib.rs is handled by the engine, just author the module body.",
 		"Expose a loader that parses a Standard MIDI File (SMF) using the `midly` crate into a time-ordered Vec of (timestamp_seconds: f64, MidiEvent) tuples, sorted ascending by timestamp.",
@@ -55,7 +55,7 @@ project: assets: MidiFileLoader: {
 project: assets: MidiPlayMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/midi_play.rs: offline MIDI-file player — renders a .mid (or a built-in demo tune) to WAV through the phase-1 engine"
-	uses: ["asset.MidiFileLoader", "aggregate.Audio.SineVoice", "domainService.Audio.AudioRenderer"]
+	targets: ["asset.MidiFileLoader", "aggregate.Audio.SineVoice", "domainService.Audio.AudioRenderer"]
 	prompts: [
 		"File path: src/bin/midi_play.rs",
 		"CLI: `midi_play [FILE.mid] [--out OUT.wav]`. If FILE is omitted, play a BUILT-IN demo melody constructed in code as a short multi-bar tune (a recognizable arpeggio/melody spanning a few seconds) — so no .mid asset file must live in the repo.",

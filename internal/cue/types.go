@@ -250,6 +250,7 @@ type Meta struct {
 type Context struct {
 	Purpose             string                        `json:"purpose"`
 	UbiquitousLanguage  map[string]string             `json:"ubiquitousLanguage,omitempty"`
+	Invariants          FlexInvariants                `json:"invariants,omitempty"`
 	Meta                Meta                          `json:"meta,omitempty"`
 	Aggregates          map[string]Aggregate          `json:"aggregates,omitempty"`
 	ValueObjects        map[string]ValueObject        `json:"valueObjects,omitempty"`
@@ -298,7 +299,9 @@ type Port struct {
 	Direction     string            `json:"direction,omitempty"`
 	Contract      map[string]string `json:"contract,omitempty"`
 	Consumes      []string          `json:"consumes,omitempty"`
+	Invariants    []string          `json:"invariants,omitempty"`
 	Meta          Meta              `json:"meta,omitempty"`
+	Validations   []Validation      `json:"validations,omitempty"`
 	ContributesTo []Contribution    `json:"contributesTo,omitempty"`
 }
 

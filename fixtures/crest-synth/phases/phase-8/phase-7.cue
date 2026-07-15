@@ -94,7 +94,7 @@ project: contexts: Effects: repositories: EffectChainRepository: {
 project: assets: EffectsDemoMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/effects_demo.rs: renders the multi-patch demo through per-patch + global EffectChains, proving slot-order and bypass-passthrough to WAV"
-	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Effects.EffectChain", "port.Effects.EffectProcessor"]
+	targets: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Effects.EffectChain", "port.Effects.EffectProcessor"]
 	prompts: [
 		"File path: src/bin/effects_demo.rs",
 		"CLI: `effects_demo [FILE.mid] [--out OUT.wav]`. Default output path effects-demo.wav. With no FILE, use the built-in multi-channel demo tune (sustained notes so the effect is audible).",

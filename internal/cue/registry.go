@@ -295,6 +295,7 @@ func (reg *Registry) registerPorts(ctxName, ctxID string, ctxMeta Meta, ctx Cont
 			Declaration:   port,
 			Meta:          mergeMeta(ctxMeta, port.Meta),
 			Dependencies:  consumesEdges(port.Consumes),
+			Validations:   port.Validations,
 			Contributions: port.ContributesTo,
 		}
 	}

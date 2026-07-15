@@ -99,7 +99,7 @@ project: contexts: Editor: aggregates: EditorState: {
 project: assets: StandaloneUiMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/synth_ui.rs: standalone eframe/egui parameter editor, keyboard+gamepad driven (no mouse/touch, no note triggering); hosts the live engine (external MIDI in via MidirInput, audio out via cpal); one-way EditorEvent -> EditorState -> view loop; hermetic --smoke headless mode"
-	uses: [
+	targets: [
 		"aggregate.Editor.EditorState",
 		"valueObject.Editor.EditorEvent",
 		"asset.MidiFileLoader",

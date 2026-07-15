@@ -54,7 +54,7 @@ project: assets: CpalAudioOutputAdapter: {
 project: assets: MidiPlayLiveMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/midi_play_live.rs: live MIDI-file player — streams a .mid (or built-in demo tune) through the default output device via cpal"
-	uses: ["asset.MidiFileLoader", "asset.CpalAudioOutputAdapter", "domainService.Synth.AudioRenderer", "aggregate.Synth.Voice"]
+	targets: ["asset.MidiFileLoader", "asset.CpalAudioOutputAdapter", "domainService.Synth.AudioRenderer", "aggregate.Synth.Voice"]
 	prompts: [
 		"File path: src/bin/midi_play_live.rs",
 		"CLI: `midi_play_live [FILE.mid] [--seconds N]`. If FILE is omitted, play the same built-in demo melody as midi_play. `--seconds N` optionally caps playback duration.",

@@ -65,7 +65,7 @@ project: contexts: Modulation: domainServices: ModulationProcessor: {
 project: assets: ModPlayMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/mod_play.rs: multi-patch MIDI player with the Modulation context active — audible LFO vibrato + filter sweep"
-	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Modulation.ModMatrix", "domainService.Modulation.ModulationProcessor"]
+	targets: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Modulation.ModMatrix", "domainService.Modulation.ModulationProcessor"]
 	prompts: [
 		"File path: src/bin/mod_play.rs",
 		"Start from the patch_play setup: 2-3 Patches with distinct engine settings, each subscribed to a different MIDI channel, fed by the ChannelDispatcher into per-patch voice pools, summed via PatchMixer / GlobalMixer.",

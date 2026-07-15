@@ -106,6 +106,23 @@ func TestLoad_Invalid(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestLoad_RejectsUnknownDeclarationFields(t *testing.T) {
+	dir := t.TempDir()
+	data, err := os.ReadFile(filepath.Join(testdataDir("minimal"), "spec.cue"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), data, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "unknown.cue"), []byte(`
+project: assets: Broken: {
+	kind: "source_file"
+	uses: ["aggregate.Synth.Voice"]
+}
+`), 0o644))
+
+	_, err = Load(dir)
+	require.Error(t, err)
+	require.ErrorContains(t, err, `unknown field "uses"`)
+}
+
 func TestLoad_NonexistentDir(t *testing.T) {
 	_, err := Load("/nonexistent/path")
 	assert.Error(t, err)

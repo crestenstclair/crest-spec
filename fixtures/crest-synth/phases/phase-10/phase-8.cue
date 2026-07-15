@@ -116,7 +116,7 @@ project: contexts: Presets: repositories: PresetRepository: {
 project: assets: PresetRoundtripDemoMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/preset_demo.rs: serializes a full Setup, reloads it, and proves round-trip fidelity by rendering identical audio before/after"
-	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Presets.Preset", "aggregate.Presets.Setup", "port.Presets.PresetCodec"]
+	targets: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "aggregate.Presets.Preset", "aggregate.Presets.Setup", "port.Presets.PresetCodec"]
 	prompts: [
 		"File path: src/bin/preset_demo.rs",
 		"CLI: `preset_demo [--out OUT.wav]`. Default output path preset-demo.wav.",

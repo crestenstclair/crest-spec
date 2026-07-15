@@ -79,7 +79,7 @@ project: contexts: Synth: domainServices: AudioRenderer:  {purpose: "iterates al
 project: assets: VoiceDemoMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/voice_demo.rs: over-polyphonic passage through SynthEngine/VoiceAllocator that forces voice stealing, renders to WAV"
-	uses: ["aggregate.Synth.Voice", "domainService.Synth.VoiceAllocator", "domainService.Synth.AudioRenderer", "port.Synth.SynthEngine"]
+	targets: ["aggregate.Synth.Voice", "domainService.Synth.VoiceAllocator", "domainService.Synth.AudioRenderer", "port.Synth.SynthEngine"]
 	prompts: [
 		"File path: src/bin/voice_demo.rs",
 		"CLI: `voice_demo [--out OUT.wav]`. Default output path voice-demo.wav.",

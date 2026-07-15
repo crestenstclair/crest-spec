@@ -18,7 +18,7 @@ project: assets: RootCargoToml: {
 project: assets: ToneTestMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/tone_test.rs: renders one second of A440 through the engine and asserts the output is audible"
-	uses: ["domainService.Engine.EngineRenderer", "valueObject.Kernel.Frequency", "valueObject.Kernel.AudioFrame"]
+	targets: ["domainService.Engine.EngineRenderer", "valueObject.Kernel.Frequency", "valueObject.Kernel.AudioFrame"]
 	prompts: [
 		"File path: src/bin/tone_test.rs",
 		"Trigger a single A440 note through the engine, render one second of audio into a buffer, and MEASURE the peak absolute sample value of the rendered buffer.",

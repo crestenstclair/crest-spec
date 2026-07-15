@@ -120,7 +120,7 @@ project: contextMap: realTimeToPatch:     {from: "RealTime", to: "Patch", kind: 
 project: assets: GamepadNavDemoMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/gamepad_demo.rs: headless prover for GamepadNavigator + GlyphResolver — scripted events -> GamepadActions -> cursor model, glyph resolution per controller type"
-	uses: ["domainService.Shell.GamepadNavigator", "domainService.Shell.GlyphResolver"]
+	targets: ["domainService.Shell.GamepadNavigator", "domainService.Shell.GlyphResolver"]
 	prompts: [
 		"File path: src/bin/gamepad_demo.rs",
 		"CLI: `gamepad_demo`. Takes no arguments and opens NO device and NO window — it is a headless harness over the host-agnostic Shell domain services. Do NOT import gilrs, egui, or eframe.",

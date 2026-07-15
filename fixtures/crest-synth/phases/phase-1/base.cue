@@ -36,6 +36,8 @@ project: contexts: Kernel: ubiquitousLanguage: {
 
 project: contexts: Kernel: valueObjects: MidiGroup:   {from: "u8", description: "MIDI 2.0 group index (0-15)", invariants: ["must be 0-15"]}
 project: contexts: Kernel: valueObjects: MidiChannel: {from: "u8", description: "MIDI channel (0-15 within a group)", invariants: ["must be 0-15"]}
+project: contexts: Kernel: valueObjects: ChannelAddress: {state: {group: "MidiGroup", channel: "MidiChannel"}, description: "a (group, channel) pair — the 256-destination address space for MIDI 2.0"}
+project: contexts: Kernel: valueObjects: MidiEventKind: {from: "enum", description: "normalized MIDI event discriminator"}
 project: contexts: Kernel: valueObjects: NoteId:      {from: "u32", description: "unique identifier for a sounding note"}
 project: contexts: Kernel: valueObjects: NoteNumber:  {from: "u8", description: "MIDI note number (0-127)", invariants: ["must be 0-127"]}
 project: contexts: Kernel: valueObjects: Velocity:    {from: "f64", description: "normalized note velocity (0.0-1.0)", invariants: ["must be 0.0-1.0"]}

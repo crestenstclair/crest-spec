@@ -79,7 +79,7 @@ project: contexts: Patch: repositories: PatchRepository: {
 project: assets: PatchPlayMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/patch_play.rs: multi-patch MIDI player — proves dispatcher → per-patch voice pools → global mix end to end"
-	uses: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "domainService.Synth.VoiceAllocator"]
+	targets: ["asset.MidiFileLoader", "aggregate.Patch.Patch", "aggregate.Patch.GlobalMixer", "domainService.Patch.ChannelDispatcher", "domainService.Patch.PatchMixer", "domainService.Synth.VoiceAllocator"]
 	prompts: [
 		"File path: src/bin/patch_play.rs",
 		"Configure 2-3 Patch aggregates with DISTINCT engine settings (different OscillatorConfig / FilterConfig / AmpEnvelopeConfig and gain/pan), each with its own VoicePoolConfig, and each subscribed (ChannelSubscription) to a DIFFERENT MIDI channel via its ChannelAddress.",

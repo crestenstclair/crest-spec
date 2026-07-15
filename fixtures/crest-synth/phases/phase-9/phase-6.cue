@@ -106,7 +106,7 @@ project: contexts: SampleLibrary: repositories: SampleSetRepository: {
 project: assets: SamplePlayDemoMain: {
 	kind:        "rust-bin-target"
 	description: "src/bin/sample_demo.rs: hermetic SampleLibrary prover — synthesizes a sample, loads it, maps key/velocity zones, interpolates, renders to WAV"
-	uses: ["asset.MidiFileLoader", "aggregate.SampleLibrary.SampleSet", "applicationService.SampleLibrary.SampleLoader", "domainService.SampleLibrary.SampleInterpolator"]
+	targets: ["asset.MidiFileLoader", "aggregate.SampleLibrary.SampleSet", "applicationService.SampleLibrary.SampleLoader", "domainService.SampleLibrary.SampleInterpolator"]
 	prompts: [
 		"File path: src/bin/sample_demo.rs",
 		"CLI: `sample_demo [--out OUT.wav]`. Default output path sample-demo.wav.",
