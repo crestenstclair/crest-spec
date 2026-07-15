@@ -2,12 +2,14 @@ package plan
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/graph"
 	"github.com/crestenstclair/crest-spec/internal/store"
+	projectworkspace "github.com/crestenstclair/crest-spec/internal/workspace"
 
 	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
 	"github.com/stretchr/testify/assert"
@@ -225,6 +227,31 @@ func TestPlan_ModifiedContentIsIgnored(t *testing.T) {
 	require.NoError(t, err)
 	// Hand-edits to generated files are the user's business — no action.
 	assert.Empty(t, actions)
+}
+
+func TestPlanResolvesPersistedFilesInsideProjectWorkspace(t *testing.T) {
+	resources := map[string]cuepkg.Resource{
+		"aggregate.Synth.Voice": {ID: "aggregate.Synth.Voice", Kind: "aggregate", Declaration: map[string]string{"purpose": "test"}},
+	}
+	reg, g := buildPlanInputs(resources)
+	hashes := graph.ComputeEffectiveHashes(resources, g, "opus", "default")
+	st := newFakeStore()
+	st.resources["aggregate.Synth.Voice"] = store.Resource{
+		ID: "aggregate.Synth.Voice", Kind: "aggregate",
+		DeclarationHash: declHash(resources["aggregate.Synth.Voice"].Declaration),
+		EffectiveHash:   hashes["aggregate.Synth.Voice"], Model: "opus", SettledAt: time.Now(),
+	}
+	st.files["aggregate.Synth.Voice"] = []store.GeneratedFile{{
+		Path: "src/voice.go", ResourceID: "aggregate.Synth.Voice", ContentHash: "content-hash",
+	}}
+	root := t.TempDir()
+	fs := newFakeFS()
+	fs.files[filepath.Join(root, "src", "voice.go")] = []byte("package voice")
+
+	planner := NewInWorkspace(st, fs, projectworkspace.FromRoot(root))
+	actions, err := planner.Plan(context.Background(), reg, g, "opus", "default")
+	require.NoError(t, err)
+	assert.Empty(t, actions, "persisted paths must be resolved from the project, not the process working directory")
 }
 
 func TestPlan_StructuralKindsExcluded(t *testing.T) {

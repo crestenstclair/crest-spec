@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	completionpkg "github.com/crestenstclair/crest-spec/internal/completion"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/crestenstclair/crest-spec/internal/store"
@@ -20,13 +21,15 @@ import (
 type lifecycleFaultStore struct {
 	specStore
 
-	countOtherFileOwnersErr error
-	listSessionResourcesErr error
-	listWaveResourcesErr    error
-	listResourcesErr        error
-	updateSessionErr        error
-	completeApplyErr        error
-	releaseLockErr          error
+	countOtherFileOwnersErr  error
+	upsertSessionResourceErr error
+	listSessionResourcesErr  error
+	listWaveResourcesErr     error
+	listResourcesErr         error
+	updateSessionErr         error
+	completeApplyErr         error
+	releaseLockErr           error
+	applyCompletionErr       error
 }
 
 func (s *lifecycleFaultStore) CountOtherFileOwners(path, resourceID string) (int64, error) {
@@ -34,6 +37,13 @@ func (s *lifecycleFaultStore) CountOtherFileOwners(path, resourceID string) (int
 		return 0, s.countOtherFileOwnersErr
 	}
 	return s.specStore.CountOtherFileOwners(path, resourceID)
+}
+
+func (s *lifecycleFaultStore) UpsertSessionResource(resource store.SessionResource) error {
+	if s.upsertSessionResourceErr != nil {
+		return s.upsertSessionResourceErr
+	}
+	return s.specStore.UpsertSessionResource(resource)
 }
 
 func (s *lifecycleFaultStore) ListSessionResources(sessionID string) ([]store.SessionResource, error) {
@@ -76,6 +86,49 @@ func (s *lifecycleFaultStore) ReleaseLock() error {
 		return s.releaseLockErr
 	}
 	return s.specStore.ReleaseLock()
+}
+
+func (s *lifecycleFaultStore) ApplyCompletionProjection(
+	ctx context.Context,
+	projectName string,
+	goals []completionpkg.GoalProjection,
+	project completionpkg.ProjectProjection,
+	source store.TransitionSource,
+) error {
+	if s.applyCompletionErr != nil {
+		return s.applyCompletionErr
+	}
+	return s.specStore.ApplyCompletionProjection(ctx, projectName, goals, project, source)
+}
+
+func TestBeginPropagatesSessionResourceSeedFailure(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "spec.cue"),
+		[]byte(withTestIntent(commitTestSpecCUE)),
+		0o644,
+	))
+	s := New(st, OSFileSystem{}, &config.Config{
+		SpecDir: dir, GenerateModel: "claude-sonnet-4-6", MaxRetries: 3,
+	})
+	faults := &lifecycleFaultStore{
+		specStore: s.store, upsertSessionResourceErr: errors.New("session resource write unavailable"),
+	}
+	s.store = faults
+
+	result, err := s.Begin(context.Background(), BeginOpts{})
+	require.ErrorContains(t, err, "seed session resources")
+	require.ErrorContains(t, err, "session resource write unavailable")
+	require.Nil(t, result)
+
+	_, err = st.GetActiveSession()
+	require.Error(t, err, "a partially seeded session must not remain active")
+	_, err = st.GetLock()
+	require.Error(t, err, "a failed session start must release the reconciliation lock")
 }
 
 func TestConfirmDestroysBlocksOnOwnershipLookupFailure(t *testing.T) {
@@ -124,6 +177,29 @@ func TestFinishPropagatesSessionResourceQueryFailure(t *testing.T) {
 
 	result, err := s.Finish(context.Background(), state.sessionID, true)
 	require.ErrorContains(t, err, "list session resources")
+	require.Nil(t, result)
+}
+
+func TestNextPropagatesSessionResourceQueryFailure(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	s.store = &lifecycleFaultStore{specStore: s.store, listSessionResourcesErr: errors.New("session resources unavailable")}
+
+	result, err := s.Next(context.Background(), state.sessionID)
+	require.ErrorContains(t, err, "list session resources")
+	require.Nil(t, result)
+}
+
+func TestNextPropagatesCurrentWaveUpdateFailure(t *testing.T) {
+	s, sessionID, wave0ID, _ := newTestSpecWithTwoWaveSession(t)
+	sr, err := s.store.GetSessionResource(sessionID, wave0ID)
+	require.NoError(t, err)
+	require.NoError(t, s.store.UpdateSessionResourceState(
+		sessionID, wave0ID, string(StateCommitted), "", sr.LastOutput, sr.Attempts, sr.JobID,
+	))
+	s.store = &lifecycleFaultStore{specStore: s.store, updateSessionErr: errors.New("current wave write unavailable")}
+
+	result, err := s.Next(context.Background(), sessionID)
+	require.ErrorContains(t, err, "update current wave")
 	require.Nil(t, result)
 }
 
@@ -202,4 +278,22 @@ func TestVerifyWaveFailsWhenVerificationCommandCannotLaunch(t *testing.T) {
 	require.NotEmpty(t, result.Errors)
 	require.Equal(t, "type_check", result.Errors[0].Kind)
 	require.Contains(t, result.Errors[0].Message, "could not run")
+}
+
+const lifecycleProjectValidationCUE = commitTestSpecCUE + `
+project: validations: [{kind: "custom", command: ["sh", "-c", "true"]}]
+`
+
+func TestVerifyWaveFailsWhenCompletionRefreshCannotPersist(t *testing.T) {
+	s, state := newTestSpecWithSessionCUE(t, lifecycleProjectValidationCUE)
+	s.store = &lifecycleFaultStore{specStore: s.store, applyCompletionErr: errors.New("completion projection unavailable")}
+	sr, err := s.store.GetSessionResource(state.sessionID, state.resourceID)
+	require.NoError(t, err)
+
+	result := s.VerifyWave(context.Background(), state.sessionID, sr.WaveIndex)
+	require.False(t, result.Passed)
+	require.NotEmpty(t, result.Errors)
+	last := result.Errors[len(result.Errors)-1]
+	require.Equal(t, "completion_refresh", last.Kind)
+	require.Contains(t, last.Message, "completion projection unavailable")
 }

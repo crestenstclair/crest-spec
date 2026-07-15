@@ -30,13 +30,25 @@ type fileReader interface {
 	ReadFile(path string) ([]byte, error)
 }
 
+type pathResolver interface {
+	Resolve(path string) (string, error)
+}
+
 type Planner struct {
-	store planStore
-	fs    fileReader
+	store     planStore
+	fs        fileReader
+	workspace pathResolver
 }
 
 func New(store planStore, fs fileReader) *Planner {
 	return &Planner{store: store, fs: fs}
+}
+
+// NewInWorkspace makes persisted generated-file paths independent of the
+// process working directory while preserving New for embedders whose reader
+// already interprets project-relative paths.
+func NewInWorkspace(store planStore, fs fileReader, workspace pathResolver) *Planner {
+	return &Planner{store: store, fs: fs, workspace: workspace}
 }
 
 func (p *Planner) Plan(
@@ -283,7 +295,14 @@ func (p *Planner) checkMissing(id string) (*PlannedAction, error) {
 	}
 
 	for _, f := range files {
-		if _, err := p.fs.ReadFile(f.Path); err != nil {
+		path := f.Path
+		if p.workspace != nil {
+			path, err = p.workspace.Resolve(f.Path)
+			if err != nil {
+				return nil, fmt.Errorf("resolve generated file %s: %w", f.Path, err)
+			}
+		}
+		if _, err := p.fs.ReadFile(path); err != nil {
 			return &PlannedAction{
 				ResourceID: id, Kind: ActionModify,
 				Reason: "generated file missing — regenerating", Files: filePaths(files),

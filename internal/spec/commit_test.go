@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -127,6 +130,53 @@ func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	// (outcome IN ('accepted','rejected')) — store errors are swallowed by
 	// convention, so a bad value silently leaves outcome NULL.
 	require.Equal(t, "accepted", gens[0].Outcome, "committed generation must record outcome 'accepted'")
+}
+
+func TestConcurrentCommitReplayConvergesOnOneCandidate(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
+	require.NoError(t, err)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+	files := []CommitFile{{Path: "generated/concurrent.go", Content: "package generated\n"}}
+
+	start := make(chan struct{})
+	results := make(chan *CommitResult, 2)
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, commitErr := s.CommitAttempt(ctx, prepared.AttemptID, files, "", CommitMetadata{})
+			results <- result
+			errs <- commitErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for commitErr := range errs {
+		require.NoError(t, commitErr)
+	}
+
+	var candidateID string
+	for result := range results {
+		require.NotNil(t, result)
+		require.True(t, result.Committed)
+		if candidateID == "" {
+			candidateID = result.CandidateID
+		}
+		require.Equal(t, candidateID, result.CandidateID)
+	}
 }
 
 func TestCommitRejectedGenerationOutcomeRoundTrips(t *testing.T) {

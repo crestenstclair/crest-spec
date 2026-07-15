@@ -276,9 +276,28 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	if err != nil {
 		return nil, fmt.Errorf("commit attempt: context: %w", err)
 	}
+	if result, terminal, err := s.terminalCommitResult(ctx, executionManifest, attemptID); terminal || err != nil {
+		return result, err
+	}
 	normalizedFiles, err := s.normalizeCommitFiles(files)
 	if err != nil {
 		return nil, err
+	}
+	paths := make([]string, 0, len(normalizedFiles))
+	for _, file := range normalizedFiles {
+		paths = append(paths, file.Path)
+	}
+	releaseWorkspace, err := s.commitCoordinator().Acquire(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseWorkspace()
+	executionManifest, err = s.store.GetExecutionManifestByAttempt(ctx, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("commit attempt: refresh execution: %w", err)
+	}
+	if result, terminal, err := s.terminalCommitResult(ctx, executionManifest, attemptID); terminal || err != nil {
+		return result, err
 	}
 	candidateFiles, err := s.snapshotCommitFiles(normalizedFiles)
 	if err != nil {
@@ -287,16 +306,6 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	candidate, err := s.store.SubmitCandidate(ctx, executionManifest.ID, candidateFiles)
 	if err != nil {
 		return nil, err
-	}
-	if executionManifest.Status == string(execution.StatusAccepted) || executionManifest.Status == string(execution.StatusRejected) {
-		result := &CommitResult{
-			Committed: executionManifest.Status == string(execution.StatusAccepted), AttemptID: attemptID,
-			ExecutionID: executionManifest.ID, CandidateID: candidate.ID,
-		}
-		if failures, listErr := s.store.ListFailureClassificationsByAttempt(ctx, attemptID); listErr == nil && len(failures) > 0 {
-			result.FailureCategory = failures[len(failures)-1].Category
-		}
-		return result, nil
 	}
 	if err := s.writeChangedFiles(normalizedFiles); err != nil {
 		s.failExecution(ctx, executionManifest, contextManifest, execution.FailureToolFailure, err.Error())
@@ -402,6 +411,28 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	}, nil
 }
 
+func (s *Spec) terminalCommitResult(ctx context.Context, manifest *store.ExecutionManifest, attemptID string) (*CommitResult, bool, error) {
+	if manifest.Status != string(execution.StatusAccepted) && manifest.Status != string(execution.StatusRejected) {
+		return nil, false, nil
+	}
+	candidate, err := s.store.GetCandidateSetByAttempt(ctx, attemptID)
+	if err != nil {
+		return nil, true, fmt.Errorf("commit attempt: terminal candidate: %w", err)
+	}
+	result := &CommitResult{
+		Committed: manifest.Status == string(execution.StatusAccepted), AttemptID: attemptID,
+		ExecutionID: manifest.ID, CandidateID: candidate.ID,
+	}
+	failures, err := s.store.ListFailureClassificationsByAttempt(ctx, attemptID)
+	if err != nil {
+		return nil, true, fmt.Errorf("commit attempt: terminal failure classifications: %w", err)
+	}
+	if len(failures) > 0 {
+		result.FailureCategory = failures[len(failures)-1].Category
+	}
+	return result, true, nil
+}
+
 func executionGoalProgress(action planpkg.PlannedAction, status, reason string) map[string]any {
 	goals := make([]map[string]string, 0, len(action.Goals))
 	for _, goalID := range action.Goals {
@@ -422,49 +453,42 @@ func (s *Spec) snapshotCommitFiles(files []CommitFile) ([]store.CandidateFile, e
 		}
 		content := file.Content
 		intent := "modify"
+		path, err := s.projectWorkspace().Resolve(file.Path)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot candidate path %s: %w", file.Path, err)
+		}
 		if file.Content == "" {
-			data, err := s.fs.ReadFile(s.projectFilePath(file.Path))
+			data, err := s.fs.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("snapshot candidate claim %s: %w", file.Path, err)
 			}
 			content = string(data)
 			intent = "preserve"
-		} else if _, err := s.fs.ReadFile(file.Path); err != nil {
+		} else if _, err := s.fs.ReadFile(path); err != nil {
 			intent = "create"
 		}
-		result = append(result, store.CandidateFile{Path: filepath.Clean(file.Path), Content: content, WriteIntent: intent})
+		result = append(result, store.CandidateFile{Path: filepath.ToSlash(filepath.Clean(file.Path)), Content: content, WriteIntent: intent})
 	}
 	return result, nil
 }
 
 func (s *Spec) normalizeCommitFiles(files []CommitFile) ([]CommitFile, error) {
-	root := filepath.Clean(filepath.Dir(s.cfg.SpecDir))
 	result := make([]CommitFile, 0, len(files))
 	for _, file := range files {
 		if file.Path == "" {
 			continue
 		}
-		path := filepath.Clean(file.Path)
-		if filepath.IsAbs(path) {
-			relative, err := filepath.Rel(root, path)
-			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-				return nil, fmt.Errorf("commit attempt: path %q is outside project root", file.Path)
-			}
-			path = relative
+		path, err := s.projectWorkspace().Relative(file.Path)
+		if err != nil {
+			return nil, fmt.Errorf("commit attempt: %w", err)
 		}
-		if path == "." || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("commit attempt: path %q is outside project root", file.Path)
-		}
-		result = append(result, CommitFile{Path: filepath.ToSlash(path), Content: file.Content})
+		result = append(result, CommitFile{Path: path, Content: file.Content})
 	}
 	return result, nil
 }
 
-func (s *Spec) projectFilePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(filepath.Dir(s.cfg.SpecDir), filepath.FromSlash(path))
+func (s *Spec) projectFilePath(path string) (string, error) {
+	return s.projectWorkspace().Resolve(path)
 }
 
 func (s *Spec) executeCommitValidations(ctx context.Context, projectName string, resource cuepkg.Resource, provenance validationProvenance) []ValidationResult {

@@ -210,13 +210,17 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		WavesJSON:  string(wavesJSON),
 		HashesJSON: string(hashesJSON),
 	}); err != nil {
-		s.store.ReleaseLock()
+		if releaseErr := s.store.ReleaseLock(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release lock after session creation failure: %w", releaseErr))
+		}
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 
 	destroyActions, otherActions := partitionActions(actions)
 
-	s.seedSessionResources(sessionID, waves, otherActions)
+	if err := s.seedSessionResources(sessionID, waves, otherActions); err != nil {
+		return nil, s.failSessionStart(sessionID, fmt.Errorf("seed session resources: %w", err))
+	}
 
 	// Materialize amendment lifecycle state from the spec (best-effort: a
 	// reconcile failure must not block a generation session).
@@ -270,7 +274,11 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 		// failed lookup is not evidence that a file is sole-owned; proceeding in
 		// that case could delete a shared file before a later lookup exposes the
 		// persistence failure.
-		var removable []store.GeneratedFile
+		type removableFile struct {
+			generated store.GeneratedFile
+			path      string
+		}
+		var removable []removableFile
 		for _, f := range files {
 			owners, err := s.store.CountOtherFileOwners(f.Path, a.ResourceID)
 			if err != nil {
@@ -279,17 +287,21 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 			if owners > 0 {
 				continue
 			}
-			removable = append(removable, f)
+			path, err := s.projectFilePath(f.Path)
+			if err != nil {
+				return fail(fmt.Errorf("resolve generated file %s: %w", f.Path, err))
+			}
+			removable = append(removable, removableFile{generated: f, path: path})
 		}
 
 		for _, f := range removable {
-			if err := s.fs.Remove(s.projectFilePath(f.Path)); err != nil {
+			if err := s.fs.Remove(f.path); err != nil {
 				if os.IsNotExist(err) {
 					continue
 				}
-				return fail(fmt.Errorf("remove generated file %s: %w", f.Path, err))
+				return fail(fmt.Errorf("remove generated file %s: %w", f.generated.Path, err))
 			}
-			deletedFiles = append(deletedFiles, f.Path)
+			deletedFiles = append(deletedFiles, f.generated.Path)
 		}
 		if err := s.store.DeleteGeneratedFiles(a.ResourceID); err != nil {
 			return fail(fmt.Errorf("delete generated-file records for %s: %w", a.ResourceID, err))
@@ -345,7 +357,7 @@ func (s *Spec) ConfirmDestroys(ctx context.Context, sessionID string, resourceID
 	return s.executeDestroys(destroyActions, sess.ApplyID)
 }
 
-func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSets ...[]planpkg.PlannedAction) {
+func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSets ...[]planpkg.PlannedAction) error {
 	waveMap := make(map[string]int)
 	for i, wave := range waves {
 		for _, id := range wave {
@@ -354,15 +366,31 @@ func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSe
 	}
 	for _, actions := range actionSets {
 		for _, a := range actions {
-			s.store.UpsertSessionResource(store.SessionResource{
+			if err := s.store.UpsertSessionResource(store.SessionResource{
 				SessionID:  sessionID,
 				ResourceID: a.ResourceID,
 				State:      string(StatePending),
 				WaveIndex:  waveMap[a.ResourceID],
 				MaxRetries: s.cfg.MaxRetries,
-			})
+			}); err != nil {
+				return fmt.Errorf("upsert %s: %w", a.ResourceID, err)
+			}
 		}
 	}
+	return nil
+}
+
+// failSessionStart prevents a partially initialized session from remaining
+// active or retaining the global reconciliation lock. The original failure is
+// always preserved alongside any cleanup failures.
+func (s *Spec) failSessionStart(sessionID string, cause error) error {
+	if err := s.store.UpdateSession(sessionID, "aborted", 0); err != nil {
+		cause = errors.Join(cause, fmt.Errorf("mark session aborted: %w", err))
+	}
+	if err := s.store.ReleaseLock(); err != nil {
+		cause = errors.Join(cause, fmt.Errorf("release lock: %w", err))
+	}
+	return cause
 }
 
 func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) {
@@ -391,7 +419,10 @@ func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) 
 	}
 
 	// Build a lookup of session_resource states from SQLite
-	allResources, _ := s.store.ListSessionResources(sessionID)
+	allResources, err := s.store.ListSessionResources(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list session resources: %w", err)
+	}
 	stateMap := make(map[string]store.SessionResource)
 	for _, r := range allResources {
 		stateMap[r.ResourceID] = r
@@ -409,7 +440,9 @@ func (s *Spec) Next(ctx context.Context, sessionID string) (*NextResult, error) 
 			// Persist the found wave in either direction: forward when work
 			// remains ahead, backward when an earlier wave reopened.
 			if w != sess.CurrentWave {
-				s.store.UpdateSession(sessionID, sess.Status, w)
+				if err := s.store.UpdateSession(sessionID, sess.Status, w); err != nil {
+					return nil, fmt.Errorf("update current wave to %d: %w", w, err)
+				}
 			}
 			return &NextResult{
 				Done:      false,
@@ -487,7 +520,10 @@ func (s *Spec) writeChangedFiles(files []CommitFile) error {
 		if f.Path == "" || f.Content == "" {
 			continue
 		}
-		path := s.projectFilePath(f.Path)
+		path, err := s.projectFilePath(f.Path)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", f.Path, err)
+		}
 		dir := filepath.Dir(path)
 		if err := s.fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
@@ -789,7 +825,13 @@ func (s *Spec) runProjectValidationsRecorded(ctx context.Context, projectName, s
 			Message:    fmt.Sprintf("%s: %s", r.Kind, r.Message),
 		})
 	}
-	_ = s.refreshCompletion(ctx, store.TransitionSource{Type: "validation_wave", ID: sessionID, SessionID: sessionID})
+	if err := s.refreshCompletion(ctx, store.TransitionSource{Type: "validation_wave", ID: sessionID, SessionID: sessionID}); err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			Kind:    "completion_refresh",
+			Message: fmt.Sprintf("refresh project completion: %v", err),
+		})
+	}
 }
 
 // runProjectValidations is retained for focused validation tests and callers
