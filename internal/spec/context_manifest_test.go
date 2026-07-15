@@ -2,12 +2,14 @@ package spec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
+	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -177,6 +179,56 @@ func TestReferenceContextRejectsOutsideAndSecretBearingPaths(t *testing.T) {
 	require.Contains(t, candidates[2].UnavailableReason, "outside the project root")
 }
 
+func TestContextSourcesExposeAvailableAndUnavailableDecisions(t *testing.T) {
+	s, _, _ := newVerticalSliceContextSpec(t)
+	ctx := context.Background()
+	planResult, err := s.Plan(ctx)
+	require.NoError(t, err)
+	action, ok := contextPlanAction(planResult.Actions, "domainService.Audio.Renderer")
+	require.True(t, ok)
+	resource := planResult.Registry.Resources[action.ResourceID]
+	input := contextCandidateInput{
+		action: action, resource: resource, registry: planResult.Registry,
+		runtime: promptpkg.RuntimeContext{}, runtimeErr: errors.New("runtime probe failed"),
+		systemPrompt:   promptpkg.BuildSystemPrompt(planResult.Registry.Project),
+		resourcePrompt: promptpkg.BuildResourcePrompt(resource, planResult.Registry),
+		projectStatus:  s.contextProjectStatus(ctx, action, planResult.Registry),
+	}
+
+	core := coreContextSource(input)
+	require.Equal(t, []string{"project_goal", "task", "resource_contract", "system_instructions"}, contextCandidateKinds(core))
+	for _, candidate := range core {
+		require.True(t, candidate.Mandatory)
+		require.NotEmpty(t, candidate.Content)
+		require.Empty(t, candidate.UnavailableReason)
+	}
+
+	acceptance := acceptanceContextSource(input)
+	require.Len(t, acceptance, 1)
+	require.True(t, acceptance[0].Mandatory)
+	require.Contains(t, acceptance[0].Content, "a requested frequency produces an audio frame")
+
+	withoutAcceptance := input
+	withoutAcceptance.action.Capabilities = nil
+	unavailableAcceptance := acceptanceContextSource(withoutAcceptance)
+	require.Len(t, unavailableAcceptance, 1)
+	require.Empty(t, unavailableAcceptance[0].Content)
+	require.Contains(t, unavailableAcceptance[0].UnavailableReason, "no acceptance scenario")
+
+	architecture := s.architectureContextSource(input)
+	require.Equal(t, []string{"integration_contract", "dependency_contract", "consumer_contract"}, contextCandidateKinds(architecture))
+	decisions := selectorDecisionContextSource(input)
+	require.Equal(t, []string{"runtime_discovery", "call_sites", "recent_diff"}, contextCandidateKinds(decisions))
+	for _, decision := range decisions {
+		require.Empty(t, decision.Content)
+		require.NotEmpty(t, decision.UnavailableReason)
+	}
+
+	all := s.contextCandidates(input)
+	require.Equal(t, contextCandidateKinds(core), contextCandidateKinds(all[:len(core)]))
+	require.Equal(t, contextCandidateKinds(decisions), contextCandidateKinds(all[len(all)-len(decisions):]))
+}
+
 func newVerticalSliceContextSpec(t *testing.T) (*Spec, *store.Store, string) {
 	t.Helper()
 	st, err := store.New(":memory:")
@@ -210,4 +262,12 @@ func requireAddedContextKind(t *testing.T, changes []ContextSectionChange, kind 
 		}
 	}
 	require.Failf(t, "missing added context section", "kind %q not present", kind)
+}
+
+func contextCandidateKinds(candidates []contextmanifest.Candidate) []string {
+	kinds := make([]string, len(candidates))
+	for index, candidate := range candidates {
+		kinds[index] = candidate.Kind
+	}
+	return kinds
 }
