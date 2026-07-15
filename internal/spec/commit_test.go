@@ -93,7 +93,7 @@ project: contexts: Audio: valueObjects: Tone: {
 }
 `
 	s, st := newTestSpecWithSessionCUE(t, cueWithBrokenValidation)
-	res, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
+	res, err := commitTestAttempt(t, s, context.Background(), st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
 		"claude-sonnet-4-6")
 	require.NoError(t, err)
@@ -106,11 +106,16 @@ project: contexts: Audio: valueObjects: Tone: {
 
 func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
-	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
-		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
+	files := []CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}
+	result, err := commitTestAttempt(t, s, context.Background(), st.sessionID, st.resourceID,
+		files, "", "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
+	replayed, err := s.CommitAttempt(context.Background(), result.AttemptID, files, "")
+	require.NoError(t, err)
+	require.True(t, replayed.Committed)
+	require.Equal(t, result.CandidateID, replayed.CandidateID)
 	gens, _ := s.store.ListGenerations(st.resourceID, 10)
 	if len(gens) == 0 {
 		t.Fatal("expected a generation record from commit")
@@ -133,7 +138,7 @@ project: contexts: Audio: valueObjects: Tone: {
 }
 `
 	s, st := newTestSpecWithSessionCUE(t, cueWithFailingValidation)
-	_, err := s.Commit(context.Background(), st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, context.Background(), st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
 		"claude-sonnet-4-6")
 	if err != nil {

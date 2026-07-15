@@ -87,6 +87,7 @@ type ApplyAction struct {
 // Generation is the store's domain type for a single LLM generation attempt.
 type Generation struct {
 	ID              string
+	ExecutionID     string
 	ApplyID         string
 	ResourceID      string
 	PromptText      string
@@ -770,6 +771,7 @@ func (s *Store) ListApplyActions(applyID string) ([]ApplyAction, error) {
 func dbGenerationToGeneration(g db.Generation) Generation {
 	return Generation{
 		ID:              g.ID,
+		ExecutionID:     stringVal(g.ExecutionID),
 		ApplyID:         stringVal(g.ApplyID),
 		ResourceID:      g.ResourceID,
 		PromptText:      g.PromptText,

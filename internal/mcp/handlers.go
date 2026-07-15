@@ -44,13 +44,15 @@ group by domain; never hand-write target code). To RUN generation, use the
 5. For each resource in the wave (parallelize across the wave):
    a. spec/context      → scoped prompt + system_prompt + project invariants
                           (constraints for the generator to honor)
-   b. Generate with a sub-agent (sonnet) using that prompt
-   c. spec/commit       → files + notes + model
+   b. spec/execution_start → register crest-execution-v1, attempt/context hash,
+                          host/model/settings/tools/templates before generation
+   c. Generate with the role returned by spec/context using that prompt
+   d. spec/commit       → attempt_id + files + notes
                           The server writes files and runs the resource's
                           mechanical validations (compile/test/custom).
                           Any failure — including a validation that cannot
                           run — rejects the commit.
-   d. If Committed=false: call spec/context again (it now carries the failure
+   e. If Committed=false: call spec/context again (it now carries the failure
       and any triage guidance), regenerate, re-commit — up to max_retries.
       Then spec/resolve (guidance) or spec/skip.
 6. Repeat from step 4 until spec/next returns done=true
@@ -260,7 +262,7 @@ func (s *Server) handlePromptsGet(ctx context.Context, id any, params json.RawMe
 		}}
 
 	case "orchestrator_instructions":
-		instructions := "You are the orchestrator. For each resource: spec/context → generate with a sub-agent (sonnet) → spec/commit with files. The server's mechanical validations gate the commit; behavioral checks (spec/verify) gate the wave. On Committed=false, re-call spec/context (it now carries the failure and any triage guidance) and retry."
+		instructions := "You are the orchestrator. For each resource: spec/context → spec/execution_start with crest-execution-v1 and exact host/context metadata → generate with the returned role → spec/commit by attempt_id. The server's mechanical validations gate the immutable candidate; behavioral checks (spec/verify) gate the wave. On Committed=false, re-call spec/context (it carries the failure and role handoff) and retry."
 		return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"messages": []map[string]string{{"role": "user", "content": instructions}},
 		}}

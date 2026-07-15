@@ -9,6 +9,7 @@ import (
 	"time"
 
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
+	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
 
 // registerTools populates s.tools, s.dispatch, and s.toolFns.
@@ -72,9 +73,16 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/context_attempts", Description: "List recent immutable generation context attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
 		{Name: "spec/context_inspect", Description: "Inspect the exact immutable context served for an attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_manifest_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
 		{Name: "spec/context_compare", Description: "Compare two context manifests structurally", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`)},
+		{Name: "spec/execution_start", Description: "Register host execution metadata for an immutable attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`)},
+		{Name: "spec/execution_report", Description: "Complete or fail an execution attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"status":{"type":"string"}},"required":["attempt_id","status"]}`)},
+		{Name: "spec/execution_roles", Description: "List closed agent roles and policies", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/executions", Description: "List execution manifests", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
+		{Name: "spec/execution_inspect", Description: "Inspect one execution manifest", InputSchema: json.RawMessage(`{"type":"object","properties":{"execution_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
+		{Name: "spec/failures", Description: "List classified failures", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
+		{Name: "spec/handoffs", Description: "List role handoffs", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
 		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
-		{Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files and runs the resource's mechanical validations — any failure, including a validation that cannot run, rejects the commit. There are no self-judged verdicts: behavioral verification happens via spec/verify.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"}},"required":["session_id","resource_id"]}`)},
+		{Name: "spec/commit", Description: "Submit candidate files by immutable attempt ID", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"files":{"type":"array","items":{"type":"object"}},"notes":{"type":"string"}},"required":["attempt_id"]}`)},
 		{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`)},
 		{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
 		{Name: "spec/skip", Description: "Skip a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
@@ -223,14 +231,52 @@ type specNoteArgs struct {
 }
 
 type specCommitArgs struct {
-	SessionID  string `json:"session_id"`
-	ResourceID string `json:"resource_id"`
-	Files      []struct {
+	AttemptID string `json:"attempt_id"`
+	Files     []struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"files"`
 	Notes string `json:"notes"`
-	Model string `json:"model"`
+}
+
+type specExecutionStartArgs struct {
+	AttemptID          string                   `json:"attempt_id"`
+	ProtocolVersion    string                   `json:"protocol_version"`
+	IdempotencyKey     string                   `json:"idempotency_key"`
+	ContextHash        string                   `json:"context_hash"`
+	HostName           string                   `json:"host_name"`
+	HostVersion        string                   `json:"host_version"`
+	Provider           string                   `json:"provider"`
+	Model              string                   `json:"model"`
+	InferenceConfig    map[string]any           `json:"inference_config"`
+	AgentConfig        map[string]any           `json:"agent_config"`
+	Tools              []storemod.ExecutionTool `json:"tools"`
+	TemplateHashes     map[string]string        `json:"template_hashes"`
+	SystemInstructions string                   `json:"system_instructions"`
+	HostSessionID      string                   `json:"host_session_id"`
+}
+
+type specExecutionReportArgs struct {
+	AttemptID    string         `json:"attempt_id"`
+	Status       string         `json:"status"`
+	Reason       string         `json:"reason"`
+	Details      map[string]any `json:"details"`
+	DurationMS   int64          `json:"duration_ms"`
+	InputTokens  int64          `json:"input_tokens"`
+	OutputTokens int64          `json:"output_tokens"`
+	CostUSD      float64        `json:"cost_usd"`
+	Category     string         `json:"failure_category"`
+	Confidence   float64        `json:"confidence"`
+}
+
+type specExecutionInspectArgs struct {
+	ExecutionID string `json:"execution_id"`
+	AttemptID   string `json:"attempt_id"`
+}
+
+type specAttemptLimitArgs struct {
+	AttemptID string `json:"attempt_id"`
+	Limit     int    `json:"limit"`
 }
 
 type specResolveArgs struct {
@@ -391,6 +437,30 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
+		Name: "spec/execution_start", Description: "Register the exact host, model, tools, settings, templates, system instructions, and context hash before an agent executes an attempt. Required before spec/commit.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"protocol_version":{"type":"string","const":"crest-execution-v1"},"idempotency_key":{"type":"string"},"context_hash":{"type":"string"},"host_name":{"type":"string"},"host_version":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"inference_config":{"type":"object"},"agent_config":{"type":"object"},"tools":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"permission":{"type":"string"}},"required":["name","permission"]}},"template_hashes":{"type":"object","additionalProperties":{"type":"string"}},"system_instructions":{"type":"string"},"host_session_id":{"type":"string"}},"required":["attempt_id","protocol_version","idempotency_key","context_hash","host_name","model","template_hashes"]}`),
+	}, specTool("execution start", func(ctx context.Context, a specExecutionStartArgs) (any, error) {
+		return s.spec.StartExecution(ctx, specmod.ExecutionStartOptions{
+			AttemptID: a.AttemptID, ProtocolVersion: a.ProtocolVersion, IdempotencyKey: a.IdempotencyKey,
+			ContextHash: a.ContextHash, HostName: a.HostName, HostVersion: a.HostVersion,
+			Provider: a.Provider, Model: a.Model, InferenceConfig: a.InferenceConfig,
+			AgentConfig: a.AgentConfig, Tools: a.Tools, TemplateHashes: a.TemplateHashes,
+			SystemInstructions: a.SystemInstructions, HostSessionID: a.HostSessionID,
+		})
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/execution_report", Description: "Complete an advisory role or report a cancelled, failed, or timed-out host execution with metrics and classified evidence.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"status":{"type":"string","enum":["completed","cancelled","failed","timed_out"]},"reason":{"type":"string"},"details":{"type":"object"},"duration_ms":{"type":"integer"},"input_tokens":{"type":"integer"},"output_tokens":{"type":"integer"},"cost_usd":{"type":"number"},"failure_category":{"type":"string"},"confidence":{"type":"number"}},"required":["attempt_id","status"]}`),
+	}, specTool("execution report", func(ctx context.Context, a specExecutionReportArgs) (any, error) {
+		return s.spec.ReportExecution(ctx, specmod.ExecutionReportOptions{
+			AttemptID: a.AttemptID, Status: a.Status, Reason: a.Reason, Details: a.Details,
+			DurationMS: a.DurationMS, InputTokens: a.InputTokens, OutputTokens: a.OutputTokens,
+			CostUSD: a.CostUSD, Category: a.Category, Confidence: a.Confidence,
+		})
+	}))
+
+	s.addTool(toolDef{
 		Name: "spec/validate-resource", Description: "Run invariant checks for a resource",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
 	}, specTool("validate-resource", func(ctx context.Context, a specResourceArgs) (any, error) {
@@ -405,8 +475,8 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/commit", Description: "Commit generated files for a resource. The server writes the files and runs the resource's mechanical validations — any failure, including a validation that cannot run, rejects the commit. There are no self-judged verdicts: behavioral verification happens via spec/verify.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"model":{"type":"string","description":"Model that generated the files (recorded in state)"}},"required":["session_id","resource_id"]}`),
+		Name: "spec/commit", Description: "Submit candidate files for a prepared and started attempt. Session, resource, role, model, and context are derived from SQLite; mechanical validation accepts or rejects the immutable candidate.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string","description":"Attempt returned by spec/context and registered by spec/execution_start"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"}},"required":["attempt_id"]}`),
 	}, s.handleSpecCommit)
 
 	s.addTool(toolDef{
@@ -562,6 +632,41 @@ func (s *Server) registerSpecQueryTools() {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`),
 	}, specTool("context compare", func(ctx context.Context, a specContextCompareArgs) (any, error) {
 		return s.spec.CompareContexts(ctx, a.LeftContextManifestID, a.RightContextManifestID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/execution_roles", Description: "List the closed agent-role registry, role policy version, context policy, output kind, permitted actions, and handoff targets.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, specTool("execution roles", func(_ context.Context, _ struct{}) (any, error) {
+		return s.spec.ExecutionRoles(), nil
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/executions", Description: "List recent SQLite-backed execution manifests and their current disposition.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`),
+	}, specTool("executions", func(ctx context.Context, a specLimitArgs) (any, error) {
+		return s.spec.ListExecutions(ctx, a.Limit)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/execution_inspect", Description: "Inspect a complete execution manifest, tools, redacted settings, system instructions, metrics, and state-transition events. Provide exactly one identifier.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"execution_id":{"type":"string"},"attempt_id":{"type":"string"}}}`),
+	}, specTool("execution inspect", func(ctx context.Context, a specExecutionInspectArgs) (any, error) {
+		return s.spec.InspectExecution(ctx, a.ExecutionID, a.AttemptID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/failures", Description: "List deterministic failure classifications, corrective routes, retry blocks, evidence, and affected goals.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`),
+	}, specTool("failures", func(ctx context.Context, a specAttemptLimitArgs) (any, error) {
+		return s.spec.ListFailures(ctx, a.AttemptID, a.Limit)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/handoffs", Description: "List pending role handoffs or the handoff history for one source attempt.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`),
+	}, specTool("handoffs", func(ctx context.Context, a specAttemptLimitArgs) (any, error) {
+		return s.spec.ListHandoffs(ctx, a.AttemptID, a.Limit)
 	}))
 
 	s.addTool(toolDef{
@@ -733,7 +838,7 @@ func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage) too
 	for i, f := range p.Files {
 		files[i] = specmod.CommitFile{Path: f.Path, Content: f.Content}
 	}
-	result, err := s.spec.Commit(ctx, p.SessionID, p.ResourceID, files, p.Notes, p.Model)
+	result, err := s.spec.CommitAttempt(ctx, p.AttemptID, files, p.Notes)
 	if err != nil {
 		return errorResult(fmt.Sprintf("commit: %v", err))
 	}

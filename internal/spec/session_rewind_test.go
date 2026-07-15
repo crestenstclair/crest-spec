@@ -65,7 +65,7 @@ func newTestSpecWithTwoWaveSession(t *testing.T) (s *Spec, sessionID, wave0ID, w
 // the committed (terminal) state, letting Next advance past its wave.
 func commitResource(t *testing.T, s *Spec, sessionID, resourceID string) {
 	t.Helper()
-	_, err := s.Commit(context.Background(), sessionID, resourceID,
+	_, err := commitTestAttempt(t, s, context.Background(), sessionID, resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "out.go"), Content: "package out\n"}},
 		"", "claude-sonnet-4-6")
 	require.NoError(t, err)

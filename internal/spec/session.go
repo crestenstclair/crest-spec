@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -54,6 +53,7 @@ type ContextResult struct {
 	RecommendedRole   string
 	RolePolicyVersion string
 	ContextPolicy     string
+	HandoffID         string
 	SelectorVersion   string
 	EstimatorVersion  string
 	TemplateHashes    map[string]string
@@ -90,8 +90,12 @@ type CommitFile struct {
 }
 
 type CommitResult struct {
-	Committed   bool
-	Validations []ValidationResult
+	Committed       bool
+	Validations     []ValidationResult
+	AttemptID       string
+	ExecutionID     string
+	CandidateID     string
+	FailureCategory string
 }
 
 type FinishResult struct {
@@ -233,7 +237,7 @@ func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID s
 			if n, err := s.store.CountOtherFileOwners(f.Path, a.ResourceID); err == nil && n > 0 {
 				continue
 			}
-			if err := s.fs.Remove(f.Path); err == nil {
+			if err := s.fs.Remove(s.projectFilePath(f.Path)); err == nil {
 				deletedFiles = append(deletedFiles, f.Path)
 			}
 		}
@@ -403,105 +407,7 @@ func (s *Spec) Context(ctx context.Context, sessionID, resourceID string) (*Cont
 }
 
 func (s *Spec) Commit(ctx context.Context, sessionID, resourceID string, files []CommitFile, notes string, model string) (*CommitResult, error) {
-	sess, err := s.store.GetSession(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("get session: %w", err)
-	}
-
-	if model == "" {
-		model = s.cfg.GenerateModel
-	}
-
-	if err := s.writeChangedFiles(files); err != nil {
-		return nil, err
-	}
-
-	// Transition to "completed" — files are written, validation pending.
-	// This matches the Terraform model: apply writes, then verifies, then marks done.
-	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
-	currentAttempts := 0
-	if sr != nil {
-		currentAttempts = sr.Attempts
-	}
-	currentAttempts++
-	s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateCompleted), "", "", currentAttempts, "")
-
-	planResult, err := s.Plan(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("plan for commit: %w", err)
-	}
-
-	resource, ok := planResult.Registry.Resources[resourceID]
-	if !ok {
-		return nil, fmt.Errorf("resource not found: %s", resourceID)
-	}
-
-	// Create the generation row only once all early-return paths have passed,
-	// so every created row is guaranteed to receive an outcome update on both
-	// remaining paths (rejected/success). Creating it earlier left dangling
-	// rows that rendered as eternal "pending" in the dashboard.
-	genID := uuid.NewString()
-	s.store.CreateGeneration(store.Generation{
-		ID: genID, ApplyID: sess.ApplyID, ResourceID: resourceID, Model: model,
-	})
-
-	validationResults, rejected := s.runCommitValidations(ctx, sess, sessionID, resourceID, resource, currentAttempts)
-	if rejected != nil {
-		// Validation gate failed: amendments declaring a validation are FAILED.
-		s.store.UpdateGeneration(genID, "", "rejected", firstFailureMessage(rejected.Validations), 0, 0, 0, 0)
-		s.markAmendmentVerification(resourceID, resource, false)
-		// Iterate, don't regenerate: record the attempted files (they are on
-		// disk) so the next spec/context serves them in UPDATE mode with the
-		// failure alongside. The retry then FIXES the minor bug in place
-		// instead of rewriting the resource from scratch. Upsert only — a
-		// rejected UPDATE of an already-committed resource must not lose
-		// track of its other files.
-		s.recordAttemptFiles(resourceID, resource, files)
-		return rejected, nil
-	}
-
-	s.persistCommittedResource(sess, sessionID, resourceID, resource, files, planResult, notes, currentAttempts)
-
-	// Validation gate passed: amendments declaring a validation are VERIFIED.
-	s.markAmendmentVerification(resourceID, resource, true)
-
-	s.store.UpdateGeneration(genID, "", "accepted", "", 0, 0, 0, 0)
-
-	return &CommitResult{
-		Committed:   true,
-		Validations: validationResults,
-	}, nil
-}
-
-// recordAttemptFiles upserts the files of a rejected attempt into
-// generated_files. writeChangedFiles already put them on disk; recording them
-// lets buildRuntimeContext feed the attempt back as ExistingFiles (UPDATE
-// mode) so retries iterate on the previous code rather than starting over.
-func (s *Spec) recordAttemptFiles(resourceID string, resource cuepkg.Resource, files []CommitFile) {
-	// generated_files references resources(id): a never-committed resource
-	// needs a stub row first. Empty hashes keep the planner treating it as
-	// work-in-progress ("declaration changed"), never as settled.
-	if _, err := s.store.GetResource(resourceID); err != nil {
-		s.store.SetResource(store.Resource{
-			ID:          resourceID,
-			Kind:        resource.Kind,
-			ContextName: resource.ContextName,
-			Model:       s.cfg.GenerateModel,
-			SettledAt:   time.Now().UTC(),
-		})
-	}
-	for _, f := range files {
-		if f.Path == "" || f.Content == "" {
-			continue
-		}
-		s.store.SetGeneratedFile(store.GeneratedFile{
-			Path:        f.Path,
-			ResourceID:  resourceID,
-			ContentHash: fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content))),
-			Model:       s.cfg.GenerateModel,
-			CreatedAt:   time.Now().UTC(),
-		})
-	}
+	return nil, fmt.Errorf("legacy commit is disabled: call spec/context, spec/execution_start, then commit by attempt_id")
 }
 
 // firstFailureMessage returns the message of the first failed validation
@@ -520,14 +426,15 @@ func (s *Spec) writeChangedFiles(files []CommitFile) error {
 		if f.Path == "" || f.Content == "" {
 			continue
 		}
-		dir := filepath.Dir(f.Path)
+		path := s.projectFilePath(f.Path)
+		dir := filepath.Dir(path)
 		if err := s.fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 
 		contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(f.Content)))
 
-		existing, readErr := s.fs.ReadFile(f.Path)
+		existing, readErr := s.fs.ReadFile(path)
 		if readErr == nil {
 			existingHash := fmt.Sprintf("%x", sha256.Sum256(existing))
 			if existingHash == contentHash {
@@ -535,7 +442,7 @@ func (s *Spec) writeChangedFiles(files []CommitFile) error {
 			}
 		}
 
-		if err := s.fs.WriteFile(f.Path, []byte(f.Content), 0o644); err != nil {
+		if err := s.fs.WriteFile(path, []byte(f.Content), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", f.Path, err)
 		}
 	}
@@ -554,128 +461,6 @@ func resourceValidations(resource cuepkg.Resource) []cuepkg.Validation {
 		}
 	}
 	return validations
-}
-
-func (s *Spec) runCommitValidations(
-	ctx context.Context,
-	sess *store.Session,
-	sessionID, resourceID string,
-	resource cuepkg.Resource,
-	attempts int,
-) ([]ValidationResult, *CommitResult) {
-	var validationResults []ValidationResult
-
-	validations := resourceValidations(resource)
-	if len(validations) > 0 {
-		cwd := filepath.Dir(s.cfg.SpecDir)
-		results, err := RunValidations(ctx, validations, cwd)
-		if err != nil {
-			// Fail closed: a gate that cannot run is a failed gate. Silently
-			// skipping here would commit unvalidated code whenever a validation
-			// command is missing or misconfigured.
-			results = []ValidationResult{{
-				Kind:    "validation",
-				Passed:  false,
-				Message: fmt.Sprintf("validation could not run: %v", err),
-			}}
-		}
-		validationResults = results
-		if rejection := s.checkForFailure(validationResults, sess.ApplyID, sessionID, resourceID, "validate", attempts); rejection != nil {
-			return nil, rejection
-		}
-	}
-
-	return validationResults, nil
-}
-
-func (s *Spec) checkForFailure(results []ValidationResult, applyID, sessionID, resourceID, actionKind string, attempts int) *CommitResult {
-	for _, v := range results {
-		if !v.Passed {
-			actionID := uuid.NewString()
-			s.store.CreateApplyAction(actionID, applyID, resourceID, actionKind)
-			s.store.UpdateApplyAction(actionID, "failed", v.Message)
-			s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateRejected), v.Message, "", attempts, "")
-
-			return &CommitResult{
-				Committed:   false,
-				Validations: results,
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Spec) persistCommittedResource(
-	sess *store.Session,
-	sessionID, resourceID string,
-	resource cuepkg.Resource,
-	files []CommitFile,
-	planResult *PlanResult,
-	notes string,
-	attempts int,
-) {
-	var hashes map[string]string
-	json.Unmarshal([]byte(sess.HashesJSON), &hashes)
-
-	declData, _ := json.Marshal(resource.Declaration)
-	declHash := fmt.Sprintf("%x", sha256.Sum256(declData))
-
-	s.store.SetResource(store.Resource{
-		ID:              resourceID,
-		Kind:            resource.Kind,
-		ContextName:     resource.ContextName,
-		DeclarationHash: declHash,
-		EffectiveHash:   hashes[resourceID],
-		Model:           s.cfg.GenerateModel,
-		SettledAt:       time.Now().UTC(),
-	})
-
-	// A commit with NO files is an adoption: the on-disk code was validated
-	// as-is (crest-spec adopt, or re-settling after a strengthened validation).
-	// Existing file tracking MUST survive it — wiping the rows would sever the
-	// resource from its files and break UPDATE-mode iteration.
-	if len(files) > 0 {
-		s.store.DeleteGeneratedFiles(resourceID)
-		for _, f := range files {
-			if f.Path == "" {
-				continue
-			}
-			// A path with no content is a CLAIM on an existing on-disk file
-			// (adoption): nothing is written, but the file is tracked with
-			// the hash of what is already on disk.
-			content := []byte(f.Content)
-			if f.Content == "" {
-				data, err := s.fs.ReadFile(f.Path)
-				if err != nil {
-					continue
-				}
-				content = data
-			}
-			contentHash := fmt.Sprintf("%x", sha256.Sum256(content))
-			s.store.SetGeneratedFile(store.GeneratedFile{
-				Path:        f.Path,
-				ResourceID:  resourceID,
-				ContentHash: contentHash,
-				Model:       s.cfg.GenerateModel,
-				CreatedAt:   time.Now().UTC(),
-			})
-		}
-	}
-
-	s.store.DeleteDependencies(resourceID)
-	for _, dep := range resource.Dependencies {
-		s.store.SetDependency(resourceID, dep.TargetID, dep.Kind)
-	}
-
-	if notes != "" {
-		s.store.SetNote(resourceID, sess.ApplyID, notes)
-	}
-
-	actionID := uuid.NewString()
-	s.store.CreateApplyAction(actionID, sess.ApplyID, resourceID, "commit")
-	s.store.UpdateApplyAction(actionID, "success", "")
-
-	s.store.UpdateSessionResourceState(sessionID, resourceID, string(StateCommitted), "", "", attempts, "")
 }
 
 func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*FinishResult, error) {
@@ -1013,13 +798,15 @@ Default generation model: sonnet.
 5. For each resource in the wave (parallelize across the wave):
    a. spec/context      → scoped prompt + system_prompt + project invariants
                           (constraints to honor, not to self-grade)
-   b. Generate with a sub-agent (sonnet) using that prompt
-   c. spec/commit       → files + notes + model
+   b. spec/execution_start → register crest-execution-v1 and exact
+                          host/model/settings/tools/template/context metadata
+   c. Generate with the role returned by spec/context using that prompt
+   d. spec/commit       → attempt_id + files + notes
                           The server writes files and runs the resource's
                           mechanical validations (compile/test/custom).
                           Any failure — including a validation that cannot
                           run — rejects the commit.
-   d. If Committed=false: call spec/context again (it now carries the
+   e. If Committed=false: call spec/context again (it now carries the
       failure under '## Previous Errors' and any triage guidance under
       '## Guidance'), regenerate, re-commit — up to max_retries. Then
       spec/resolve (guidance) or spec/skip.
@@ -1043,12 +830,18 @@ func dispatchInstructions(resourceID string) string {
 	return fmt.Sprintf(`Generate code for %s with a sub-agent (sonnet by default).
 
 1. Give the sub-agent the system_prompt and prompt from this result.
-2. The sub-agent produces the files (path + full content), honoring the
+2. Before generation, call spec/execution_start with protocol_version
+   crest-execution-v1, this attempt_id/context_hash/template_hashes, and the
+   exact host, model, settings, tools, permissions, and system instructions.
+3. The sub-agent for the returned role produces the files (path + full
+   content), honoring the
    invariants in this result as hard constraints.
-3. Call spec/commit with session_id, resource_id, files, model. The server
+4. Call spec/commit with attempt_id, files, and notes. The server derives the
+   session/resource/model from SQLite,
    runs mechanical validations and rejects on any failure. Verification of
    behavior belongs to behavioral checks (spec/verify), not self-judgment.
-4. If Committed=false, call spec/context again — the failure and any triage
+5. If Committed=false, call spec/context again — the failure, corrective route,
+   role handoff,
    guidance are injected into the new prompt — and retry (respect
    max_retries).`, resourceID)
 }

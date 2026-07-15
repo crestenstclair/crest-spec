@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/google/uuid"
+
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -78,7 +81,20 @@ func cmdAdopt() {
 			if len(claims) == 0 {
 				fmt.Printf("  (no file claim for %s — adopted without file tracking)\n", r.ResourceID)
 			}
-			res, err := sp.Commit(ctx, begin.SessionID, r.ResourceID, claims, "adopted from existing on-disk code", "")
+			prepared, err := sp.PrepareContext(ctx, specmod.ContextOptions{SessionID: begin.SessionID, ResourceID: r.ResourceID})
+			if err == nil {
+				_, err = sp.StartExecution(ctx, specmod.ExecutionStartOptions{
+					AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+					IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+					HostName: "crest-spec-adopt", HostVersion: "built-in", Provider: "local", Model: cfg.GenerateModel,
+					Tools:          []store.ExecutionTool{{Name: "filesystem", Permission: "preserve-discovered-files"}},
+					TemplateHashes: prepared.TemplateHashes, SystemInstructions: prepared.SystemPrompt,
+				})
+			}
+			var res *specmod.CommitResult
+			if err == nil {
+				res, err = sp.CommitAttempt(ctx, prepared.AttemptID, claims, "adopted from existing on-disk code")
+			}
 			switch {
 			case err != nil:
 				fmt.Printf("  ERROR    %s: %v\n", r.ResourceID, err)

@@ -139,6 +139,71 @@ func TestExecutionRejectsMismatchedContextAndIllegalTransitions(t *testing.T) {
 	require.ErrorContains(t, err, "must be project-relative")
 }
 
+func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *testing.T) {
+	st := newContextManifestStore(t, "resource.synth")
+	ctx := context.Background()
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	started, err := st.StartExecution(ctx, testExecutionManifest())
+	require.NoError(t, err)
+	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "synth.go", Content: "package synth\n", WriteIntent: "create",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{ExecutionID: started.ID, ToStatus: execution.StatusValidating})
+	require.NoError(t, err)
+
+	// A mismatched accepted hash rolls back every state projection.
+	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID, Accepted: true,
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Files:    []GeneratedFile{{Path: "synth.go", ResourceID: "resource.synth", ContentHash: "tampered"}},
+		Attempts: 1,
+	})
+	require.ErrorContains(t, err, "differs from immutable candidate")
+	stillValidating, err := st.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusValidating), stillValidating.Status)
+	_, err = st.GetResource("resource.synth")
+	require.Error(t, err)
+
+	accepted, err := st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID, Accepted: true, Reason: "all validations passed",
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", ContextName: "Audio", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Files: []GeneratedFile{{
+			Path: "synth.go", ResourceID: "resource.synth", ContentHash: candidate.Files[0].ContentHash,
+			PromptHash: started.ContextHash, Model: "test-model",
+		}},
+		Dependencies: []Dependency{{SourceID: "resource.synth", TargetID: "resource.clock", Kind: "uses"}},
+		Notes:        "keep the oscillator deterministic", Attempts: 1, DurationMS: 30,
+	})
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusAccepted), accepted.Status)
+	resource, err := st.GetResource("resource.synth")
+	require.NoError(t, err)
+	require.Equal(t, "effective", resource.EffectiveHash)
+	files, err := st.GetGeneratedFiles("resource.synth")
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, candidate.Files[0].ContentHash, files[0].ContentHash)
+	dependencies, err := st.GetDependencies("resource.synth")
+	require.NoError(t, err)
+	require.Equal(t, "resource.clock", dependencies[0].TargetID)
+	note, err := st.GetNote("resource.synth", "apply-1")
+	require.NoError(t, err)
+	require.Equal(t, "keep the oscillator deterministic", note)
+	sessionResource, err := st.GetSessionResource("session-1", "resource.synth")
+	require.NoError(t, err)
+	require.Equal(t, "committed", sessionResource.State)
+	generationRows, err := st.ListGenerations("resource.synth", 10)
+	require.NoError(t, err)
+	require.Len(t, generationRows, 1)
+	require.Equal(t, started.ID, generationRows[0].ExecutionID)
+	require.Equal(t, "accepted", generationRows[0].Outcome)
+}
+
 func TestFailureRoutingBlocksSpecificationAndValidationDefects(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")
 	ctx := context.Background()

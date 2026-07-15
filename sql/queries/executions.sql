@@ -15,6 +15,13 @@ INSERT INTO execution_manifests (
 -- name: UpdateGenerationAttemptStatus :execrows
 UPDATE generation_attempts SET status = ? WHERE id = ? AND status = ?;
 
+-- name: CreateExecutionGeneration :exec
+INSERT INTO generations (
+    id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model,
+    outcome, rejection_reason, retry_count, duration_ms, input_tokens,
+    output_tokens, cost_usd, created_at, execution_id
+) VALUES (?, ?, ?, '', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
 -- name: GetExecutionManifest :one
 SELECT * FROM execution_manifests WHERE id = ?;
 

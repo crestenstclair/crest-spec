@@ -200,6 +200,51 @@ func (q *Queries) CreateExecutionEvent(ctx context.Context, arg CreateExecutionE
 	return err
 }
 
+const createExecutionGeneration = `-- name: CreateExecutionGeneration :exec
+INSERT INTO generations (
+    id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model,
+    outcome, rejection_reason, retry_count, duration_ms, input_tokens,
+    output_tokens, cost_usd, created_at, execution_id
+) VALUES (?, ?, ?, '', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateExecutionGenerationParams struct {
+	ID              string
+	ApplyID         *string
+	ResourceID      string
+	PromptHash      string
+	Model           string
+	Outcome         *string
+	RejectionReason *string
+	RetryCount      int64
+	DurationMs      *int64
+	InputTokens     *int64
+	OutputTokens    *int64
+	CostUsd         *float64
+	CreatedAt       string
+	ExecutionID     *string
+}
+
+func (q *Queries) CreateExecutionGeneration(ctx context.Context, arg CreateExecutionGenerationParams) error {
+	_, err := q.db.ExecContext(ctx, createExecutionGeneration,
+		arg.ID,
+		arg.ApplyID,
+		arg.ResourceID,
+		arg.PromptHash,
+		arg.Model,
+		arg.Outcome,
+		arg.RejectionReason,
+		arg.RetryCount,
+		arg.DurationMs,
+		arg.InputTokens,
+		arg.OutputTokens,
+		arg.CostUsd,
+		arg.CreatedAt,
+		arg.ExecutionID,
+	)
+	return err
+}
+
 const createExecutionManifest = `-- name: CreateExecutionManifest :exec
 INSERT INTO execution_manifests (
     id, attempt_id, context_manifest_id, protocol_version, idempotency_key,

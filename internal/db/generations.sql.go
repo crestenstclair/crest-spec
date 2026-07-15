@@ -40,7 +40,7 @@ func (q *Queries) CreateGeneration(ctx context.Context, arg CreateGenerationPara
 }
 
 const getGeneration = `-- name: GetGeneration :one
-SELECT id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model, outcome, rejection_reason, retry_count, duration_ms, input_tokens, output_tokens, cost_usd, created_at FROM generations WHERE id = ?
+SELECT id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model, outcome, rejection_reason, retry_count, duration_ms, input_tokens, output_tokens, cost_usd, created_at, execution_id FROM generations WHERE id = ?
 `
 
 func (q *Queries) GetGeneration(ctx context.Context, id string) (Generation, error) {
@@ -62,12 +62,13 @@ func (q *Queries) GetGeneration(ctx context.Context, id string) (Generation, err
 		&i.OutputTokens,
 		&i.CostUsd,
 		&i.CreatedAt,
+		&i.ExecutionID,
 	)
 	return i, err
 }
 
 const listGenerations = `-- name: ListGenerations :many
-SELECT id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model, outcome, rejection_reason, retry_count, duration_ms, input_tokens, output_tokens, cost_usd, created_at FROM generations WHERE resource_id = ?
+SELECT id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model, outcome, rejection_reason, retry_count, duration_ms, input_tokens, output_tokens, cost_usd, created_at, execution_id FROM generations WHERE resource_id = ?
 ORDER BY created_at DESC LIMIT ?
 `
 
@@ -101,6 +102,7 @@ func (q *Queries) ListGenerations(ctx context.Context, arg ListGenerationsParams
 			&i.OutputTokens,
 			&i.CostUsd,
 			&i.CreatedAt,
+			&i.ExecutionID,
 		); err != nil {
 			return nil, err
 		}

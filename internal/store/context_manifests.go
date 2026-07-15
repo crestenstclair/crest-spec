@@ -91,8 +91,9 @@ type ContextManifestSummary struct {
 // ContextManifestWrite is persisted as one transaction with its attempt,
 // sections, blobs, and session dispatch transition.
 type ContextManifestWrite struct {
-	Manifest ContextManifest
-	Dispatch bool
+	Manifest  ContextManifest
+	Dispatch  bool
+	HandoffID string
 }
 
 func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifestWrite) (_ *ContextManifest, err error) {
@@ -156,6 +157,22 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 		RolePolicyVersion: m.Attempt.RolePolicyVersion,
 	}); err != nil {
 		return nil, fmt.Errorf("create context manifest: insert attempt: %w", err)
+	}
+	if input.HandoffID != "" {
+		handoff, handoffErr := q.GetAttemptHandoff(ctx, input.HandoffID)
+		if handoffErr != nil {
+			return nil, fmt.Errorf("create context manifest: handoff: %w", mapNotFound(handoffErr))
+		}
+		source, sourceErr := q.GetGenerationAttempt(ctx, handoff.SourceAttemptID)
+		if sourceErr != nil || handoff.Status != "pending" || handoff.TargetRole != m.Attempt.Role ||
+			source.SessionID != m.Attempt.SessionID || source.ResourceID != m.Attempt.ResourceID {
+			return nil, fmt.Errorf("create context manifest: handoff does not target this session, resource, and role")
+		}
+		if affected, acceptErr := q.AcceptAttemptHandoff(ctx, db.AcceptAttemptHandoffParams{
+			TargetAttemptID: &m.Attempt.ID, AcceptedAt: &timestamp, ID: input.HandoffID,
+		}); acceptErr != nil || affected != 1 {
+			return nil, fmt.Errorf("create context manifest: accept handoff: affected=%d: %w", affected, acceptErr)
+		}
 	}
 
 	putBlob := func(content string) (string, error) {

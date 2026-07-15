@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	impactpkg "github.com/crestenstclair/crest-spec/internal/impact"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
@@ -83,7 +84,14 @@ type specHandler interface {
 	InspectContext(ctx context.Context, manifestID, attemptID string) (*storemod.ContextManifest, error)
 	ListContextAttempts(ctx context.Context, limit int) ([]storemod.ContextManifestSummary, error)
 	CompareContexts(ctx context.Context, leftManifestID, rightManifestID string) (*specmod.ContextManifestComparison, error)
-	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error)
+	StartExecution(ctx context.Context, opts specmod.ExecutionStartOptions) (*storemod.ExecutionManifest, error)
+	ReportExecution(ctx context.Context, opts specmod.ExecutionReportOptions) (*storemod.ExecutionManifest, error)
+	ExecutionRoles() []executionpkg.RolePolicy
+	InspectExecution(ctx context.Context, id, attemptID string) (*storemod.ExecutionManifest, error)
+	ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error)
+	ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error)
+	ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error)
+	CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
 	Note(ctx context.Context, sessionID, resourceID, content string) error

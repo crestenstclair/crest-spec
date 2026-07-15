@@ -341,6 +341,7 @@ type Generation struct {
 	OutputTokens    *int64
 	CostUsd         *float64
 	CreatedAt       string
+	ExecutionID     *string
 }
 
 type GenerationAttempt struct {
