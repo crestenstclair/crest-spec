@@ -133,6 +133,15 @@ func TestVerifyWitnessClassifiesTheaterAndMalformedOutput(t *testing.T) {
 		assert.Equal(t, "malformed", result.Classification)
 		assert.Contains(t, result.Reason, "source tree changed")
 	})
+
+	t.Run("command failure", func(t *testing.T) {
+		s, _ := newExecutableWitnessSpec(t, "exit 7")
+		result, err := s.VerifyWitness(context.Background(), "witness.signal", "", "")
+		require.NoError(t, err)
+		assert.False(t, result.Passed)
+		assert.Equal(t, "failed", result.Classification)
+		assert.Contains(t, result.Reason, "negative command exited 7")
+	})
 }
 
 func TestVerifyRejectsCallerSuppliedObservations(t *testing.T) {

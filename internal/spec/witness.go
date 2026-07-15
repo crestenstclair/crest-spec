@@ -76,10 +76,10 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 	var realObservation, negativeObservation check.Observation
 	var realParseError, negativeParseError string
 	if executionFailed(realExecution) || executionFailed(negativeExecution) {
-		classification = "error"
+		classification = "failed"
 		reason = witnessExecutionFailure(realExecution, negativeExecution)
 	} else if finalSourceTreeHashErr != nil {
-		classification = "error"
+		classification = "failed"
 		reason = fmt.Sprintf("hash source tree after witness execution: %v", finalSourceTreeHashErr)
 	} else if realExecution.SourceTreeHash != negativeExecution.SourceTreeHash || realExecution.SourceTreeHash != finalSourceTreeHash {
 		classification = "malformed"
@@ -154,9 +154,6 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 	}
 	if checkID != "" {
 		state := classification
-		if state == "error" {
-			state = "failed"
-		}
 		if err := s.store.SetCheckState(checkID, state); err != nil {
 			return VerifyResult{}, fmt.Errorf("verify witness: update check: %w", err)
 		}
