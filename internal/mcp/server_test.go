@@ -30,6 +30,7 @@ import (
 // tools. Methods return zero values unless a test needs otherwise; the Commit
 // method captures its arguments so tests can assert forwarding.
 type fakeSpec struct {
+	specHandler
 	lastFiles          []specmod.CommitFile
 	lastNotes          string
 	lastModel          string
@@ -41,6 +42,11 @@ type fakeSpec struct {
 	lastWitnessCheckID string
 	lastWitnessSession string
 	lastContext        specmod.ContextOptions
+	evaluationRuns     []storemod.EvaluationRun
+	lastEvalRunID      string
+	lastEvalOwner      string
+	lastEvalSplit      string
+	lastEvalLease      time.Duration
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -188,6 +194,21 @@ func (f *fakeSpec) RecordLearnings(ctx context.Context, sessionID, output string
 func (f *fakeSpec) ListLearnings(status string) ([]storemod.Learning, error) { return nil, nil }
 func (f *fakeSpec) PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (specmod.PromoteResult, error) {
 	return specmod.PromoteResult{}, nil
+}
+func (f *fakeSpec) GetEvaluationRun(_ context.Context, id string) (*storemod.EvaluationRun, error) {
+	for _, run := range f.evaluationRuns {
+		if run.ID == id {
+			return &run, nil
+		}
+	}
+	return &storemod.EvaluationRun{ID: id}, nil
+}
+func (f *fakeSpec) ListEvaluationRuns(_ context.Context, _ int) ([]storemod.EvaluationRun, error) {
+	return f.evaluationRuns, nil
+}
+func (f *fakeSpec) ClaimEvaluationAssignment(_ context.Context, runID, owner, split string, lease time.Duration) (*storemod.EvaluationAssignmentClaim, error) {
+	f.lastEvalRunID, f.lastEvalOwner, f.lastEvalSplit, f.lastEvalLease = runID, owner, split, lease
+	return &storemod.EvaluationAssignmentClaim{Assignment: storemod.EvaluationAssignment{ID: "assignment-1", RunID: runID}}, nil
 }
 func (f *fakeSpec) ApplyAmendments(ctx context.Context, resourceID string, proposals []specmod.ProposedAmendment, apply bool) (*specmod.AmendmentApplyResult, error) {
 	return &specmod.AmendmentApplyResult{}, nil
@@ -339,6 +360,10 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/failure_classify"])
 	assert.True(t, names["spec/failure_resolve"])
 	assert.True(t, names["spec/handoffs"])
+	assert.True(t, names["spec/evaluation_cases"])
+	assert.True(t, names["spec/evaluation_runs"])
+	assert.True(t, names["spec/evaluation_assignment_claim"])
+	assert.True(t, names["spec/evaluation_promotions"])
 
 	// Spot-check kept spec tools.
 	for _, kept := range []string{
@@ -374,6 +399,22 @@ func TestExecutionStartToolForwardsGovernedInputs(t *testing.T) {
 	require.Equal(t, "crest-execution-v1", fake.lastExecutionStart.ProtocolVersion)
 	require.Equal(t, "resource_implementer", fake.lastExecutionStart.Role)
 	require.Equal(t, "filesystem", fake.lastExecutionStart.Tools[0].Name)
+}
+
+func TestEvaluationToolsExposeRunsAndForwardLeaseClaims(t *testing.T) {
+	fake := &fakeSpec{evaluationRuns: []storemod.EvaluationRun{{ID: "run-1", Name: "selector comparison", Status: "running"}}}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	listed := srv.toolFns["spec/evaluation_runs"](context.Background(), json.RawMessage(`{"limit":10}`))
+	require.False(t, listed.IsError)
+	assert.Contains(t, listed.Content[0].Text, `"id":"run-1"`)
+
+	claimed := srv.toolFns["spec/evaluation_assignment_claim"](context.Background(), json.RawMessage(`{"run_id":"run-1","owner":"host-a","split":"held_out","lease_seconds":90}`))
+	require.False(t, claimed.IsError)
+	assert.Equal(t, "run-1", fake.lastEvalRunID)
+	assert.Equal(t, "host-a", fake.lastEvalOwner)
+	assert.Equal(t, "held_out", fake.lastEvalSplit)
+	assert.Equal(t, 90*time.Second, fake.lastEvalLease)
+	assert.Contains(t, claimed.Content[0].Text, `"assignment":{"id":"assignment-1"`)
 }
 
 func TestFailureClassifyToolReturnsAppendOnlyClassification(t *testing.T) {

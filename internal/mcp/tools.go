@@ -28,6 +28,7 @@ func (s *Server) registerTools() {
 	if s.spec != nil {
 		s.registerSpecLifecycleTools()
 		s.registerSpecQueryTools()
+		s.registerEvaluationTools()
 	} else {
 		s.registerSpecStubs()
 	}
@@ -119,6 +120,27 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/verification_inspect", Description: "Inspect one validation or witness run with commands, outputs, observations, predicates, and evidence.", InputSchema: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}`)},
 		{Name: "spec/verification_definitions", Description: "List current validation and witness definitions reconciled from CUE.", InputSchema: json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string"}}}`)},
 		{Name: "spec/graduate", Description: "Graduate a passed check to the graduated state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"]}`)},
+		{Name: "spec/evaluation_cases", Description: "List or inspect evaluation cases.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_case_from_attempt", Description: "Create a historical evaluation case.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_case_curate", Description: "Create a curated evaluation case.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_datasets", Description: "List or inspect evaluation datasets.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_dataset_create", Description: "Create an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_dataset_add_case", Description: "Add a case to an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_dataset_seal", Description: "Seal an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_configurations", Description: "List or inspect evaluation configurations.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_configuration_create", Description: "Create an evaluation configuration.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_runs", Description: "List or inspect evaluation runs.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_run_create", Description: "Create an evaluation run.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_claim", Description: "Claim an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_heartbeat", Description: "Renew an evaluation assignment lease.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_release", Description: "Release an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_cancel", Description: "Cancel an evaluation assignment with a recorded reason.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_submit", Description: "Submit an evaluation assignment result.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_run_finalize", Description: "Finalize an evaluation run.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_promotions", Description: "List or inspect evaluation promotions.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_learning_propose", Description: "Propose an evaluated learning promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_promotion_decide", Description: "Approve or reject an evaluated promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_promotion_apply", Description: "Apply an approved evaluated promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 	}
 
 	for _, def := range stubs {
@@ -345,6 +367,105 @@ type specPromoteLearningsArgs struct {
 	MinTimesApplied int     `json:"min_times_applied"`
 	Apply           bool    `json:"apply"`
 	TemplatePath    string  `json:"template_path"`
+}
+
+type specEvaluationInspectArgs struct {
+	ID    string `json:"id"`
+	Limit int    `json:"limit"`
+}
+
+type specEvaluationHistoricalCaseArgs struct {
+	AttemptID   string `json:"attempt_id"`
+	ProjectName string `json:"project_name"`
+}
+
+type specEvaluationCuratedCaseArgs struct {
+	Case storemod.CuratedEvaluationCase `json:"case"`
+}
+
+type specEvaluationDatasetCreateArgs struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type specEvaluationDatasetCaseArgs struct {
+	DatasetID string `json:"dataset_id"`
+	CaseID    string `json:"case_id"`
+	Split     string `json:"split"`
+}
+
+type specEvaluationDatasetSealArgs struct {
+	DatasetID string `json:"dataset_id"`
+}
+
+type specEvaluationConfigurationArgs struct {
+	Configuration storemod.EvaluationConfiguration `json:"configuration"`
+}
+
+type specEvaluationRunCreateArgs struct {
+	DatasetID             string                               `json:"dataset_id"`
+	Name                  string                               `json:"name"`
+	Variants              []storemod.EvaluationRunVariantInput `json:"variants"`
+	MetricPolicy          storemod.EvaluationMetricPolicy      `json:"metric_policy"`
+	MinimumSampleSize     int                                  `json:"minimum_sample_size"`
+	PracticalSignificance float64                              `json:"practical_significance"`
+	RequireHeldOut        bool                                 `json:"require_held_out"`
+}
+
+type specEvaluationRunArgs struct {
+	RunID string `json:"run_id"`
+}
+
+type specEvaluationClaimArgs struct {
+	RunID        string `json:"run_id"`
+	Owner        string `json:"owner"`
+	Split        string `json:"split"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
+type specEvaluationLeaseArgs struct {
+	AssignmentID string `json:"assignment_id"`
+	LeaseID      string `json:"lease_id"`
+	Owner        string `json:"owner"`
+	LeaseToken   string `json:"lease_token"`
+	Seconds      int    `json:"seconds"`
+	Reason       string `json:"reason"`
+}
+
+type specEvaluationSubmitArgs struct {
+	AssignmentID string                              `json:"assignment_id"`
+	LeaseID      string                              `json:"lease_id"`
+	Owner        string                              `json:"owner"`
+	LeaseToken   string                              `json:"lease_token"`
+	Result       storemod.EvaluationAssignmentResult `json:"result"`
+}
+
+type specEvaluationPromotionListArgs struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Limit  int    `json:"limit"`
+}
+
+type specEvaluationLearningProposalArgs struct {
+	Lang            string  `json:"lang"`
+	MinConfidence   float64 `json:"min_confidence"`
+	MinTimesApplied int     `json:"min_times_applied"`
+	TemplatePath    string  `json:"template_path"`
+	RunID           string  `json:"run_id"`
+	VariantName     string  `json:"variant_name"`
+}
+
+type specEvaluationPromotionDecisionArgs struct {
+	ProposalID string `json:"proposal_id"`
+	Decision   string `json:"decision"`
+	Actor      string `json:"actor"`
+	Reason     string `json:"reason"`
+}
+
+type specEvaluationPromotionApplyArgs struct {
+	ProposalID string `json:"proposal_id"`
+	Actor      string `json:"actor"`
+	Reason     string `json:"reason"`
 }
 
 type specDiffArgs struct {
@@ -643,7 +764,7 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.",
+		Name: "spec/promote_learnings", Description: "Preview active learnings selected by operational confidence/use thresholds. Threshold-only apply is disabled; use the evaluation promotion workflow for reusable changes.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`),
 	}, specTool("promote_learnings", func(ctx context.Context, a specPromoteLearningsArgs) (any, error) {
 		res, err := s.spec.PromoteLearnings(ctx, a.Lang, a.MinConfidence, a.MinTimesApplied, a.Apply, a.TemplatePath)

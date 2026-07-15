@@ -203,8 +203,24 @@ governance records stored only in SQLite.
 `spec/amend`, `spec/list_amendments`, `spec/apply_amendments`,
 `spec/graduate_amendment`, `spec/record_learnings`, `spec/learnings`,
 `spec/promote_learnings` — a ledger for spec evolution and cross-session
-lessons. `spec/bootstrap`, `spec/import`, `spec/evolve`, `spec/mode`,
+lessons. `spec/promote_learnings` is now preview-only: a reusable change must
+name a qualifying evaluation winner and pass the promotion flow below.
+`spec/bootstrap`, `spec/import`, `spec/evolve`, `spec/mode`,
 `spec/prompt`, `spec/vacuum` are setup/maintenance.
+
+### Evaluations (host-driven, orchestrator and workers)
+
+1. Capture complete historical attempts with `spec/evaluation_case_from_attempt`, or explicitly curate cases with `spec/evaluation_case_curate`.
+2. Create a dataset, assign cases to training/development/held-out splits, and seal it. Sealing fixes its content identity.
+3. Create immutable baseline/candidate configurations and a run.
+4. Workers claim assignments with `spec/evaluation_assignment_claim`, then use the normal `spec/context` → `spec/execution_start` → candidate/report path. Heartbeat long work; release retryable work; cancel unsupported cases with a reason.
+5. Submit the terminal ordinary `attempt_id` plus verifier-derived goal/integration/behavior/regression/intervention observations. crest-spec derives acceptance, retry, token, cost, duration, and candidate-churn facts from SQLite and overrides conflicting host values.
+6. Finalize the run. Missing, unequal, or insufficient samples remain `inconclusive`; held-out outcomes are not exposed to workers.
+7. Inspect conclusions and raw provenance with `spec/evaluation_runs` or the Evaluations dashboard. A reusable learning change then requires `spec/evaluation_learning_propose`, a human `spec/evaluation_promotion_decide`, and `spec/evaluation_promotion_apply` against the unchanged rollback identity.
+
+Evaluation cases, leases, observations, comparisons, exact proposed changes,
+and decisions are canonical SQLite state. Do not create evaluation manifests or
+run-result sidecars in the project tree.
 
 ## The canonical orchestration loop
 

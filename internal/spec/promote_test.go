@@ -19,6 +19,7 @@ type promoteFakeStore struct {
 	specStore
 	active        []store.Learning
 	statusUpdates []statusUpdate
+	proposal      *store.EvaluationPromotionProposal
 }
 
 type statusUpdate struct {
@@ -36,6 +37,24 @@ func (f *promoteFakeStore) ListLearnings(status string) ([]store.Learning, error
 func (f *promoteFakeStore) UpdateLearningStatus(id, status string) error {
 	f.statusUpdates = append(f.statusUpdates, statusUpdate{id: id, status: status})
 	return nil
+}
+
+func (f *promoteFakeStore) CreateEvaluationPromotionProposal(_ context.Context, runID, variantName, changeKind, targetIdentity string, change map[string]any, rollbackIdentity string) (*store.EvaluationPromotionProposal, error) {
+	f.proposal = &store.EvaluationPromotionProposal{
+		ID: "proposal-1", RunID: runID, VariantName: variantName, ChangeKind: changeKind,
+		TargetIdentity: targetIdentity, Change: change, RollbackIdentity: rollbackIdentity,
+		Status: "eligible", EligibilityReason: "qualifying fixture evaluation",
+	}
+	return f.proposal, nil
+}
+
+func (f *promoteFakeStore) GetEvaluationPromotionProposal(_ context.Context, _ string) (*store.EvaluationPromotionProposal, error) {
+	return f.proposal, nil
+}
+
+func (f *promoteFakeStore) RecordEvaluationPromotionDecision(_ context.Context, _ string, decision, _, _ string) (*store.EvaluationPromotionProposal, error) {
+	f.proposal.Status = decision
+	return f.proposal, nil
 }
 
 func promotableLearnings() []store.Learning {
@@ -68,7 +87,7 @@ func TestPromoteLearnings_PreviewWritesNothing(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "preview must not create the template file")
 }
 
-func TestPromoteLearnings_ApplyAppendsAndMarksPromoted(t *testing.T) {
+func TestPromoteLearnings_ThresholdOnlyApplyIsBlocked(t *testing.T) {
 	fake := &promoteFakeStore{active: promotableLearnings()}
 	s := &Spec{store: fake, fs: OSFileSystem{}, cfg: &config.Config{}}
 
@@ -79,26 +98,40 @@ func TestPromoteLearnings_ApplyAppendsAndMarksPromoted(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("# existing"), 0o644))
 
 	res, err := s.PromoteLearnings(context.Background(), "rust", 0, 0, true, target)
-	require.NoError(t, err)
-	assert.True(t, res.Applied)
+	require.Error(t, err)
+	assert.False(t, res.Applied)
+	assert.Contains(t, err.Error(), "evaluation-backed proposal")
 
 	data, err := os.ReadFile(target)
 	require.NoError(t, err)
-	content := string(data)
-	assert.Contains(t, content, "# existing")
-	assert.Contains(t, content, "- use blocking send")
-	assert.Contains(t, content, "- cross-lang rule")
-	// Separation: existing content kept and a blank line precedes the block.
-	assert.Contains(t, content, "# existing\n\n- ")
+	assert.Equal(t, "# existing", string(data))
+	assert.Empty(t, fake.statusUpdates)
+}
 
-	// Both promotable learnings marked promoted.
+func TestLearningPromotion_ProposeApproveAndApplyExactChange(t *testing.T) {
+	fake := &promoteFakeStore{active: promotableLearnings()}
+	s := &Spec{store: fake, fs: OSFileSystem{}, cfg: &config.Config{}}
+	target := filepath.Join(t.TempDir(), "learned", "rust.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("# existing"), 0o644))
+
+	proposed, err := s.ProposeLearningPromotion(context.Background(), "rust", 0, 0, target, "run-1", "candidate")
+	require.NoError(t, err)
+	require.NotNil(t, proposed.Proposal)
+	assert.Equal(t, "eligible", proposed.Proposal.Status)
+	assert.Equal(t, target, proposed.Proposal.TargetIdentity)
+
+	approved, err := s.DecideLearningPromotion(context.Background(), proposed.Proposal.ID, "approved", "reviewer", "held-out evidence passed")
+	require.NoError(t, err)
+	assert.Equal(t, "approved", approved.Status)
+	applied, err := s.ApplyLearningPromotion(context.Background(), proposed.Proposal.ID, "crest-spec", "applied reviewed proposal")
+	require.NoError(t, err)
+	assert.Equal(t, "applied", applied.Status)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "# existing\n\n- use blocking send")
 	require.Len(t, fake.statusUpdates, 2)
-	ids := map[string]string{}
-	for _, u := range fake.statusUpdates {
-		ids[u.id] = u.status
-	}
-	assert.Equal(t, "promoted", ids["a"])
-	assert.Equal(t, "promoted", ids["c"])
 }
 
 func TestPromoteLearnings_DefaultPathAndLang(t *testing.T) {
