@@ -80,6 +80,7 @@ You orchestrate crest-spec. crest-spec is a passive MCP state engine, not an age
 Run the canonical loop:
 1. Call spec/validate.
 2. Call spec/plan and inspect whether the increment is expected.
+   Use spec/project_overview and spec/plan_inspect for the goal-level explanation; follow spec/impact and spec/attempt_inspect when diagnosing a specific operation.
 3. Call spec/begin. If PendingDestroys is non-empty, stop and ask the user before spec/confirm_destroys.
 4. Repeatedly call spec/next.
 5. For each resource in the current wave, dispatch one crest-generator subagent concurrently and wait for the wave's subagents to return.

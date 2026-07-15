@@ -217,8 +217,8 @@ Review the documents in implementation order. Record workstream approval in this
 | WS4 Context manifests | Implemented | Merged |
 | WS5 Execution, roles, failures | Implemented | Merged |
 | WS6 Validation and evidence | Implemented | Merged |
-| WS7 Evaluations | Implemented | Ready for review |
-| WS8 Dashboard and developer interfaces | Draft | |
+| WS7 Evaluations | Implemented | Merged |
+| WS8 Dashboard and developer interfaces | Implemented | Typed query contracts, modular embedded UI, deep links/comparisons, MCP/CLI parity, and release hardening |
 
 Changes to an earlier approved public contract must trigger review of dependent workstream plans. Implementation PRs should reference task IDs and update this roadmap when dependencies or acceptance criteria change.
 
