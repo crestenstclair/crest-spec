@@ -1,9 +1,11 @@
 # Workstream 6: Multi-Scope Validation and Behavioral Evidence Provenance
 
-Status: **Draft**  
+Status: **Implemented (Phase 6)**
 Depends on: WS1–WS5  
 Enables: WS7, WS8, final completion  
 Original scope: Workstreams 6 and 7
+
+Implementation commits: `3218ebb` (contracts), `ff4bf17` (SQLite persistence and controlled runner), `e8016ad` (engine-executed witnesses, evidence inspection, completion/regression), `b7bc642` (finish gate), and `a4cfee4` (behavioral classification hardening).
 
 ## Objective
 
@@ -177,4 +179,3 @@ Existing behavioral check and verification rows remain visible as legacy caller-
 - Behavioral witnesses are engine-executed, falsification-gated, and source-provenant.
 - Completion and regression consume only current evidence.
 - Raw evidence and consequences are inspectable through all required surfaces.
-

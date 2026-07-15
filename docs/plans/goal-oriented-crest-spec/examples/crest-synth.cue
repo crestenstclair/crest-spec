@@ -189,11 +189,11 @@ project: {
 	}
 
 	evidence: {
-		audible_tone:       {kind: "behavioral_witness", description: "Measured audible tone from the accepted engine"}
-		realtime_boundary:   {kind: "behavioral_witness", description: "Lock-free boundary counters and observations"}
-		mixer_signal_path:   {kind: "behavioral_witness", description: "Measured canonical mixer routing"}
-		gamepad_navigation:  {kind: "behavioral_witness", description: "Gamepad-only UI journey"}
-		session_round_trip:  {kind: "behavioral_witness", description: "Successful and failed atomic restore observations"}
+		audible_tone:       {kind: "behavioral_witness", description: "Measured audible tone from the accepted engine", witnesses: ["witness.audible_tone"]}
+		realtime_boundary:   {kind: "behavioral_witness", description: "Lock-free boundary counters and observations", witnesses: ["witness.realtime_boundary"]}
+		mixer_signal_path:   {kind: "behavioral_witness", description: "Measured canonical mixer routing", witnesses: ["witness.mixer_signal_path"]}
+		gamepad_navigation:  {kind: "behavioral_witness", description: "Gamepad-only UI journey", witnesses: ["witness.gamepad_navigation"]}
+		session_round_trip:  {kind: "behavioral_witness", description: "Successful and failed atomic restore observations", witnesses: ["witness.session_round_trip"]}
 	}
 
 	completion: {
@@ -219,8 +219,11 @@ project: {
 	// artifact hashes. Both commands use the same JSON observation schema.
 	witnesses: {
 		audible_tone: {
+			scope: "goal"
 			goal: "goal.play_an_instrument"
 			capability: "capability.render_audible_polyphony"
+			resources: ["domainService.Engine.EngineRenderer", "port.Shell.AudioOutput", "asset.ToneTestMain"]
+			evidence: ["evidence.audible_tone"]
 			command:         ["cargo", "run", "--bin", "tone_test", "--", "--case", "real"]
 			negativeCommand: ["cargo", "run", "--bin", "tone_test", "--", "--case", "silent-stub"]
 			artifacts: ["target/debug/tone_test"]
@@ -232,8 +235,11 @@ project: {
 			predicates: [{field: "peak", op: "range", min: 0.1, max: 1.0}]
 		}
 		realtime_boundary: {
+			scope: "goal"
 			goal: "goal.play_an_instrument"
 			capability: "capability.realtime_safe_control"
+			resources: ["port.RealTime.EventRing", "port.RealTime.ParameterBridge", "asset.RealtimeMetrics"]
+			evidence: ["evidence.realtime_boundary"]
 			command:         ["cargo", "test", "realtime_witness", "--", "--nocapture", "--case=real"]
 			negativeCommand: ["cargo", "test", "realtime_witness", "--", "--nocapture", "--case=blocking-stub"]
 			observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {allocations: "number", locks: "number", latest_version: "number"}}
@@ -244,24 +250,33 @@ project: {
 			]
 		}
 		mixer_signal_path: {
+			scope: "goal"
 			goal: "goal.mix_multiple_patches"
 			capability: "capability.mix_signal_path"
+			resources: ["aggregate.Mixer.ChannelStrip", "domainService.Mixer.MixEngine", "applicationService.Mixer.MixerController"]
+			evidence: ["evidence.mixer_signal_path"]
 			command:         ["cargo", "test", "mixer_witness", "--", "--nocapture", "--case=real"]
 			negativeCommand: ["cargo", "test", "mixer_witness", "--", "--nocapture", "--case=pre-fader-stub"]
 			observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {before: "number", after: "number"}}
 			predicates: [{field: "before", op: "gt", value: 0.5}, {field: "after", op: "lt", value: 0.5}]
 		}
 		gamepad_navigation: {
+			scope: "goal"
 			goal: "goal.operate_from_steam_deck"
 			capability: "capability.navigate_by_gamepad"
+			resources: ["port.Shell.GamepadInput", "port.Shell.GuiRenderer", "adapter.GilrsGamepadInput", "adapter.EguiRenderer"]
+			evidence: ["evidence.gamepad_navigation"]
 			command:         ["cargo", "test", "gamepad_journey_witness", "--", "--nocapture", "--case=real"]
 			negativeCommand: ["cargo", "test", "gamepad_journey_witness", "--", "--nocapture", "--case=no-mapping-stub"]
 			observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {editor_opened: "bool", patch_changed: "bool"}}
 			predicates: [{field: "editor_opened", op: "equals", member: true}, {field: "patch_changed", op: "equals", member: true}]
 		}
 		session_round_trip: {
+			scope: "goal"
 			goal: "goal.preserve_work"
 			capability: "capability.save_and_restore_sessions"
+			resources: ["aggregate.Preset.Session", "applicationService.Preset.SessionManager", "port.Preset.PresetStorage"]
+			evidence: ["evidence.session_round_trip"]
 			command:         ["cargo", "test", "session_witness", "--", "--nocapture", "--case=real"]
 			negativeCommand: ["cargo", "test", "session_witness", "--", "--nocapture", "--case=partial-restore-stub"]
 			observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {round_trip_equal: "bool", failure_preserved_state: "bool"}}

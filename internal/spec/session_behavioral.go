@@ -29,10 +29,13 @@ type TaskInput struct {
 
 // VerifyResult is the outcome of running Verify on a single check.
 type VerifyResult struct {
-	Passed    bool   `json:"passed"`
-	Theater   bool   `json:"theater"`
-	Malformed bool   `json:"malformed"`
-	Reason    string `json:"reason"`
+	WitnessID       string `json:"witness_id,omitempty"`
+	ValidationRunID string `json:"validation_run_id,omitempty"`
+	Classification  string `json:"classification,omitempty"`
+	Passed          bool   `json:"passed"`
+	Theater         bool   `json:"theater"`
+	Malformed       bool   `json:"malformed"`
+	Reason          string `json:"reason"`
 }
 
 // GraduateResult is the outcome of graduating a check: the structured claim
@@ -107,6 +110,13 @@ func (s *Spec) TasksCommit(ctx context.Context, resourceID string, tasks []TaskI
 // This is FAIL-CLOSED: any evaluation failure (including theater) is treated
 // as a rejection. A check passes only when real passes AND stub fails.
 func (s *Spec) Verify(ctx context.Context, checkID string, real, stub map[string]any) (VerifyResult, error) {
+	return VerifyResult{}, fmt.Errorf("caller-supplied observations are disabled; declare a project witness and use engine-executed verification")
+}
+
+// verifySuppliedObservationsLegacy preserves the evaluator integration for
+// migration tests and historical inspection. It is intentionally unreachable
+// through MCP and public operational interfaces.
+func (s *Spec) verifySuppliedObservationsLegacy(ctx context.Context, checkID string, real, stub map[string]any) (VerifyResult, error) {
 	bc, err := s.store.GetCheck(checkID)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("get check %q: %w", checkID, err)

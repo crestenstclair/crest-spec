@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crestenstclair/crest-spec/internal/completion"
 	"github.com/crestenstclair/crest-spec/internal/config"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/evolve"
@@ -85,6 +86,13 @@ type specStore interface {
 	ListPendingAttemptHandoffs(ctx context.Context, limit int) ([]store.AttemptHandoff, error)
 	ListAttemptHandoffsBySource(ctx context.Context, attemptID string) ([]store.AttemptHandoff, error)
 	AcceptAttemptHandoff(ctx context.Context, id, targetAttemptID string) error
+	RecordValidationRun(ctx context.Context, input store.ValidationRunWrite) (*store.ValidationRun, error)
+	GetValidationRun(ctx context.Context, id string) (*store.ValidationRun, error)
+	ListValidationRuns(ctx context.Context, limit int) ([]store.ValidationRun, error)
+	ListVerificationDefinitions(ctx context.Context, projectName string) ([]store.VerificationDefinition, error)
+	GetVerificationCompletionFacts(ctx context.Context, projectName string) (*store.VerificationCompletionFacts, error)
+	InvalidateVerificationEvidence(ctx context.Context, projectName string, resourceIDs []string, reason string, source store.TransitionSource) (int, error)
+	ApplyCompletionProjection(ctx context.Context, projectName string, goals []completion.GoalProjection, project completion.ProjectProjection, source store.TransitionSource) error
 	GetGeneration(id string) (*store.Generation, error)
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)

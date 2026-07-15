@@ -84,9 +84,18 @@ project: {
 	}
 
 	evidence: {
-		audible_witness: {kind: "behavioral_witness", description: "measured output from the accepted voice engine"}
-		audio_integration: {kind: "integration_validation", description: "frames observed at the audio adapter boundary"}
-		gamepad_journey: {kind: "behavioral_witness", description: "gamepad-only patch editing journey"}
+		audible_witness: {
+			kind: "behavioral_witness", description: "measured output from the accepted voice engine"
+			witnesses: ["witness.audible_a4"]
+		}
+		audio_integration: {
+			kind: "integration_validation", description: "frames observed at the audio adapter boundary"
+			validations: ["validation.audio_integration"]
+		}
+		gamepad_journey: {
+			kind: "behavioral_witness", description: "gamepad-only patch editing journey"
+			witnesses: ["witness.gamepad_edit"]
+		}
 	}
 
 	nonGoals: {
@@ -97,7 +106,7 @@ project: {
 	}
 	completion: {
 		requiredGoals: ["goal.play_instrument", "goal.edit_by_gamepad"]
-		projectChecks: ["validation.test"]
+		projectChecks: ["validation.test", "validation.audio_integration"]
 	}
 
 	layers: ["domain", "application", "infrastructure"]
@@ -220,5 +229,59 @@ project: {
 		}
 	}
 
-	validations: [{kind: "test", command: ["cargo", "test"], description: "project test suite"}]
+	validations: {
+		test: {
+			scope: "project", kind: "test"
+			command: ["cargo", "test"]
+			description: "project test suite"
+			goals: ["goal.play_instrument", "goal.edit_by_gamepad"]
+		}
+		audio_integration: {
+			scope: "integration_wave", kind: "integration"
+			command: ["cargo", "test", "--test", "live_audio_pipeline"]
+			description: "external MIDI reaches the audio adapter through the accepted integration path"
+			resources: ["adapter.MidirMidi", "domainService.Engine.VoiceMixer", "adapter.CpalAudio"]
+			capabilities: ["capability.render_note", "capability.deliver_audio"]
+			goals: ["goal.play_instrument"]
+		}
+	}
+
+	witnesses: {
+		audible_a4: {
+			scope: "goal"
+			goal: "goal.play_instrument"
+			capability: "capability.render_note"
+			resources: ["adapter.MidirMidi", "domainService.Engine.VoiceMixer", "adapter.CpalAudio", "asset.ToneWitness"]
+			evidence: ["evidence.audible_witness"]
+			command: ["cargo", "run", "--bin", "tone_witness", "--", "--json"]
+			negativeCommand: ["cargo", "run", "--bin", "tone_witness", "--", "--json", "--silent-stub"]
+			timeout: "30s"
+			observation: {
+				kind: "json_stdout", marker: "CREST_OBSERVATION "
+				schema: {peak: "number", clipped: "bool"}
+			}
+			predicates: [
+				{field: "peak", op: "gt", value: 0.1},
+				{field: "clipped", op: "eq", value: false},
+			]
+		}
+		gamepad_edit: {
+			scope: "goal"
+			goal: "goal.edit_by_gamepad"
+			capability: "capability.navigate_gamepad"
+			resources: ["port.Shell.GamepadInput", "applicationService.Shell.PatchController", "adapter.GilrsGamepad", "adapter.EguiPatchView"]
+			evidence: ["evidence.gamepad_journey"]
+			command: ["cargo", "run", "--bin", "gamepad_demo", "--", "--json"]
+			negativeCommand: ["cargo", "run", "--bin", "gamepad_demo", "--", "--json", "--drop-actions"]
+			timeout: "30s"
+			observation: {
+				kind: "json_stdout", marker: "CREST_OBSERVATION "
+				schema: {actions: "number", performanceNotes: "number"}
+			}
+			predicates: [
+				{field: "actions", op: "gt", value: 0},
+				{field: "performanceNotes", op: "eq", value: 0},
+			]
+		}
+	}
 }

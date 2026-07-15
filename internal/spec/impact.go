@@ -17,6 +17,10 @@ func (s *Spec) Impact(ctx context.Context, resourceID string) (*impactpkg.Result
 		return nil, err
 	}
 	snapshot.ResourceTrace = resourceTraceSnapshot(planResult.Registry)
+	snapshot.Verification, err = verificationDefinitionSnapshot(planResult.Registry)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.store.ReconcileProjectIntent(ctx, snapshot); err != nil {
 		return nil, err
 	}

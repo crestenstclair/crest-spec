@@ -114,7 +114,10 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.", InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`)},
 		{Name: "spec/design_commit", Description: "Commit a bounded-context design record.", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_name":{"type":"string"},"contract_json":{"type":"string"}},"required":["context_name","contract_json"]}`)},
 		{Name: "spec/tasks_commit", Description: "Commit behavioral tasks and checks for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"tasks":{"type":"array","items":{"type":"object"}}},"required":["resource_id","tasks"]}`)},
-		{Name: "spec/verify", Description: "Run falsification-gated verification for a check.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"},"real_observation":{"type":"object"},"stub_observation":{"type":"object"}},"required":["check_id","real_observation","stub_observation"]}`)},
+		{Name: "spec/verify", Description: "Execute a declared witness and its negative case through crest-spec's controlled verifier.", InputSchema: json.RawMessage(`{"type":"object","properties":{"witness_id":{"type":"string"},"check_id":{"type":"string"},"session_id":{"type":"string"}},"required":["witness_id"]}`)},
+		{Name: "spec/verifications", Description: "List SQLite-backed validation and witness runs.", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
+		{Name: "spec/verification_inspect", Description: "Inspect one validation or witness run with commands, outputs, observations, predicates, and evidence.", InputSchema: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}`)},
+		{Name: "spec/verification_definitions", Description: "List current validation and witness definitions reconciled from CUE.", InputSchema: json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string"}}}`)},
 		{Name: "spec/graduate", Description: "Graduate a passed check to the graduated state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"]}`)},
 	}
 
@@ -406,9 +409,17 @@ type specTasksCommitArgs struct {
 }
 
 type specVerifyArgs struct {
-	CheckID         string         `json:"check_id"`
-	RealObservation map[string]any `json:"real_observation"`
-	StubObservation map[string]any `json:"stub_observation"`
+	WitnessID string `json:"witness_id"`
+	CheckID   string `json:"check_id"`
+	SessionID string `json:"session_id"`
+}
+
+type specVerificationInspectArgs struct {
+	RunID string `json:"run_id"`
+}
+
+type specVerificationDefinitionsArgs struct {
+	ProjectName string `json:"project_name"`
 }
 
 type specGraduateCheckArgs struct {
@@ -596,10 +607,31 @@ func (s *Server) registerSpecLifecycleTools() {
 
 	s.addTool(toolDef{
 		Name:        "spec/verify",
-		Description: "Run falsification-gated verification for a check. Requires real_observation and stub_observation. Fail-closed: theater (stub passes) and real-fail both reject.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string","description":"Check ID"},"real_observation":{"type":"object","description":"Measured values from the real system"},"stub_observation":{"type":"object","description":"Measured values from a no-op stub baseline"}},"required":["check_id","real_observation","stub_observation"]}`),
+		Description: "Execute a declared witness against the accepted source tree, execute its declared negative case, parse both through the same schema, and persist the falsification-gated evidence. Caller-supplied observations are not accepted.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"witness_id":{"type":"string","description":"Canonical witness.<name> identifier"},"check_id":{"type":"string","description":"Optional legacy task check to advance when the witness covers its resource"},"session_id":{"type":"string","description":"Optional session provenance"}},"required":["witness_id"]}`),
 	}, specToolStrict("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
-		return s.spec.Verify(ctx, a.CheckID, a.RealObservation, a.StubObservation)
+		return s.spec.VerifyWitness(ctx, a.WitnessID, a.CheckID, a.SessionID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/verifications", Description: "List recent SQLite-backed validation and behavioral-witness runs across all scopes.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Maximum runs to return"}}}`),
+	}, specTool("verifications", func(ctx context.Context, a specLimitArgs) (any, error) {
+		return s.spec.ListValidationRuns(ctx, a.Limit)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/verification_inspect", Description: "Inspect one run's immutable definition, targets, exact commands, source and executable hashes, captured output, artifacts, observations, predicates, and evidence currency.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}`),
+	}, specTool("verification inspect", func(ctx context.Context, a specVerificationInspectArgs) (any, error) {
+		return s.spec.GetValidationRun(ctx, a.RunID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/verification_definitions", Description: "List current named validation and executable-witness definitions reconciled from CUE into SQLite.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string","description":"Defaults to the current project"}}}`),
+	}, specTool("verification definitions", func(ctx context.Context, a specVerificationDefinitionsArgs) (any, error) {
+		return s.spec.ListVerificationDefinitions(ctx, a.ProjectName)
 	}))
 
 	s.addTool(toolDef{

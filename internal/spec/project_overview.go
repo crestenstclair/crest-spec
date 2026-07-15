@@ -9,31 +9,37 @@ import (
 )
 
 type ProjectOverviewResult struct {
-	Project        *store.ProjectIntentState           `json:"project"`
-	Blockers       []store.CompletionBlocker           `json:"blockers"`
-	ProjectHistory []store.StatusTransition            `json:"project_history"`
-	GoalHistory    map[string][]store.StatusTransition `json:"goal_history"`
-	Contributions  []store.PersistedContribution       `json:"contributions"`
+	Project            *store.ProjectIntentState           `json:"project"`
+	CompletionEnforced bool                                `json:"completion_enforced"`
+	Blockers           []store.CompletionBlocker           `json:"blockers"`
+	ProjectHistory     []store.StatusTransition            `json:"project_history"`
+	GoalHistory        map[string][]store.StatusTransition `json:"goal_history"`
+	Contributions      []store.PersistedContribution       `json:"contributions"`
 }
 
 // ProjectOverview reconciles current declarations, then reads the canonical
 // SQLite projection. Existing operational statuses are preserved by reconcile.
 func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, error) {
-	project, err := cuepkg.Load(s.cfg.SpecDir)
+	planResult, err := s.Plan(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load project intent: %w", err)
+		return nil, fmt.Errorf("plan project overview: %w", err)
 	}
+	project := planResult.Registry.Project
 	snapshot, err := projectIntentSnapshot(project)
 	if err != nil {
 		return nil, fmt.Errorf("project intent: %w", err)
 	}
-	registry, err := cuepkg.NewRegistry(project)
-	if err != nil {
-		return nil, fmt.Errorf("build project registry: %w", err)
-	}
+	registry := planResult.Registry
 	snapshot.ResourceTrace = resourceTraceSnapshot(registry)
+	snapshot.Verification, err = verificationDefinitionSnapshot(registry)
+	if err != nil {
+		return nil, fmt.Errorf("verification definitions: %w", err)
+	}
 	if err := s.store.ReconcileProjectIntent(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
+	}
+	if err := s.reprojectCompletion(ctx, planResult, store.TransitionSource{Type: "dashboard_projection", ID: snapshot.SpecHash}); err != nil {
+		return nil, fmt.Errorf("project completion: %w", err)
 	}
 	intent, err := s.store.GetProjectIntent(ctx, project.Name)
 	if err != nil {
@@ -51,7 +57,10 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 	if err != nil {
 		return nil, err
 	}
-	result := &ProjectOverviewResult{Project: intent, Blockers: blockers, ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition), Contributions: contributions}
+	result := &ProjectOverviewResult{
+		Project: intent, CompletionEnforced: projectUsesEvidenceCompletion(project), Blockers: blockers,
+		ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition), Contributions: contributions,
+	}
 	for _, goal := range intent.Goals {
 		history, err := s.store.ListGoalStatusHistory(ctx, goal.ID)
 		if err != nil {
@@ -60,4 +69,19 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 		result.GoalHistory[goal.ID] = history
 	}
 	return result, nil
+}
+
+func projectUsesEvidenceCompletion(project *cuepkg.Project) bool {
+	if project == nil {
+		return false
+	}
+	if len(project.Witnesses) > 0 {
+		return true
+	}
+	for _, validation := range project.Validations {
+		if validation.Named {
+			return true
+		}
+	}
+	return false
 }

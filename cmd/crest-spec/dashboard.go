@@ -63,6 +63,9 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/v1/execution-comparison", d.handleExecutionComparison)
 	mux.HandleFunc("GET /api/v1/failures", d.handleFailures)
 	mux.HandleFunc("GET /api/v1/handoffs", d.handleHandoffs)
+	mux.HandleFunc("GET /api/v1/verifications", d.handleVerifications)
+	mux.HandleFunc("GET /api/v1/verifications/definitions", d.handleVerificationDefinitions)
+	mux.HandleFunc("GET /api/v1/verifications/{id}", d.handleVerificationRun)
 	mux.HandleFunc("GET /api/plan", d.handlePlan)
 	mux.HandleFunc("GET /api/resources", d.handleResources)
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
@@ -337,6 +340,33 @@ func (d *dashboard) handleHandoffs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.writeJSON(w, handoffs)
+}
+
+func (d *dashboard) handleVerifications(w http.ResponseWriter, r *http.Request) {
+	runs, err := d.spec.ListValidationRuns(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, runs)
+}
+
+func (d *dashboard) handleVerificationRun(w http.ResponseWriter, r *http.Request) {
+	run, err := d.spec.GetValidationRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, run)
+}
+
+func (d *dashboard) handleVerificationDefinitions(w http.ResponseWriter, r *http.Request) {
+	definitions, err := d.spec.ListVerificationDefinitions(r.Context(), r.URL.Query().Get("project"))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, definitions)
 }
 
 func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {

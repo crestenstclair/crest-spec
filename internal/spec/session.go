@@ -99,9 +99,12 @@ type CommitResult struct {
 }
 
 type FinishResult struct {
-	Committed int
-	Skipped   int
-	Errored   int
+	Committed         int      `json:"committed"`
+	Skipped           int      `json:"skipped"`
+	Errored           int      `json:"errored"`
+	ProjectCompletion string   `json:"project_completion,omitempty"`
+	CompletionReason  string   `json:"completion_reason,omitempty"`
+	IncompleteGoals   []string `json:"incomplete_goals,omitempty"`
 	// Blocked is set when the session cannot finalize because behavioral
 	// checks are unresolved. The session stays open; BlockingChecks lists
 	// what must be resolved. force=true is the only override, and it is an
@@ -133,8 +136,28 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		return nil, fmt.Errorf("project intent: %w", err)
 	}
 	intent.ResourceTrace = resourceTraceSnapshot(planResult.Registry)
+	intent.Verification, err = verificationDefinitionSnapshot(planResult.Registry)
+	if err != nil {
+		return nil, fmt.Errorf("verification definitions: %w", err)
+	}
 	if err := s.store.ReconcileProjectIntent(ctx, intent); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
+	}
+	var reverifyResources []string
+	for _, action := range planResult.Actions {
+		if action.Kind == planpkg.ActionModify || action.Kind == planpkg.ActionDestroy {
+			reverifyResources = append(reverifyResources, action.ResourceID)
+		}
+	}
+	if len(reverifyResources) > 0 {
+		if _, err := s.store.InvalidateVerificationEvidence(ctx, intent.ProjectName, reverifyResources,
+			"resource change requires verification evidence to be regenerated",
+			store.TransitionSource{Type: "plan", ID: intent.SpecHash}); err != nil {
+			return nil, fmt.Errorf("invalidate verification evidence: %w", err)
+		}
+	}
+	if err := s.reprojectCompletion(ctx, planResult, store.TransitionSource{Type: "plan", ID: intent.SpecHash}); err != nil {
+		return nil, fmt.Errorf("project completion: %w", err)
 	}
 
 	actions := planResult.Actions
@@ -485,6 +508,20 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 			errored++
 		}
 	}
+	overview, err := s.ProjectOverview(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("finish gate: project completion: %w", err)
+	}
+	completionFields := func(result *FinishResult) *FinishResult {
+		result.ProjectCompletion = overview.Project.CompletionStatus
+		result.CompletionReason = overview.Project.CompletionReason
+		for _, goal := range overview.Project.Goals {
+			if goal.Status != "complete" {
+				result.IncompleteGoals = append(result.IncompleteGoals, goal.ID)
+			}
+		}
+		return result
+	}
 
 	// Behavioral gate: the session does not finalize while any of its
 	// resources carry unresolved checks. Everything that is not proven
@@ -496,13 +533,18 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 			return nil, fmt.Errorf("finish gate: %w", err)
 		}
 		if len(blocking) > 0 {
-			return &FinishResult{
+			return completionFields(&FinishResult{
 				Committed:      committed,
 				Skipped:        skipped,
 				Errored:        errored,
 				Blocked:        true,
 				BlockingChecks: blocking,
-			}, nil
+			}), nil
+		}
+		if overview.CompletionEnforced && overview.Project.CompletionStatus != "complete" {
+			return completionFields(&FinishResult{
+				Committed: committed, Skipped: skipped, Errored: errored, Blocked: true,
+			}), nil
 		}
 	}
 
@@ -524,12 +566,12 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 	s.store.CompleteApply(sess.ApplyID)
 	s.store.ReleaseLock()
 
-	return &FinishResult{
+	return completionFields(&FinishResult{
 		Committed:        committed,
 		Skipped:          skipped,
 		Errored:          errored,
 		ReflectionPrompt: reflectionPrompt,
-	}, nil
+	}), nil
 }
 
 // unresolvedChecks returns every behavioral check attached to the given
@@ -634,7 +676,7 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 	s.runVerificationCommand(ctx, s.cfg.TestCommand, "test", resources, result)
 
 	if plan, err := s.Plan(ctx); err == nil && plan != nil {
-		s.runProjectValidations(ctx, plan.Registry.Project.Validations, resources, result)
+		s.runProjectValidationsRecorded(ctx, plan.Registry.Project.Name, sessionID, []cuepkg.Validation(plan.Registry.Project.Validations), resources, result)
 	}
 
 	return result
@@ -660,20 +702,12 @@ func (s *Spec) runVerificationCommand(ctx context.Context, command, kind string,
 // runProjectValidations runs whole-crate validations declared at project level
 // (e.g. clippy/fmt/build/test) in the project root and records any failure as a
 // WaveError. Command output is already truncated by RunValidations.
-func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
+func (s *Spec) runProjectValidationsRecorded(ctx context.Context, projectName, sessionID string, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
 	if len(validations) == 0 {
 		return
 	}
 	cwd := filepath.Dir(s.cfg.SpecDir)
-	results, err := RunValidations(ctx, validations, cwd)
-	if err != nil {
-		result.Passed = false
-		result.Errors = append(result.Errors, WaveError{
-			Kind:    "project_validation",
-			Message: fmt.Sprintf("project validation error: %v", err),
-		})
-		return
-	}
+	results := s.executeAndRecordValidations(ctx, projectName, validations, cwd, validationProvenance{SessionID: sessionID})
 	for _, r := range results {
 		if r.Passed {
 			continue
@@ -683,6 +717,32 @@ func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.V
 			ResourceID: s.attributeErrorToResource(r.Message, resources),
 			Kind:       "project_validation",
 			Message:    fmt.Sprintf("%s: %s", r.Kind, r.Message),
+		})
+	}
+	_ = s.refreshCompletion(ctx, store.TransitionSource{Type: "validation_wave", ID: sessionID, SessionID: sessionID})
+}
+
+// runProjectValidations is retained for focused validation tests and callers
+// that do not have a reconciled session. Operational wave verification uses
+// runProjectValidationsRecorded so every command has a SQLite run record.
+func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
+	if len(validations) == 0 {
+		return
+	}
+	results, err := RunValidations(ctx, validations, filepath.Dir(s.cfg.SpecDir))
+	if err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{Kind: "project_validation", Message: fmt.Sprintf("project validation error: %v", err)})
+		return
+	}
+	for _, validation := range results {
+		if validation.Passed {
+			continue
+		}
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			ResourceID: s.attributeErrorToResource(validation.Message, resources),
+			Kind:       "project_validation", Message: fmt.Sprintf("%s: %s", validation.Kind, validation.Message),
 		})
 	}
 }

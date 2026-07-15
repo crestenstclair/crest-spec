@@ -6,16 +6,25 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	validationpkg "github.com/crestenstclair/crest-spec/internal/validation"
 )
 
 type ValidationResult struct {
-	Passed  bool
-	Kind    string
-	Message string
+	ID             string
+	Scope          string
+	Passed         bool
+	Kind           string
+	Classification string
+	RunID          string
+	Message        string
+	Execution      *validationpkg.Execution `json:"-"`
+	Assertions     []ValidationResult       `json:"assertions,omitempty"`
 }
 
 func RunCommand(ctx context.Context, command []string, cwd string) (stdout, stderr string, exitCode int, err error) {
@@ -128,13 +137,42 @@ func truncateOutput(s string) string {
 }
 
 func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd string) ([]ValidationResult, error) {
+	results := ExecuteValidations(ctx, validations, cwd)
+	for _, result := range results {
+		if result.Classification == "error" {
+			return results, fmt.Errorf("run validation %s: %s", result.Kind, result.Message)
+		}
+	}
+	return results, nil
+}
+
+// ExecuteValidations runs declared commands through the controlled runner and
+// always returns the provenance record, including launch and timeout failures.
+// It stops after the first non-passing definition to preserve fail-closed wave
+// and resource semantics.
+func ExecuteValidations(ctx context.Context, validations []cuepkg.Validation, cwd string) []ValidationResult {
 	var results []ValidationResult
 
 	for _, v := range validations {
-		stdout, stderr, exitCode, err := RunCommand(ctx, v.Command, cwd)
-		if err != nil {
-			return nil, fmt.Errorf("run validation %s: %w", v.Kind, err)
+		timeout := time.Duration(0)
+		if v.Timeout != "" {
+			timeout, _ = time.ParseDuration(v.Timeout)
 		}
+		execution := validationpkg.Execute(ctx, validationpkg.Options{
+			ProjectRoot: cwd, Command: v.Command, WorkingDirectory: v.WorkingDirectory,
+			Timeout: timeout, Environment: v.Environment,
+		})
+		result := ValidationResult{ID: v.ID, Scope: v.Scope, Kind: v.Kind, Execution: &execution}
+		if execution.LaunchError != "" || execution.TimedOut {
+			result.Classification = "error"
+			result.Message = "validation could not run: " + execution.LaunchError
+			if execution.TimedOut {
+				result.Message = "validation could not run: timed out"
+			}
+			results = append(results, result)
+			break
+		}
+		stdout, stderr, exitCode := execution.Stdout, execution.Stderr, execution.ExitCode
 
 		switch v.Kind {
 		case "compiles", "test", "custom":
@@ -143,15 +181,11 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 			if !passed {
 				msg = fmt.Sprintf("%s failed (exit %d):\nstdout: %s\nstderr: %s", v.Kind, exitCode, truncateOutput(stdout), truncateOutput(stderr))
 			}
-			results = append(results, ValidationResult{
-				Passed:  passed,
-				Kind:    v.Kind,
-				Message: msg,
-			})
+			result.Passed, result.Message = passed, msg
 
 		case "integration":
 			if len(v.Assertions) > 0 {
-				assertionResults := CheckAssertions(v.Assertions, stdout, stderr, exitCode)
+				assertionResults := checkAssertionsAt(v.Assertions, stdout, stderr, exitCode, execution.WorkingDirectory)
 				allPassed := true
 				var msgs []string
 				for _, ar := range assertionResults {
@@ -169,29 +203,38 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 						v.Kind, strings.Join(msgs, "; "), strings.Join(v.Command, " "),
 						truncateOutput(stdout), truncateOutput(stderr))
 				}
-				results = append(results, ValidationResult{
-					Passed:  allPassed,
-					Kind:    v.Kind,
-					Message: msg,
-				})
+				result.Passed, result.Message, result.Assertions = allPassed, msg, assertionResults
 			} else {
 				passed := exitCode == 0
 				msg := ""
 				if !passed {
 					msg = fmt.Sprintf("integration failed (exit %d):\nstdout: %s\nstderr: %s", exitCode, truncateOutput(stdout), truncateOutput(stderr))
 				}
-				results = append(results, ValidationResult{
-					Passed:  passed,
-					Kind:    v.Kind,
-					Message: msg,
-				})
+				result.Passed, result.Message = passed, msg
 			}
 		}
+		if result.Passed {
+			result.Classification = "passed"
+		} else if result.Classification == "" {
+			result.Classification = "failed"
+		}
+		results = append(results, result)
 
 		if len(results) > 0 && !results[len(results)-1].Passed {
 			break
 		}
 	}
 
-	return results, nil
+	return results
+}
+
+func checkAssertionsAt(assertions []cuepkg.Assertion, stdout, stderr string, exitCode int, cwd string) []ValidationResult {
+	resolved := make([]cuepkg.Assertion, len(assertions))
+	copy(resolved, assertions)
+	for index := range resolved {
+		if resolved[index].Path != "" && !filepath.IsAbs(resolved[index].Path) {
+			resolved[index].Path = filepath.Join(cwd, resolved[index].Path)
+		}
+	}
+	return CheckAssertions(resolved, stdout, stderr, exitCode)
 }

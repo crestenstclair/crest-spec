@@ -113,4 +113,8 @@ func TestDashboardIncludesContextInspectorInterface(t *testing.T) {
 	require.Contains(t, html, "/api/v1/executions")
 	require.Contains(t, html, "goal_progress")
 	require.Contains(t, html, "host_commit_ref")
+	require.Contains(t, html, `data-tab="verifications"`)
+	require.Contains(t, html, "Validation and Evidence Explorer")
+	require.Contains(t, html, "/api/v1/verifications")
+	require.Contains(t, html, "Parsed observation")
 }

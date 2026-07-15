@@ -437,6 +437,15 @@ type Lock struct {
 	AcquiredAt string
 }
 
+type ParsedObservation struct {
+	ExecutionID     string
+	SchemaJson      string
+	SchemaHash      string
+	ObservationJson string
+	ObservationHash string
+	ParseError      string
+}
+
 type ProjectActor struct {
 	ID          string
 	ProjectName string
@@ -626,6 +635,78 @@ type Task struct {
 	UpdatedAt   string
 }
 
+type ValidationArtifact struct {
+	ExecutionID   string
+	Path          string
+	ContentBlob   *string
+	ContentHash   string
+	ByteSize      int64
+	CapturedBytes int64
+	Truncated     int64
+	Missing       int64
+}
+
+type ValidationExecution struct {
+	ID               string
+	RunID            string
+	ExecutionRole    string
+	CommandJson      string
+	CommandHash      string
+	WorkingDirectory string
+	EnvironmentJson  string
+	EnvironmentHash  string
+	SourceTreeHash   string
+	ExecutableHash   string
+	StdoutBlob       string
+	StderrBlob       string
+	StdoutHash       string
+	StderrHash       string
+	StdoutBytes      int64
+	StderrBytes      int64
+	StdoutTruncated  int64
+	StderrTruncated  int64
+	ExitCode         int64
+	TimedOut         int64
+	LaunchError      string
+	StartedAt        string
+	CompletedAt      string
+	DurationMs       int64
+}
+
+type ValidationPredicateResult struct {
+	RunID        string
+	ExecutionID  string
+	Ordinal      int64
+	FieldName    string
+	Operator     string
+	ExpectedJson string
+	ObservedJson string
+	Passed       int64
+	Reason       string
+}
+
+type ValidationRun struct {
+	ID                   string
+	DefinitionSnapshotID string
+	DefinitionID         string
+	SessionID            *string
+	AttemptID            *string
+	ExecutionID          *string
+	SourceTreeHash       string
+	Classification       string
+	Reason               string
+	StartedAt            string
+	CompletedAt          string
+	DurationMs           int64
+	CreatedAt            string
+}
+
+type ValidationRunTarget struct {
+	RunID      string
+	TargetKind string
+	TargetID   string
+}
+
 type Verification struct {
 	ID          string
 	CheckID     string
@@ -636,4 +717,46 @@ type Verification struct {
 	Theater     int64
 	Reason      string
 	CreatedAt   string
+}
+
+type VerificationDefinition struct {
+	SnapshotID     string
+	DefinitionID   string
+	ProjectName    string
+	DefinitionType string
+	Scope          string
+	Kind           string
+	DefinitionHash string
+	DefinitionJson string
+	SpecHash       string
+	Active         int64
+	CreatedAt      string
+	UpdatedAt      string
+}
+
+type VerificationDefinitionTarget struct {
+	SnapshotID string
+	TargetKind string
+	TargetID   string
+}
+
+type VerificationEvidenceInvalidation struct {
+	ID               string
+	EvidenceRecordID string
+	Reason           string
+	SourceType       string
+	SourceID         string
+	CreatedAt        string
+}
+
+type VerificationEvidenceRecord struct {
+	ID             string
+	RunID          string
+	EvidenceID     string
+	SourceTreeHash string
+	DefinitionHash string
+	Classification string
+	Currency       string
+	CreatedAt      string
+	InvalidatedAt  *string
 }

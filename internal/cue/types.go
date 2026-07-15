@@ -1,6 +1,10 @@
 package cue
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+)
 
 // FlexMap handles CUE fields that can be either a map or an array of named entries.
 // Map form:     {NoteOn: {frequency: "float64"}}
@@ -82,6 +86,45 @@ func (f *FlexContextMap) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// FlexValidations preserves legacy array declarations while allowing new
+// validation definitions to use stable map keys. Map keys become canonical
+// validation.<key> identifiers in deterministic order.
+type FlexValidations []Validation
+
+func (f *FlexValidations) UnmarshalJSON(data []byte) error {
+	var definitions map[string]Validation
+	if err := json.Unmarshal(data, &definitions); err == nil {
+		keys := make([]string, 0, len(definitions))
+		for key := range definitions {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		result := make([]Validation, 0, len(keys))
+		for _, key := range keys {
+			definition := definitions[key]
+			canonicalID := "validation." + key
+			if definition.ID != "" && definition.ID != canonicalID {
+				return fmt.Errorf("validation %q declares conflicting id %q", key, definition.ID)
+			}
+			definition.ID = canonicalID
+			definition.Named = true
+			result = append(result, definition)
+		}
+		*f = result
+		return nil
+	}
+
+	var legacy []Validation
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	for index := range legacy {
+		legacy[index].Named = legacy[index].ID != ""
+	}
+	*f = legacy
+	return nil
+}
+
 type Project struct {
 	Name string `json:"name"`
 	// Mission is the project's why: what is being built, for whom, and the
@@ -93,6 +136,7 @@ type Project struct {
 	Capabilities map[string]Capability          `json:"capabilities"`
 	Requirements map[string]Requirement         `json:"requirements"`
 	Evidence     map[string]EvidenceRequirement `json:"evidence"`
+	Witnesses    map[string]Witness             `json:"witnesses,omitempty"`
 	NonGoals     map[string]string              `json:"nonGoals,omitempty"`
 	Completion   CompletionPolicy               `json:"completion"`
 	Layers       []string                       `json:"layers"`
@@ -104,7 +148,7 @@ type Project struct {
 	Assets       map[string]Asset               `json:"assets"`
 	Invariants   FlexInvariants                 `json:"invariants"`
 	ContextMap   FlexContextMap                 `json:"contextMap"`
-	Validations  []Validation                   `json:"validations,omitempty"`
+	Validations  FlexValidations                `json:"validations,omitempty"`
 }
 
 // Actor is a stable project participant referenced by goals and acceptance
@@ -158,8 +202,10 @@ type Requirement struct {
 // EvidenceRequirement declares what kind of proof an acceptance scenario
 // needs. Concrete executable witness definitions are introduced in WS6.
 type EvidenceRequirement struct {
-	Kind        string `json:"kind"`
-	Description string `json:"description"`
+	Kind        string   `json:"kind"`
+	Description string   `json:"description"`
+	Validations []string `json:"validations,omitempty"`
+	Witnesses   []string `json:"witnesses,omitempty"`
 }
 
 type CompletionPolicy struct {
@@ -359,10 +405,54 @@ type AssetProfile struct {
 }
 
 type Validation struct {
-	Kind        string      `json:"kind"`
-	Command     []string    `json:"command"`
-	Description string      `json:"description,omitempty"`
-	Assertions  []Assertion `json:"assertions,omitempty"`
+	ID               string      `json:"id,omitempty"`
+	Scope            string      `json:"scope,omitempty"`
+	Kind             string      `json:"kind"`
+	Command          []string    `json:"command"`
+	Description      string      `json:"description,omitempty"`
+	WorkingDirectory string      `json:"workingDirectory,omitempty"`
+	Timeout          string      `json:"timeout,omitempty"`
+	Environment      []string    `json:"environment,omitempty"`
+	Resources        []string    `json:"resources,omitempty"`
+	Capabilities     []string    `json:"capabilities,omitempty"`
+	Goals            []string    `json:"goals,omitempty"`
+	Assertions       []Assertion `json:"assertions,omitempty"`
+	Named            bool        `json:"-"`
+}
+
+// Witness is an executable, falsification-gated behavioral definition. Both
+// commands are run by crest-spec and parsed through the same observation
+// contract; callers cannot supply the observations accepted as evidence.
+type Witness struct {
+	ID               string                 `json:"id,omitempty"`
+	Scope            string                 `json:"scope"`
+	Goal             string                 `json:"goal,omitempty"`
+	Capability       string                 `json:"capability,omitempty"`
+	Resources        []string               `json:"resources,omitempty"`
+	Evidence         []string               `json:"evidence,omitempty"`
+	Command          []string               `json:"command"`
+	NegativeCommand  []string               `json:"negativeCommand"`
+	WorkingDirectory string                 `json:"workingDirectory,omitempty"`
+	Timeout          string                 `json:"timeout,omitempty"`
+	Environment      []string               `json:"environment,omitempty"`
+	Artifacts        []string               `json:"artifacts,omitempty"`
+	Observation      ObservationDeclaration `json:"observation"`
+	Predicates       []WitnessPredicate     `json:"predicates"`
+}
+
+type ObservationDeclaration struct {
+	Kind   string            `json:"kind"`
+	Marker string            `json:"marker"`
+	Schema map[string]string `json:"schema"`
+}
+
+type WitnessPredicate struct {
+	Field  string   `json:"field"`
+	Op     string   `json:"op"`
+	Value  any      `json:"value,omitempty"`
+	Min    *float64 `json:"min,omitempty"`
+	Max    *float64 `json:"max,omitempty"`
+	Member any      `json:"member,omitempty"`
 }
 
 type Assertion struct {

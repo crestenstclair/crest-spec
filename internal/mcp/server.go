@@ -130,7 +130,10 @@ type specHandler interface {
 	// Behavioral pipeline
 	DesignCommit(ctx context.Context, contextName, contractJSON string) error
 	TasksCommit(ctx context.Context, resourceID string, tasks []specmod.TaskInput) error
-	Verify(ctx context.Context, checkID string, real, stub map[string]any) (specmod.VerifyResult, error)
+	VerifyWitness(ctx context.Context, witnessID, checkID, sessionID string) (specmod.VerifyResult, error)
+	ListValidationRuns(ctx context.Context, limit int) ([]storemod.ValidationRun, error)
+	GetValidationRun(ctx context.Context, runID string) (*storemod.ValidationRun, error)
+	ListVerificationDefinitions(ctx context.Context, projectName string) ([]storemod.VerificationDefinition, error)
 	Graduate(ctx context.Context, checkID string) (specmod.GraduateResult, error)
 }
 

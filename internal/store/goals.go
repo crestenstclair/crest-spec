@@ -24,6 +24,7 @@ type ProjectIntentSnapshot struct {
 	NonGoals      []IntentNonGoal
 	RequiredGoals []string
 	ResourceTrace []IntentResourceTrace
+	Verification  []IntentVerificationDefinition
 }
 
 type IntentActor struct {
@@ -77,6 +78,24 @@ type IntentEvidence struct {
 type IntentNonGoal struct {
 	ID          string
 	Description string
+}
+
+// IntentVerificationDefinition is one immutable validation or witness
+// declaration snapshot plus its normalized project relationships.
+type IntentVerificationDefinition struct {
+	SnapshotID     string
+	DefinitionID   string
+	DefinitionType string
+	Scope          string
+	Kind           string
+	DefinitionHash string
+	DefinitionJSON string
+	Targets        []IntentVerificationTarget
+}
+
+type IntentVerificationTarget struct {
+	Kind string
+	ID   string
 }
 
 // ProjectIntentState is the canonical SQLite projection returned to APIs,
@@ -279,9 +298,56 @@ func (s *Store) ReconcileProjectIntent(ctx context.Context, snapshot ProjectInte
 	if err = reconcileResourceTrace(ctx, q, snapshot, timestamp); err != nil {
 		return wrap("reconcile resource traceability", err)
 	}
+	if err = reconcileVerificationDefinitions(ctx, q, snapshot, timestamp); err != nil {
+		return wrap("reconcile verification definitions", err)
+	}
 
 	if err = tx.Commit(); err != nil {
 		return wrap("commit transaction", err)
+	}
+	return nil
+}
+
+func reconcileVerificationDefinitions(ctx context.Context, q *db.Queries, snapshot ProjectIntentSnapshot, timestamp string) error {
+	if err := q.DeactivateVerificationDefinitions(ctx, db.DeactivateVerificationDefinitionsParams{
+		UpdatedAt: timestamp, ProjectName: snapshot.ProjectName,
+	}); err != nil {
+		return err
+	}
+	definitions := append([]IntentVerificationDefinition(nil), snapshot.Verification...)
+	sort.Slice(definitions, func(i, j int) bool {
+		if definitions[i].DefinitionID == definitions[j].DefinitionID {
+			return definitions[i].SnapshotID < definitions[j].SnapshotID
+		}
+		return definitions[i].DefinitionID < definitions[j].DefinitionID
+	})
+	for _, definition := range definitions {
+		if err := q.UpsertVerificationDefinition(ctx, db.UpsertVerificationDefinitionParams{
+			SnapshotID: definition.SnapshotID, DefinitionID: definition.DefinitionID,
+			ProjectName: snapshot.ProjectName, DefinitionType: definition.DefinitionType,
+			Scope: definition.Scope, Kind: definition.Kind, DefinitionHash: definition.DefinitionHash,
+			DefinitionJson: definition.DefinitionJSON, SpecHash: snapshot.SpecHash,
+			CreatedAt: timestamp, UpdatedAt: timestamp,
+		}); err != nil {
+			return fmt.Errorf("upsert %s: %w", definition.DefinitionID, err)
+		}
+		if err := q.ClearVerificationDefinitionTargets(ctx, definition.SnapshotID); err != nil {
+			return err
+		}
+		targets := append([]IntentVerificationTarget(nil), definition.Targets...)
+		sort.Slice(targets, func(i, j int) bool {
+			if targets[i].Kind == targets[j].Kind {
+				return targets[i].ID < targets[j].ID
+			}
+			return targets[i].Kind < targets[j].Kind
+		})
+		for _, target := range targets {
+			if err := q.InsertVerificationDefinitionTarget(ctx, db.InsertVerificationDefinitionTargetParams{
+				SnapshotID: definition.SnapshotID, TargetKind: target.Kind, TargetID: target.ID,
+			}); err != nil {
+				return fmt.Errorf("link %s to %s %s: %w", definition.DefinitionID, target.Kind, target.ID, err)
+			}
+		}
 	}
 	return nil
 }

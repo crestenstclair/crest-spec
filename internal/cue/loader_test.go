@@ -133,4 +133,64 @@ project: validations: [
 	require.Len(t, p.Validations, 2)
 	assert.Equal(t, "compiles", p.Validations[0].Kind)
 	assert.Equal(t, []string{"cargo", "build"}, p.Validations[0].Command)
+	assert.Equal(t, "project", p.Validations[0].Scope)
+	assert.Contains(t, p.Validations[0].ID, "validation.legacy.")
+}
+
+func TestLoad_NamedValidationAndExecutableWitness(t *testing.T) {
+	dir := t.TempDir()
+	cue := `package p
+project: {
+	name: "verified"
+	mission: "execute trustworthy evidence"
+	actors: developer: {description: "developer"}
+	goals: verified: {description: "behavior is verified", priority: "required", actors: ["actor.developer"], capabilities: ["capability.run"], requirements: ["requirement.proven"]}
+	capabilities: run: {description: "run behavior", goals: ["goal.verified"], acceptance: works: {description: "behavior works", actor: "actor.developer", evidence: ["evidence.witness"]}}
+	requirements: proven: {kind: "functional", description: "behavior is proven", goals: ["goal.verified"], capabilities: ["capability.run"]}
+	evidence: witness: {kind: "behavioral", description: "controlled witness", validations: ["validation.project_test"], witnesses: ["witness.round_trip"]}
+	completion: {requiredGoals: ["goal.verified"], projectChecks: ["validation.project_test"]}
+	validations: project_test: {scope: "project", kind: "test", command: ["go", "test", "./..."]}
+	witnesses: round_trip: {
+		scope: "goal", goal: "goal.verified", capability: "capability.run", evidence: ["evidence.witness"]
+		command: ["go", "test", "./e2e", "-run", "TestReal"]
+		negativeCommand: ["go", "test", "./e2e", "-run", "TestNegative"]
+		workingDirectory: ".", timeout: "2m", environment: ["PATH"], artifacts: ["bin/example"]
+		observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {worked: "bool"}}
+		predicates: [{field: "worked", op: "equals", member: true}]
+	}
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.cue"), []byte(cue), 0o644))
+	p, err := Load(dir)
+	require.NoError(t, err)
+	require.Len(t, p.Validations, 1)
+	require.Equal(t, "validation.project_test", p.Validations[0].ID)
+	require.True(t, p.Validations[0].Named)
+	require.Equal(t, "witness.round_trip", p.Witnesses["round_trip"].ID)
+}
+
+func TestLoad_RejectsUnsafeOrNonFalsifiableWitness(t *testing.T) {
+	dir := t.TempDir()
+	cue := `package p
+project: {
+	name: "invalid-witness", mission: "reject invalid evidence"
+	actors: developer: {description: "developer"}
+	goals: verified: {description: "verified", priority: "required", capabilities: ["capability.run"]}
+	capabilities: run: {description: "run", goals: ["goal.verified"], acceptance: works: {description: "works", evidence: ["evidence.witness"]}}
+	requirements: proven: {kind: "functional", description: "proven", goals: ["goal.verified"]}
+	evidence: witness: {kind: "behavioral", description: "witness"}
+	completion: requiredGoals: ["goal.verified"]
+	witnesses: bad: {
+		scope: "goal", goal: "goal.verified", command: ["go", "test"], negativeCommand: ["go", "test"]
+		workingDirectory: "../outside", observation: {kind: "json_stdout", marker: "", schema: {worked: "bool"}}
+		predicates: [{field: "missing", op: "equals", member: true}]
+	}
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.cue"), []byte(cue), 0o644))
+	_, err := Load(dir)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "negativeCommand must differ")
+	require.ErrorContains(t, err, "workingDirectory must remain inside")
+	require.ErrorContains(t, err, "absent from the observation schema")
 }

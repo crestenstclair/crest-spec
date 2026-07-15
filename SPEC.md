@@ -6,7 +6,7 @@ crest-spec is a **declarative, domain-driven code generation system**. You descr
 
 The mental model is **Terraform for code generation**: you declare what your system *should* look like, the tool plans what needs to change, and then applies those changes — with dependency ordering, retry loops, and verification gates.
 
-**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent receives immutable goal-directed context from `spec/context`; the host registers the exact execution through `spec/execution_start`; and the agent submits candidate files to `spec/commit` by attempt ID. Verification is never self-judged: mechanical validations gate the commit, independent behavioral checks (`spec/verify`, falsification-gated) gate the wave, and `spec/finish` refuses to finalize while any check is unresolved.
+**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs declared mechanical and behavioral verification commands, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent receives immutable goal-directed context from `spec/context`; the host registers the exact execution through `spec/execution_start`; and the agent submits candidate files to `spec/commit` by attempt ID. Verification is never self-judged: mechanical validations gate the commit, while `spec/verify` executes declared real and negative witnesses itself and persists their provenance.
 
 > **Gate-hardening revision (2026-07-02).** Following the verification-theater audit ("1617 invariant checks, zero failures"), orchestrator-supplied invariant verdicts (`invariant_checks` on `spec/commit`) were **removed** — any older text in this document describing generator-judged invariants is superseded. In the same revision: `spec/context` now injects the resource's own `last_error` and resolve guidance on retries; a validation that cannot launch rejects the commit (fail closed); `spec/finish` blocks on unresolved behavioral checks (pending/failed/theater/malformed) unless explicitly forced; the effective hash covers only the **structural** declaration (guidance fields — prompts, descriptions, notes — no longer cascade regeneration to dependents); and `project.mission` plus project invariants and the bounded context's design contract are injected into generation prompts. The system guides architecture, design, and invariants — it does not police file contents: hand-edits to generated files are not tracked, and formatting is normalized by the gate (`cargo fmt` auto-fix), never a blocking check. Iteration over regeneration: a REJECTED commit records its attempted files, so the retry runs in UPDATE mode — the generator edits its previous attempt against the failure instead of rewriting the resource from scratch.
 
@@ -14,7 +14,9 @@ The mental model is **Terraform for code generation**: you declare what your sys
 
 > **Execution-governance revision (2026-07-14).** The generation boundary is now the versioned `crest-execution-v1` attempt protocol: `spec/context` prepares immutable intent, `spec/execution_start` binds the exact role/host/model/settings/tools/templates to it, and `spec/commit` accepts candidate files only by `attempt_id`. Candidates are snapshotted before validation, and acceptance/rejection, goal impact, usage, failures, and handoffs are persisted transactionally in SQLite. A closed role registry shapes context and permitted actions but never grants agents acceptance authority. Historical generation rows with no execution link are exposed as `legacy`; no provenance is invented. This governance layer does not replace DDD: DDD resources remain the implementation model, goals explain why those resources matter, and execution manifests record how a host attempted them.
 
-> **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or subprocess; Claude Code is the orchestrator. Tombstones throughout this document mark the removed surfaces.
+> **Verification-provenance revision (2026-07-14).** Project validations now support stable `validation.<name>` definitions and explicit resource, dependency-contract, integration-wave, goal, project, regression, and behavioral scopes. A `witness.<name>` declares a real command, distinct negative command, typed observation schema, predicates, and goal/capability/resource/evidence targets. `spec/verify` accepts only a witness identifier: crest-spec executes and captures both cases against the accepted source tree, parses both through the same contract, classifies passed/failed/malformed/theater, and persists definitions, runs, commands, hashes, output, artifacts, observations, predicates, and evidence currency in normalized SQLite records. Reconciliation invalidates evidence linked to changed resources and reprojects complete goals as regressed until evidence is renewed. Legacy anonymous validations and task checks remain readable during migration; no operational evidence sidecars are written.
+
+> **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or generation subprocess; Claude Code is the orchestrator. The engine may run only verification commands declared in CUE. Tombstones throughout this document mark the removed surfaces.
 
 - **Module:** `github.com/crestenstclair/crest-spec`
 - **Go version:** 1.26.4
@@ -428,9 +430,9 @@ project: contexts: Kernel: assets: KernelMod: {
 
 **Key behavior:** An asset's prompt is built by combining the asset kind's prompts with the asset's own prompts, plus any target resource declarations. This controls exactly what the LLM generates per file.
 
-#### `validations` — Resource-Specific Validations
+#### `validations` — Mechanical Validations and Completion Checks
 
-Declares verification steps that run after a resource is generated. Goes beyond the generic type-check and test commands — validations let each resource define its own acceptance criteria.
+Resource-local validation arrays remain the commit-time gate for one generated resource. Named project validations add stable identifiers and broader scopes so goal and project completion can depend on executable checks without confusing a locally valid resource with a complete capability.
 
 ```cue
 project: assets: CpalAudioOutputAdapter: {
@@ -487,6 +489,60 @@ project: assets: CpalAudioOutputAdapter: {
 | `file_matches` | `path, regex: string` |
 
 **How validations fit the lifecycle:** Validations run at the `spec/commit` gate (§8.2). The server writes the resource's files, runs its declared `validations` in order, and any failure rejects the commit — the resource transitions from `completed` to `rejected` with the validation output attached, and that failure is injected into the next `spec/context` so the regenerated attempt sees it.
+
+For integration and completion evidence, declare a map at `project.validations`; map keys become canonical `validation.<name>` IDs:
+
+```cue
+project: {
+    validations: {
+        voice_contract: {
+            scope: "dependency_contract"
+            kind: "integration"
+            command: ["cargo", "test", "--test", "voice_contract"]
+            resources: ["aggregate.Engine.Voice", "domainService.Engine.VoiceMixer"]
+            capabilities: ["capability.render_note"]
+            goals: ["goal.play_instrument"]
+        }
+        project_test: {
+            scope: "project"
+            kind: "test"
+            command: ["cargo", "test", "--all-targets"]
+        }
+    }
+    completion: projectChecks: ["validation.project_test"]
+}
+```
+
+Supported scopes are `resource`, `dependency_contract`, `integration_wave`, `goal`, `project`, `regression`, and `behavioral`. Definitions and their targets are reconciled into SQLite before execution. Legacy anonymous validation arrays remain accepted for existing specs, but completion policies cannot safely reference their generated compatibility IDs.
+
+#### `witnesses` — Engine-Executed Behavioral Evidence
+
+A witness is a specification-owned, falsification-gated proof. The real and negative commands must differ, execute within the project root, and emit exactly one marker followed by JSON matching the declared schema:
+
+```cue
+project: witnesses: audible_a4: {
+    scope: "goal"
+    goal: "goal.play_instrument"
+    capability: "capability.render_note"
+    resources: ["aggregate.Engine.Voice", "asset.ToneWitness"]
+    evidence: ["evidence.audible_witness"]
+    command: ["cargo", "run", "--bin", "tone_witness", "--", "--json"]
+    negativeCommand: ["cargo", "run", "--bin", "tone_witness", "--", "--json", "--silent-stub"]
+    timeout: "30s"
+    artifacts: ["target/debug/tone_witness"]
+    observation: {
+        kind: "json_stdout"
+        marker: "CREST_OBSERVATION "
+        schema: {peak: "number", clipped: "bool"}
+    }
+    predicates: [
+        {field: "peak", op: "gt", value: 0.1},
+        {field: "clipped", op: "eq", value: false},
+    ]
+}
+```
+
+Calling `spec/verify({witness_id: "witness.audible_a4"})` makes crest-spec execute both commands and parse both through the same schema. The real case must satisfy every predicate and the negative case must fail; if both pass, the result is `theater`. Commands, hashes, raw output, artifacts, parsed observations, predicate results, and evidence currency are stored in SQLite and exposed through `spec/verifications` and `spec/verification_inspect`. Callers cannot submit observations.
 
 #### `invariants` — Architectural Invariants
 
@@ -764,7 +820,7 @@ The apply phase is driven by Claude Code through the spec-generate skill/workflo
 2. **`spec/confirm_destroys`** (when `PendingDestroys` is non-empty) deletes files and state for removed resources — only for the resource IDs the operator confirms.
 3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → `spec/execution_start` → author files → `spec/commit(attempt_id)`. The server snapshots candidates, writes files (per-file SHA256 skip), runs the resource's mechanical validations fail-closed, and records the complete disposition in SQLite. On rejection the host follows the classified route/handoff and prepares a child attempt, up to `MaxRetries`.
 4. Persistent failures are triaged with `spec/resolve` or `spec/skip`; the wave advances when every resource is committed, skipped, or terminally rejected.
-5. **`spec/finish`** releases the lock and returns the session summary (and a `reflection_prompt` when `EVOLVE` is `finish`/`all`).
+5. **`spec/finish`** first checks the SQLite completion projection. Named-validation/witness specs must be `complete`, and legacy checks must be resolved; only then does it release the lock and return the session summary (plus a `reflection_prompt` when `EVOLVE` is `finish`/`all`).
 
 There is no "flat vs wave" mode toggle: generation is always wave-based, ordered by the dependency graph, with resources inside a wave run in parallel by the workflow (§8.6).
 
@@ -1004,7 +1060,7 @@ The validation loop is the core of crest-spec's reliability, and it lives at `sp
 
    If a resource declares no `validations`, this step falls back to the global `TypeCheckCommand` / `TestCommand` from config (if configured). Amendment validations (§8A) run here too.
 
-4. **No self-judged verdicts.** Generator-supplied invariant verdicts were removed in the 2026-07-02 gate-hardening revision — the recorded history showed 1,617 self-judged checks with zero failures, i.e. pure theater. Invariants still reach the generator (system prompt + `Invariants` on `spec/context`) as constraints; verification is independent: the behavioral pipeline's falsification-gated `spec/verify`, whose unresolved checks block `spec/finish`. The historical `invariant_checks` table is retained read-only.
+4. **No self-judged verdicts.** Generator-supplied invariant verdicts were removed in the 2026-07-02 gate-hardening revision — the recorded history showed 1,617 self-judged checks with zero failures, i.e. pure theater. Invariants still reach the generator (system prompt + `Invariants` on `spec/context`) as constraints. Behavioral verification is independent: `spec/verify` executes the CUE-declared real and negative commands itself, parses both through one schema, and records theater when the negative case also passes. The historical `invariant_checks` table is retained read-only.
 
 **Outcome.** If every validation passes, the commit succeeds (`Committed:true`), the resource is persisted, the `Generation` row is marked `success` (labelled with the supplied `model`), and amendment validations are marked `VERIFIED`. Otherwise — including when a validation command cannot launch — the commit is rejected (`Committed:false`, state → `rejected`), the `Generation` row is marked `rejected` with the first failure message, amendment validations are marked `FAILED`, and the failure is stored so the next `spec/context` for this resource includes it under `## Previous Errors`.
 
@@ -1413,6 +1469,9 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/commit` | Submit an immutable candidate by `attempt_id`; snapshots files, runs mechanical and amendment validations, and transactionally accepts/rejects with usage and goal progress. See §4, §8.2. |
 | `spec/execution_roles` | List the closed role registry, context policies, output kinds, permitted actions, and handoffs. |
 | `spec/executions`, `spec/execution_inspect` | List and reconstruct execution provenance, candidates, metrics, goal impact, and state events. |
+| `spec/verification_definitions` | List current named validation and executable-witness definitions reconciled from CUE into SQLite. |
+| `spec/verifications`, `spec/verification_inspect` | List verification runs or inspect exact commands, source/executable hashes, captured output and artifacts, parsed observations, predicate results, and evidence currency. |
+| `spec/verify` | Execute one declared `witness_id` and its negative case through the controlled verifier. Optional `check_id` links a compatible legacy task check; caller-supplied observations are rejected. |
 | `spec/failures`, `spec/failure_classify`, `spec/failure_resolve` | Inspect or append evidence-backed failure decisions and record explicit resolutions. Human overrides append instead of rewriting history. |
 | `spec/handoffs` | Inspect retry-role handoffs and their source failures. |
 | `spec/resolve` | Provide guidance for a failed resource; resets it to `pending` so the next wave pass regenerates with the guidance injected. See §8.6. |
@@ -1425,7 +1484,7 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/apply_amendments` | Human-gated write-back of orchestrator-drafted amendment proposals into the CUE spec. `apply=false` returns the CUE diff; `apply=true` writes it. See §8A. |
 | `spec/list_amendments` | Query the materialized `amendments` table, optionally filtered by `resource_id` and/or `state`. See §8A. |
 | `spec/graduate_amendment` | Human-gated fold of a `VERIFIED` amendment into the resource's canonical `invariants` (then removes it). `apply=false` previews the diff; `apply=true` writes it. See §8A. |
-| `spec/finish` | Finalize the session: release lock, return summary; returns a `reflection_prompt` when `EVOLVE` is `finish`/`all`. |
+| `spec/finish` | Finalize the session. Specs opting into named validations/witnesses are blocked until the SQLite-derived project state is `complete`; the result reports completion status, reason, and incomplete goals. Legacy unresolved checks also block. `force` is explicit and does not rewrite completion state. |
 | `spec/status` | Show current state — resources in state, active session, lock status (or per-session wave progress when `session_id` is given). |
 | `spec/wave_status` | Detailed per-resource view of a specific wave (state, attempts, errors). |
 | `spec/verify_wave` | Run wave-level verification (project type-check/test commands + project-level validations, executed in the project root). Returns `Passed` plus per-resource attributed errors; route failures back via `spec/resolve`. See §8.4. |
