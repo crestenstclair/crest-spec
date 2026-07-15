@@ -225,6 +225,199 @@ type Design struct {
 	UpdatedAt    string
 }
 
+type EvaluationAssignment struct {
+	ID              string
+	RunID           string
+	CaseID          string
+	VariantName     string
+	ConfigurationID string
+	Split           string
+	Status          string
+	CurrentLeaseID  *string
+	LeaseOwner      string
+	LeaseExpiresAt  *string
+	AttemptID       *string
+	TerminalStatus  string
+	TerminalReason  string
+	SubmittedAt     *string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+type EvaluationAssignmentLease struct {
+	ID             string
+	AssignmentID   string
+	LeaseOwner     string
+	LeaseTokenHash string
+	LeaseNumber    int64
+	Status         string
+	ClaimedAt      string
+	ExpiresAt      string
+	CompletedAt    *string
+}
+
+type EvaluationCase struct {
+	ID                      string
+	IdentityHash            string
+	Provenance              string
+	SourceAttemptID         *string
+	ProjectName             string
+	GoalID                  string
+	CapabilityID            string
+	ResourceID              string
+	SpecHash                string
+	RepositoryHash          string
+	ResourceDeclarationHash string
+	PlanOperationID         string
+	ContextManifestID       *string
+	ExecutionID             *string
+	CandidateID             *string
+	PayloadBlob             string
+	ExpectedOutcomeBlob     string
+	CreatedAt               string
+}
+
+type EvaluationCaseAssessment struct {
+	SourceAttemptID string
+	Eligible        int64
+	Reason          string
+	CaseID          *string
+	AssessedAt      string
+}
+
+type EvaluationComparison struct {
+	RunID                string
+	BaselineVariant      string
+	CandidateVariant     string
+	Split                string
+	MetricName           string
+	BaselineSampleCount  int64
+	CandidateSampleCount int64
+	MissingCount         int64
+	BaselineValue        *float64
+	CandidateValue       *float64
+	AbsoluteChange       *float64
+	RelativeChange       *float64
+	PracticalThreshold   float64
+	Conclusion           string
+	Regression           int64
+	Reason               string
+	CreatedAt            string
+}
+
+type EvaluationConfiguration struct {
+	ID                     string
+	Name                   string
+	IdentityHash           string
+	PlannerVersion         string
+	PlannerPolicyHash      string
+	ContextSelectorVersion string
+	ContextBudgetTokens    int64
+	TemplateHashesJson     string
+	RolePolicyVersion      string
+	HostName               string
+	HostVersion            string
+	Provider               string
+	Model                  string
+	InferenceConfigJson    string
+	ValidationVersion      string
+	LearningIdsJson        string
+	PayloadBlob            string
+	CreatedAt              string
+}
+
+type EvaluationDataset struct {
+	ID           string
+	Name         string
+	Description  string
+	IdentityHash string
+	Status       string
+	CreatedAt    string
+	SealedAt     *string
+}
+
+type EvaluationDatasetCase struct {
+	DatasetID string
+	CaseID    string
+	Split     string
+	Ordinal   int64
+}
+
+type EvaluationMetricAggregate struct {
+	RunID        string
+	VariantName  string
+	Split        string
+	MetricName   string
+	SampleCount  int64
+	MissingCount int64
+	MeanValue    *float64
+	MinimumValue *float64
+	MaximumValue *float64
+	CreatedAt    string
+}
+
+type EvaluationMetricObservation struct {
+	AssignmentID  string
+	MetricName    string
+	Value         *float64
+	MissingReason string
+	Unit          string
+	SourceType    string
+	SourceID      string
+	MetadataJson  string
+	CreatedAt     string
+}
+
+type EvaluationPromotionDecision struct {
+	ID         string
+	ProposalID string
+	Decision   string
+	Actor      string
+	Reason     string
+	CreatedAt  string
+}
+
+type EvaluationPromotionProposal struct {
+	ID                string
+	RunID             string
+	ConfigurationID   string
+	VariantName       string
+	ChangeKind        string
+	TargetIdentity    string
+	ChangeBlob        string
+	RollbackIdentity  string
+	Status            string
+	EligibilityReason string
+	CreatedAt         string
+	UpdatedAt         string
+}
+
+type EvaluationRun struct {
+	ID                    string
+	DatasetID             string
+	Name                  string
+	Status                string
+	MetricPolicyJson      string
+	MetricPolicyHash      string
+	MinimumSampleSize     int64
+	PracticalSignificance float64
+	RequireHeldOut        int64
+	Conclusion            string
+	WinningVariant        string
+	ConclusionReason      string
+	CreatedAt             string
+	StartedAt             *string
+	CompletedAt           *string
+}
+
+type EvaluationRunVariant struct {
+	RunID           string
+	VariantName     string
+	ConfigurationID string
+	IsBaseline      int64
+	Ordinal         int64
+}
+
 type EvidenceRequirement struct {
 	ID          string
 	ProjectName string
