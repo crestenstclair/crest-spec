@@ -1,6 +1,6 @@
 # Workstream 7: Host-Driven Evaluations and Validated Learning
 
-Status: **Draft**  
+Status: **Implemented (Phase 7)**
 Depends on: WS4, WS5, WS6  
 Enables: empirical release decisions and continuous improvement  
 Original scope: Workstream 9
@@ -178,3 +178,11 @@ Existing generations and learnings remain operational. Only historical attempts 
 - Comparisons are deterministic, evidence-linked, and honest about missing/insufficient data.
 - Reusable improvements require qualifying evaluation evidence and human approval.
 
+## Implementation notes
+
+- Migration `025_evaluations.sql` adds normalized cases, datasets/splits, immutable configurations, runs/variants, assignments/leases, observations, aggregates, comparisons, and promotion decisions to the existing database.
+- Historical cases fail honestly with a persisted eligibility assessment when their immutable attempt chain is incomplete. Curated/imported payloads use the existing content-addressed blob store.
+- Leased assignments hide held-out outcomes, recover after host expiry, support heartbeat/release/cancellation, and accept an authoritative result only when it links to an ordinary terminal generation attempt matching the assigned configuration.
+- Deterministic finalization persists raw observations plus `all`, training, development, and held-out aggregates/comparisons. Missing, unequal, or underpowered primary evidence cannot produce a winner.
+- Threshold-only learning application is disabled. Promotion records the exact change, winning configuration, rollback identity, eligibility reason, and append-only human decisions before application.
+- MCP, Go APIs, read-only CLI commands, HTTP endpoints, and the Evaluations dashboard all read/write the canonical SQLite model; no evaluation sidecars were introduced.

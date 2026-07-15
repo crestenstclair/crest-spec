@@ -244,6 +244,8 @@ Settled resources whose declaration hash is unchanged are skipped — regenerati
 
 Context observability is canonical state, not a sidecar: content-addressed snapshots, attempt ancestry, budgets, selection reasons, omissions, template hashes, and rendered prompts live in the existing SQLite database. The dashboard's **Contexts** tab reads those records directly and can compare a failed attempt with its retry even after the working tree changes. Existing databases migrate additively; older generation history remains visible as legacy history without fabricated context manifests.
 
+Empirical improvement uses that same provenance chain. Historical or curated cases are assembled into immutable SQLite datasets; baseline and candidate planner/context/template/role/host configurations run over identical cases through leased host assignments. Every submitted result must link to an ordinary terminal generation attempt, so engine-derived acceptance, retries, usage, cost, duration, and candidate churn cannot be replaced by host claims. Finalization reports sample and missing counts, split-level comparisons, practical thresholds, regressions, and an explicit winner or `inconclusive`. The dashboard's **Evaluations** tab traces those conclusions back through cases, contexts, executions, and human-gated promotion decisions.
+
 Once generated, a file's content is yours: the planner guides architecture and invariants, it does not police file contents.
 
 ![High-level flow: CUE spec files load into an in-memory resource registry, diff against SQLite state to produce a plan of waves, the orchestrator's sub-agents generate each resource, and the server's commit gate validates — passes are persisted, failures fold back into the next context and regenerate](docs/images/constraint-loop-flow.svg)
@@ -284,6 +286,8 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | List, reconstruct, and structurally compare immutable generation contexts |
 | `spec/executions`, `spec/execution_inspect`, `spec/execution_roles` | Inspect execution provenance, lifecycle, candidate linkage, and closed role policies |
 | `spec/verification_definitions`, `spec/verifications`, `spec/verification_inspect` | Inspect named validation/witness definitions and the complete SQLite-backed evidence chain |
+| `spec/evaluation_cases`, `spec/evaluation_datasets`, `spec/evaluation_configurations`, `spec/evaluation_runs` | Curate and inspect reproducible cases, sealed splits, immutable compared configurations, assignments, metrics, and conclusions |
+| `spec/evaluation_promotions` | Inspect exact evaluated changes, rollback identities, eligibility, and immutable human decision history |
 | `spec/failures`, `spec/handoffs` | Inspect classified failures, corrective routes, resolutions, and role handoffs |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db |
 | `spec/sql` | Read-only SQL over the whole state db — the escape hatch |
@@ -321,7 +325,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/verify` | Execute a declared witness and negative case by `witness_id`; caller-supplied observations are rejected |
 | `spec/graduate` | Promote a check — only after a real verified pass |
 
-**Spec evolution & setup** (orchestrator): `spec/amend`, `spec/list_amendments`, `spec/apply_amendments`, `spec/graduate_amendment` (a ledger of spec-resident corrections), `spec/record_learnings`, `spec/learnings`, `spec/promote_learnings` (cross-session lessons folded into future prompts), and `spec/bootstrap`, `spec/import`, `spec/evolve`, `spec/mode`, `spec/prompt`, `spec/vacuum`.
+**Spec evolution & setup** (orchestrator): `spec/amend`, `spec/list_amendments`, `spec/apply_amendments`, `spec/graduate_amendment` (a ledger of spec-resident corrections), `spec/record_learnings`, `spec/learnings`, and `spec/promote_learnings` (threshold preview only). Reusable learning changes use `spec/evaluation_learning_propose` → `spec/evaluation_promotion_decide` → `spec/evaluation_promotion_apply`; failed, regressed, incomplete, or underpowered evaluations cannot be approved. Setup/maintenance tools are `spec/bootstrap`, `spec/import`, `spec/evolve`, `spec/mode`, `spec/prompt`, and `spec/vacuum`.
 
 ## Host integration
 

@@ -134,7 +134,15 @@ func evaluationPromotionEligibility(run *EvaluationRun, variantName string) (str
 			}
 		}
 	}
-	return "eligible", "unique evaluated winner with complete primary comparison evidence"
+	for _, comparison := range run.Comparisons {
+		if comparison.CandidateVariant == variantName && comparison.Split == "all" && comparison.MetricName == "cost_usd" {
+			if comparison.Regression || comparison.Conclusion == "inconclusive" {
+				return "proposed", "cost comparison is regressed or inconclusive"
+			}
+			return "eligible", "unique evaluated winner with complete primary and cost comparison evidence"
+		}
+	}
+	return "proposed", "cost comparison evidence is missing"
 }
 
 func (s *Store) GetEvaluationPromotionProposal(ctx context.Context, id string) (*EvaluationPromotionProposal, error) {

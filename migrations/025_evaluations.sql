@@ -128,7 +128,8 @@ CREATE TABLE evaluation_assignments (
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
     FOREIGN KEY (run_id, variant_name) REFERENCES evaluation_run_variants(run_id, variant_name),
-    UNIQUE (run_id, case_id, variant_name)
+    UNIQUE (run_id, case_id, variant_name),
+    UNIQUE (attempt_id)
 );
 CREATE INDEX idx_evaluation_assignments_claim ON evaluation_assignments(run_id, status, lease_expires_at, split, id);
 CREATE INDEX idx_evaluation_assignments_attempt ON evaluation_assignments(attempt_id);
@@ -139,7 +140,7 @@ CREATE TABLE evaluation_assignment_leases (
     lease_owner    TEXT NOT NULL,
     lease_token_hash TEXT NOT NULL,
     lease_number   INTEGER NOT NULL CHECK (lease_number > 0),
-    status         TEXT NOT NULL CHECK (status IN ('active','released','expired','submitted')),
+    status         TEXT NOT NULL CHECK (status IN ('active','released','expired','submitted','cancelled')),
     claimed_at     TEXT NOT NULL,
     expires_at     TEXT NOT NULL,
     completed_at   TEXT,

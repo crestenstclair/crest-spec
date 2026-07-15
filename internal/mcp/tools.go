@@ -134,6 +134,7 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/evaluation_assignment_claim", Description: "Claim an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "spec/evaluation_assignment_heartbeat", Description: "Renew an evaluation assignment lease.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "spec/evaluation_assignment_release", Description: "Release an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/evaluation_assignment_cancel", Description: "Cancel an evaluation assignment with a recorded reason.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "spec/evaluation_assignment_submit", Description: "Submit an evaluation assignment result.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "spec/evaluation_run_finalize", Description: "Finalize an evaluation run.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "spec/evaluation_promotions", Description: "List or inspect evaluation promotions.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
@@ -428,6 +429,7 @@ type specEvaluationLeaseArgs struct {
 	Owner        string `json:"owner"`
 	LeaseToken   string `json:"lease_token"`
 	Seconds      int    `json:"seconds"`
+	Reason       string `json:"reason"`
 }
 
 type specEvaluationSubmitArgs struct {
@@ -762,7 +764,7 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.",
+		Name: "spec/promote_learnings", Description: "Preview active learnings selected by operational confidence/use thresholds. Threshold-only apply is disabled; use the evaluation promotion workflow for reusable changes.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`),
 	}, specTool("promote_learnings", func(ctx context.Context, a specPromoteLearningsArgs) (any, error) {
 		res, err := s.spec.PromoteLearnings(ctx, a.Lang, a.MinConfidence, a.MinTimesApplied, a.Apply, a.TemplatePath)

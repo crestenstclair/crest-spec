@@ -142,6 +142,7 @@ type specHandler interface {
 	ClaimEvaluationAssignment(ctx context.Context, runID, owner, split string, leaseDuration time.Duration) (*storemod.EvaluationAssignmentClaim, error)
 	HeartbeatEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string, extension time.Duration) (time.Time, error)
 	ReleaseEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string) error
+	CancelEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token, reason string) (*storemod.EvaluationAssignment, error)
 	SubmitEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string, result storemod.EvaluationAssignmentResult) (*storemod.EvaluationAssignment, error)
 	FinalizeEvaluationRun(ctx context.Context, runID string) (*storemod.EvaluationRun, error)
 	GetEvaluationPromotion(ctx context.Context, id string) (*storemod.EvaluationPromotionProposal, error)

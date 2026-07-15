@@ -42,25 +42,26 @@ type EvaluationRunVariant struct {
 }
 
 type EvaluationRun struct {
-	ID                    string                      `json:"id"`
-	DatasetID             string                      `json:"dataset_id"`
-	Name                  string                      `json:"name"`
-	Status                string                      `json:"status"`
-	MetricPolicy          EvaluationMetricPolicy      `json:"metric_policy"`
-	MetricPolicyHash      string                      `json:"metric_policy_hash"`
-	MinimumSampleSize     int                         `json:"minimum_sample_size"`
-	PracticalSignificance float64                     `json:"practical_significance"`
-	RequireHeldOut        bool                        `json:"require_held_out"`
-	Conclusion            string                      `json:"conclusion"`
-	WinningVariant        string                      `json:"winning_variant,omitempty"`
-	ConclusionReason      string                      `json:"conclusion_reason,omitempty"`
-	CreatedAt             time.Time                   `json:"created_at"`
-	StartedAt             *time.Time                  `json:"started_at,omitempty"`
-	CompletedAt           *time.Time                  `json:"completed_at,omitempty"`
-	Variants              []EvaluationRunVariant      `json:"variants"`
-	Assignments           []EvaluationAssignment      `json:"assignments"`
-	Aggregates            []EvaluationMetricAggregate `json:"aggregates,omitempty"`
-	Comparisons           []EvaluationComparison      `json:"comparisons,omitempty"`
+	ID                    string                              `json:"id"`
+	DatasetID             string                              `json:"dataset_id"`
+	Name                  string                              `json:"name"`
+	Status                string                              `json:"status"`
+	MetricPolicy          EvaluationMetricPolicy              `json:"metric_policy"`
+	MetricPolicyHash      string                              `json:"metric_policy_hash"`
+	MinimumSampleSize     int                                 `json:"minimum_sample_size"`
+	PracticalSignificance float64                             `json:"practical_significance"`
+	RequireHeldOut        bool                                `json:"require_held_out"`
+	Conclusion            string                              `json:"conclusion"`
+	WinningVariant        string                              `json:"winning_variant,omitempty"`
+	ConclusionReason      string                              `json:"conclusion_reason,omitempty"`
+	CreatedAt             time.Time                           `json:"created_at"`
+	StartedAt             *time.Time                          `json:"started_at,omitempty"`
+	CompletedAt           *time.Time                          `json:"completed_at,omitempty"`
+	Variants              []EvaluationRunVariant              `json:"variants"`
+	Assignments           []EvaluationAssignment              `json:"assignments"`
+	Observations          []EvaluationMetricObservationRecord `json:"observations,omitempty"`
+	Aggregates            []EvaluationMetricAggregate         `json:"aggregates,omitempty"`
+	Comparisons           []EvaluationComparison              `json:"comparisons,omitempty"`
 }
 
 type EvaluationAssignment struct {
@@ -99,6 +100,21 @@ type EvaluationMetricObservation struct {
 	SourceType    string         `json:"source_type"`
 	SourceID      string         `json:"source_id,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+type EvaluationMetricObservationRecord struct {
+	AssignmentID  string         `json:"assignment_id"`
+	CaseID        string         `json:"case_id"`
+	VariantName   string         `json:"variant_name"`
+	Split         string         `json:"split"`
+	Name          string         `json:"name"`
+	Value         *float64       `json:"value,omitempty"`
+	MissingReason string         `json:"missing_reason,omitempty"`
+	Unit          string         `json:"unit,omitempty"`
+	SourceType    string         `json:"source_type"`
+	SourceID      string         `json:"source_id,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 type EvaluationAssignmentResult struct {
@@ -164,6 +180,18 @@ func (s *Store) CreateEvaluationRun(ctx context.Context, datasetID, name string,
 	}
 	if dataset.Status != "sealed" {
 		return nil, fmt.Errorf("create evaluation run: dataset must be sealed")
+	}
+	if requireHeldOut {
+		hasHeldOut := false
+		for _, member := range dataset.Cases {
+			if member.Split == "held_out" {
+				hasHeldOut = true
+				break
+			}
+		}
+		if !hasHeldOut {
+			return nil, fmt.Errorf("create evaluation run: held-out evidence is required but the dataset has no held-out cases")
+		}
 	}
 	if strings.TrimSpace(name) == "" || len(variants) < 2 {
 		return nil, fmt.Errorf("create evaluation run: name and at least two variants are required")
@@ -302,6 +330,24 @@ func (s *Store) GetEvaluationRun(ctx context.Context, id string) (*EvaluationRun
 	}
 	for _, assignment := range assignmentRows {
 		result.Assignments = append(result.Assignments, dbEvaluationAssignment(assignment))
+	}
+	observationRows, err := s.queries.ListEvaluationMetricObservationsByRun(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for _, observation := range observationRows {
+		record := EvaluationMetricObservationRecord{
+			AssignmentID: observation.AssignmentID, CaseID: observation.CaseID,
+			VariantName: observation.VariantName, Split: observation.Split,
+			Name: observation.MetricName, Value: observation.Value,
+			MissingReason: observation.MissingReason, Unit: observation.Unit,
+			SourceType: observation.SourceType, SourceID: observation.SourceID,
+			CreatedAt: parseTime(observation.CreatedAt),
+		}
+		if err := json.Unmarshal([]byte(observation.MetadataJson), &record.Metadata); err != nil {
+			return nil, err
+		}
+		result.Observations = append(result.Observations, record)
 	}
 	aggregates, err := s.queries.ListEvaluationMetricAggregates(ctx, id)
 	if err != nil {
@@ -506,6 +552,9 @@ func (s *Store) SubmitEvaluationAssignment(ctx context.Context, assignmentID, le
 		}
 		return nil, fmt.Errorf("submit evaluation assignment: authoritative result already exists")
 	}
+	if result.AttemptID == "" {
+		return nil, fmt.Errorf("submit evaluation assignment: an ordinary generation attempt is required")
+	}
 	run, err := s.GetEvaluationRun(ctx, assignmentRow.RunID)
 	if err != nil {
 		return nil, err
@@ -579,6 +628,41 @@ func (s *Store) SubmitEvaluationAssignment(ctx context.Context, assignmentID, le
 	return &assignment, nil
 }
 
+func (s *Store) CancelEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token, reason string) (*EvaluationAssignment, error) {
+	if reason == "" {
+		return nil, fmt.Errorf("cancel evaluation assignment: reason is required")
+	}
+	timestamp := now()
+	tx, err := s.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	affected, err := q.CompleteEvaluationAssignmentLease(ctx, db.CompleteEvaluationAssignmentLeaseParams{
+		Status: "cancelled", CompletedAt: &timestamp, ID: leaseID, AssignmentID: assignmentID,
+		LeaseOwner: owner, LeaseTokenHash: contextmanifest.Hash(token),
+	})
+	if err != nil || affected != 1 {
+		return nil, fmt.Errorf("cancel evaluation assignment: lease is invalid")
+	}
+	affected, err = q.CancelEvaluationAssignment(ctx, db.CancelEvaluationAssignmentParams{
+		TerminalReason: reason, SubmittedAt: &timestamp, UpdatedAt: timestamp, ID: assignmentID,
+	})
+	if err != nil || affected != 1 {
+		return nil, fmt.Errorf("cancel evaluation assignment: assignment is no longer active")
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	row, err := s.queries.GetEvaluationAssignment(ctx, assignmentID)
+	if err != nil {
+		return nil, err
+	}
+	assignment := dbEvaluationAssignment(row)
+	return &assignment, nil
+}
+
 func (s *Store) deriveEvaluationMetrics(ctx context.Context, assignment db.EvaluationAssignment, attemptID string) ([]EvaluationMetricObservation, string, string, error) {
 	manifest, err := s.GetExecutionManifestByAttempt(ctx, attemptID)
 	if err != nil || !evaluationTerminalExecution(manifest.Status) {
@@ -606,7 +690,7 @@ func (s *Store) deriveEvaluationMetrics(ctx context.Context, assignment db.Evalu
 	}
 	value := func(number float64) *float64 { return &number }
 	accepted := 0.0
-	if manifest.Status == "accepted" || manifest.Status == "completed" {
+	if manifest.Status == "accepted" {
 		accepted = 1
 	}
 	metrics := []EvaluationMetricObservation{

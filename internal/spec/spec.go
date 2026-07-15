@@ -124,6 +124,7 @@ type specStore interface {
 	ClaimEvaluationAssignment(ctx context.Context, runID, owner, split string, leaseDuration time.Duration) (*store.EvaluationAssignmentClaim, error)
 	HeartbeatEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string, extension time.Duration) (time.Time, error)
 	ReleaseEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string) error
+	CancelEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token, reason string) (*store.EvaluationAssignment, error)
 	SubmitEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string, result store.EvaluationAssignmentResult) (*store.EvaluationAssignment, error)
 	FinalizeEvaluationRun(ctx context.Context, runID string) (*store.EvaluationRun, error)
 	ListEvaluationPromotionProposals(ctx context.Context, status string, limit int) ([]store.EvaluationPromotionProposal, error)

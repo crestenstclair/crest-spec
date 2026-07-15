@@ -79,6 +79,10 @@ func (s *Spec) ReleaseEvaluationAssignment(ctx context.Context, assignmentID, le
 	return s.store.ReleaseEvaluationAssignment(ctx, assignmentID, leaseID, owner, token)
 }
 
+func (s *Spec) CancelEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token, reason string) (*store.EvaluationAssignment, error) {
+	return s.store.CancelEvaluationAssignment(ctx, assignmentID, leaseID, owner, token, reason)
+}
+
 func (s *Spec) SubmitEvaluationAssignment(ctx context.Context, assignmentID, leaseID, owner, token string, result store.EvaluationAssignmentResult) (*store.EvaluationAssignment, error) {
 	return s.store.SubmitEvaluationAssignment(ctx, assignmentID, leaseID, owner, token, result)
 }

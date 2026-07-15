@@ -13,7 +13,7 @@ func completeWinningEvaluationRun(t *testing.T, st *Store) *EvaluationRun {
 	t.Helper()
 	ctx := context.Background()
 	run, baselineID, _ := evaluationRunFixture(t, st, true)
-	for range run.Assignments {
+	for index := range run.Assignments {
 		claim, err := st.ClaimEvaluationAssignment(ctx, run.ID, "promotion-worker", "", time.Minute)
 		require.NoError(t, err)
 		value := 1.0
@@ -21,7 +21,7 @@ func completeWinningEvaluationRun(t *testing.T, st *Store) *EvaluationRun {
 			value = 0
 		}
 		_, err = st.SubmitEvaluationAssignment(ctx, claim.Assignment.ID, claim.LeaseID, "promotion-worker", claim.LeaseToken, EvaluationAssignmentResult{
-			TerminalStatus: "completed", Metrics: primaryEvaluationMetrics(value),
+			AttemptID: completeEvaluationAttempt(t, st, claim, index), TerminalStatus: "completed", Metrics: primaryEvaluationMetrics(value),
 		})
 		require.NoError(t, err)
 	}
@@ -32,7 +32,7 @@ func completeWinningEvaluationRun(t *testing.T, st *Store) *EvaluationRun {
 }
 
 func TestEvaluationPromotionRequiresWinningEvidenceAndRecordsHumanHistory(t *testing.T) {
-	st := testStore(t)
+	st := newContextManifestStore(t, "aggregate.Engine.Voice")
 	ctx := context.Background()
 	run := completeWinningEvaluationRun(t, st)
 	change := map[string]any{
@@ -74,7 +74,7 @@ func TestEvaluationPromotionRequiresWinningEvidenceAndRecordsHumanHistory(t *tes
 }
 
 func TestEvaluationPromotionCannotApproveIncompleteEvidence(t *testing.T) {
-	st := testStore(t)
+	st := newContextManifestStore(t, "aggregate.Engine.Voice")
 	ctx := context.Background()
 	run, _, _ := evaluationRunFixture(t, st, true)
 	proposal, err := st.CreateEvaluationPromotionProposal(ctx, run.ID, "candidate", "template", "task-template-v2", map[string]any{

@@ -723,6 +723,7 @@ async function toggleEvaluationRun(runID, index) {
   if (!run) { td.innerHTML = '<div class="error-msg">Could not load run</div>'; return; }
   const comparisons = run.comparisons || [];
   const assignments = run.assignments || [];
+  const observations = run.observations || [];
   let html = '<div class="drilldown"><div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">' + esc(run.conclusion_reason || '') + '</div>' +
     '<h3>Metric comparisons</h3><table><thead><tr><th>Split</th><th>Variant</th><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Conclusion</th></tr></thead><tbody>';
   comparisons.forEach(c => {
@@ -736,6 +737,12 @@ async function toggleEvaluationRun(runID, index) {
     html += '<tr><td><button class="collapsible-toggle" onclick="event.stopPropagation();showEvaluationCase(\'' + esc(a.case_id) + '\',this)">' + esc(shortID(a.case_id)) + '</button></td>' +
       '<td class="mono">' + esc(a.variant_name || '') + '</td><td>' + badge(a.split || '', 'muted') + '</td><td>' + statusBadge(a.status || '') + '</td>' +
       '<td class="mono">' + esc(a.attempt_id ? shortID(a.attempt_id) : 'not linked') + '</td></tr>';
+  });
+  html += '</tbody></table><h3 style="margin-top:14px">Raw per-case observations</h3><table><thead><tr><th>Case</th><th>Variant</th><th>Split</th><th>Metric</th><th>Value</th><th>Source</th></tr></thead><tbody>';
+  observations.forEach(o => {
+    html += '<tr><td class="mono">' + esc(shortID(o.case_id || '')) + '</td><td class="mono">' + esc(o.variant_name || '') + '</td><td>' + badge(o.split || '', 'muted') + '</td>' +
+      '<td>' + esc(o.name || '') + '</td><td class="mono">' + (o.missing_reason ? esc('missing: ' + o.missing_reason) : formatMetric(o.value)) + '</td>' +
+      '<td><span class="mono">' + esc(o.source_type || '') + '</span><div class="mono">' + esc(shortID(o.source_id || '')) + '</div></td></tr>';
   });
   td.innerHTML = html + '</tbody></table><div class="related-record"></div></div>';
 }

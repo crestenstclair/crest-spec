@@ -1,6 +1,6 @@
 # Goal-Oriented crest-spec Improvement Program
 
-Status: **Stages 1–5 implemented; Stages 6–8 planned**
+Status: **Stages 1–7 implemented; Stage 8 planned**
 
 Source brief: [`gpt_improvements.md`](../../../gpt_improvements.md)  
 Last updated: 2026-07-14
@@ -215,9 +215,9 @@ Review the documents in implementation order. Record workstream approval in this
 | WS2 Resource traceability | Implemented | Merged |
 | WS3 Goal-directed reconciliation | Implemented | Merged |
 | WS4 Context manifests | Implemented | Merged |
-| WS5 Execution, roles, failures | Implemented | Ready for review |
-| WS6 Validation and evidence | Draft | |
-| WS7 Evaluations | Draft | |
+| WS5 Execution, roles, failures | Implemented | Merged |
+| WS6 Validation and evidence | Implemented | Merged |
+| WS7 Evaluations | Implemented | Ready for review |
 | WS8 Dashboard and developer interfaces | Draft | |
 
 Changes to an earlier approved public contract must trigger review of dependent workstream plans. Implementation PRs should reference task IDs and update this roadmap when dependencies or acceptance criteria change.

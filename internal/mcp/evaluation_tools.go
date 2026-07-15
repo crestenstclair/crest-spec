@@ -122,7 +122,14 @@ func (s *Server) registerEvaluationTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/evaluation_assignment_submit", Description: "Submit one authoritative terminal result and metric observations for a leased assignment. Ordinary attempt linkage allows engine-derived metrics to override host claims.",
+		Name: "spec/evaluation_assignment_cancel", Description: "Cancel a leased evaluation assignment with an immutable terminal reason.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"assignment_id":{"type":"string"},"lease_id":{"type":"string"},"owner":{"type":"string"},"lease_token":{"type":"string"},"reason":{"type":"string"}},"required":["assignment_id","lease_id","owner","lease_token","reason"]}`),
+	}, specTool("evaluation assignment cancel", func(ctx context.Context, a specEvaluationLeaseArgs) (any, error) {
+		return s.spec.CancelEvaluationAssignment(ctx, a.AssignmentID, a.LeaseID, a.Owner, a.LeaseToken, a.Reason)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/evaluation_assignment_submit", Description: "Submit one authoritative terminal result and metric observations for a leased assignment. A terminal ordinary generation attempt is required, and engine-derived metrics override host claims.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"assignment_id":{"type":"string"},"lease_id":{"type":"string"},"owner":{"type":"string"},"lease_token":{"type":"string"},"result":{"type":"object","properties":{"attempt_id":{"type":"string"},"terminal_status":{"type":"string"},"reason":{"type":"string"},"metrics":{"type":"array","items":{"type":"object"}}},"required":["terminal_status"]}},"required":["assignment_id","lease_id","owner","lease_token","result"]}`),
 	}, specTool("evaluation assignment submit", func(ctx context.Context, a specEvaluationSubmitArgs) (any, error) {
 		return s.spec.SubmitEvaluationAssignment(ctx, a.AssignmentID, a.LeaseID, a.Owner, a.LeaseToken, a.Result)
