@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
+	"github.com/crestenstclair/crest-spec/internal/observability"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
@@ -48,13 +51,19 @@ func cmdDashboard(flags cliFlags) {
 
 	sp := specmod.New(st, specmod.OSFileSystem{}, cfg)
 
-	d := &dashboard{store: st, spec: sp, cfg: cfg, log: log}
+	d := &dashboard{store: st, spec: sp, views: observability.NewService(st), cfg: cfg, log: log}
 
 	mux := http.NewServeMux()
 
 	// API routes
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/v1/project", d.handleProjectOverview)
+	mux.HandleFunc("GET /api/v1/goals", d.handleGoals)
+	mux.HandleFunc("GET /api/v1/goals/{id}", d.handleGoal)
+	mux.HandleFunc("GET /api/v1/capabilities", d.handleCapabilities)
+	mux.HandleFunc("GET /api/v1/capabilities/{id}", d.handleCapability)
+	mux.HandleFunc("GET /api/v1/resources", d.handleV1Resources)
+	mux.HandleFunc("GET /api/v1/resources/{id}", d.handleV1Resource)
 	mux.HandleFunc("GET /api/v1/contexts", d.handleContextAttempts)
 	mux.HandleFunc("GET /api/v1/contexts/{id}", d.handleContextManifest)
 	mux.HandleFunc("GET /api/v1/context-comparison", d.handleContextComparison)
@@ -117,6 +126,7 @@ func cmdDashboard(flags cliFlags) {
 type dashboard struct {
 	store *store.Store
 	spec  *specmod.Spec
+	views *observability.Service
 	cfg   *config.Config
 	log   zerolog.Logger
 }
@@ -130,6 +140,54 @@ func (d *dashboard) writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func (d *dashboard) writeAPIError(w http.ResponseWriter, status int, code, message string, details map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	d.writeJSON(w, observability.ErrorEnvelope{
+		Version: observability.APIVersion,
+		Error:   observability.APIError{Code: code, Message: message, Retryable: status >= http.StatusInternalServerError, Details: details},
+	})
+}
+
+func (d *dashboard) queryViews() *observability.Service {
+	if d.views == nil {
+		d.views = observability.NewService(d.store)
+	}
+	return d.views
+}
+
+func (d *dashboard) projectIdentity(ctx context.Context) (string, bool, error) {
+	overview, err := d.spec.ProjectOverview(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	return overview.Project.ProjectName, overview.CompletionEnforced, nil
+}
+
+func pageRequest(r *http.Request) (observability.PageRequest, error) {
+	request := observability.PageRequest{
+		Cursor: r.URL.Query().Get("cursor"), Status: r.URL.Query().Get("status"),
+		Kind: r.URL.Query().Get("kind"), Query: r.URL.Query().Get("q"),
+		GoalID: r.URL.Query().Get("goal"), CapabilityID: r.URL.Query().Get("capability"),
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return request, fmt.Errorf("limit must be an integer")
+		}
+		request.Limit = limit
+	}
+	return observability.NormalizePageRequest(request)
+}
+
+func (d *dashboard) writeQueryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, cserrors.ErrNotFound) {
+		d.writeAPIError(w, http.StatusNotFound, "not_found", "the requested observability record does not exist", nil)
+		return
+	}
+	d.writeAPIError(w, http.StatusInternalServerError, "query_failed", err.Error(), nil)
 }
 
 func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -200,12 +258,116 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request) {
-	overview, err := d.spec.ProjectOverview(r.Context())
+	projectName, completionEnforced, err := d.projectIdentity(r.Context())
 	if err != nil {
-		d.writeError(w, http.StatusInternalServerError, err.Error())
+		d.writeQueryError(w, err)
+		return
+	}
+	overview, err := d.queryViews().Project(r.Context(), projectName, completionEnforced)
+	if err != nil {
+		d.writeQueryError(w, err)
 		return
 	}
 	d.writeJSON(w, overview)
+}
+
+func (d *dashboard) handleGoals(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Goals(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleGoal(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Goal(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Capabilities(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleCapability(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Capability(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleV1Resources(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Resources(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleV1Resource(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Resource(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
 }
 
 func (d *dashboard) handleContextAttempts(w http.ResponseWriter, r *http.Request) {
