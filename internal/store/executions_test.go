@@ -275,6 +275,157 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 	require.Equal(t, "accepted", generationRows[0].Outcome)
 }
 
+func TestFinalizeCandidateRollsBackEveryProjectionWhenLateEventWriteFails(t *testing.T) {
+	st := newContextManifestStore(t, "resource.rollback")
+	ctx := context.Background()
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.rollback"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	started, err := st.StartExecution(ctx, testExecutionManifest())
+	require.NoError(t, err)
+	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "rollback.go", Content: "package rollback\n", WriteIntent: "create",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{
+		ExecutionID: started.ID,
+		ToStatus:    execution.StatusValidating,
+	})
+	require.NoError(t, err)
+
+	before, err := st.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	sessionResourceBefore, err := st.GetSessionResource("session-1", "resource.rollback")
+	require.NoError(t, err)
+	_, err = st.sqlDB.Exec(`CREATE TRIGGER inject_candidate_event_failure
+		BEFORE INSERT ON execution_events
+		WHEN NEW.event_kind = 'candidate_accepted'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected candidate event failure');
+		END`)
+	require.NoError(t, err)
+
+	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID, Accepted: true, Reason: "valid candidate",
+		Resource: &Resource{
+			ID: "resource.rollback", Kind: "asset", DeclarationHash: "decl",
+			EffectiveHash: "effective", Model: "test-model",
+		},
+		Files: []GeneratedFile{{
+			Path: "rollback.go", ResourceID: "resource.rollback", ContentHash: candidate.Files[0].ContentHash,
+			PromptHash: started.ContextHash, Model: "test-model",
+		}},
+		Dependencies: []Dependency{{SourceID: "resource.rollback", TargetID: "resource.clock", Kind: "uses"}},
+		Notes:        "this write must roll back", Attempts: 1, DurationMS: 30,
+		HostCommitRef: "commit-that-must-roll-back", GoalProgress: map[string]any{"goal.play": "advanced"},
+	})
+	require.ErrorContains(t, err, "injected candidate event failure")
+
+	after, err := st.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusValidating), after.Status)
+	require.Equal(t, before.HostCommitRef, after.HostCommitRef)
+	require.Equal(t, before.GoalProgress, after.GoalProgress)
+	require.Len(t, after.Events, len(before.Events), "the rejected event insert must not leave an execution transition")
+
+	attempt, err := st.GetContextManifest(ctx, "manifest-1")
+	require.NoError(t, err)
+	require.Equal(t, "candidate_submitted", attempt.Attempt.Status)
+	rolledBackCandidate, err := st.GetCandidateSetByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Equal(t, "submitted", rolledBackCandidate.Status)
+	require.Nil(t, rolledBackCandidate.DisposedAt)
+
+	_, err = st.GetResource("resource.rollback")
+	require.Error(t, err)
+	ownedFiles, err := st.GetGeneratedFiles("resource.rollback")
+	require.NoError(t, err)
+	require.Empty(t, ownedFiles)
+	dependencies, err := st.GetDependencies("resource.rollback")
+	require.NoError(t, err)
+	require.Empty(t, dependencies)
+	note, err := st.GetNote("resource.rollback", "apply-1")
+	require.NoError(t, err)
+	require.Empty(t, note)
+
+	sessionResource, err := st.GetSessionResource("session-1", "resource.rollback")
+	require.NoError(t, err)
+	require.Equal(t, sessionResourceBefore, sessionResource)
+	generations, err := st.ListGenerations("resource.rollback", 10)
+	require.NoError(t, err)
+	require.Empty(t, generations)
+
+	var applyActions int
+	require.NoError(t, st.sqlDB.QueryRow("SELECT COUNT(*) FROM apply_actions WHERE resource_id = ?", "resource.rollback").Scan(&applyActions))
+	require.Zero(t, applyActions)
+	var acceptances int
+	require.NoError(t, st.sqlDB.QueryRow(`SELECT COUNT(*) FROM candidate_file_acceptances
+		WHERE resource_id = ?`, "resource.rollback").Scan(&acceptances))
+	require.Zero(t, acceptances)
+}
+
+func TestFinalizeCandidateRejectsWithFailureAndHandoffInOneTransaction(t *testing.T) {
+	st := newContextManifestStore(t, "resource.rejected")
+	ctx := context.Background()
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.rejected"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	started, err := st.StartExecution(ctx, testExecutionManifest())
+	require.NoError(t, err)
+	_, err = st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "rejected.go", Content: "package rejected\n", WriteIntent: "create",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{
+		ExecutionID: started.ID,
+		ToStatus:    execution.StatusValidating,
+	})
+	require.NoError(t, err)
+
+	rejected, err := st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID, Reason: "validation failed", Attempts: 1,
+		Failure: &FailureClassificationWrite{
+			Category: execution.FailureImplementationError, Origin: "engine", Confidence: 1,
+			EvidenceSource: "validation_run", EvidenceReference: "validation-1", Evidence: "compile failed",
+		},
+		HandoffRole: "minimal_diff_repair",
+	})
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusRejected), rejected.Status)
+
+	candidate, err := st.GetCandidateSetByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Equal(t, "rejected", candidate.Status)
+	require.Equal(t, "validation failed", candidate.DispositionReason)
+	attempt, err := st.GetContextManifest(ctx, "manifest-1")
+	require.NoError(t, err)
+	require.Equal(t, "rejected", attempt.Attempt.Status)
+
+	failures, err := st.ListFailureClassificationsByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+	require.Equal(t, string(execution.FailureImplementationError), failures[0].Category)
+	handoffs, err := st.ListAttemptHandoffsBySource(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Len(t, handoffs, 1)
+	require.Equal(t, failures[0].ID, handoffs[0].FailureID)
+	require.Equal(t, "minimal_diff_repair", handoffs[0].TargetRole)
+
+	sessionResource, err := st.GetSessionResource("session-1", "resource.rejected")
+	require.NoError(t, err)
+	require.Equal(t, "rejected", sessionResource.State)
+	require.Equal(t, "validation failed", sessionResource.LastError)
+	generations, err := st.ListGenerations("resource.rejected", 10)
+	require.NoError(t, err)
+	require.Len(t, generations, 1)
+	require.Equal(t, "rejected", generations[0].Outcome)
+	require.Equal(t, "validation failed", generations[0].RejectionReason)
+	_, err = st.GetResource("resource.rejected")
+	require.Error(t, err, "rejected finalization must not accept resource ownership")
+}
+
 func TestFailureRoutingBlocksSpecificationAndValidationDefects(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")
 	ctx := context.Background()
