@@ -2,11 +2,9 @@ package spec
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
@@ -276,6 +274,10 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	if err != nil {
 		return nil, fmt.Errorf("commit attempt: context: %w", err)
 	}
+	commit := &commitAttemptState{
+		attemptID: attemptID, notes: notes, metadata: metadata,
+		execution: executionManifest, context: contextManifest, policy: policy,
+	}
 	if result, terminal, err := s.terminalCommitResult(ctx, executionManifest, attemptID); terminal || err != nil {
 		return result, err
 	}
@@ -299,116 +301,20 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	if result, terminal, err := s.terminalCommitResult(ctx, executionManifest, attemptID); terminal || err != nil {
 		return result, err
 	}
-	candidateFiles, err := s.snapshotCommitFiles(normalizedFiles)
-	if err != nil {
+	commit.execution = executionManifest
+	if err := s.submitAndStageCommitCandidate(ctx, commit, normalizedFiles); err != nil {
 		return nil, err
 	}
-	candidate, err := s.store.SubmitCandidate(ctx, executionManifest.ID, candidateFiles)
-	if err != nil {
+	if err := s.loadCommitTarget(ctx, commit); err != nil {
 		return nil, err
 	}
-	if err := s.writeChangedFiles(normalizedFiles); err != nil {
-		s.failExecution(ctx, executionManifest, contextManifest, execution.FailureToolFailure, err.Error())
-		return nil, err
-	}
-	if _, err := s.store.TransitionExecution(ctx, store.ExecutionTransition{
-		ExecutionID: executionManifest.ID, ToStatus: execution.StatusValidating,
-		Details: map[string]any{"candidate_id": candidate.ID},
-	}); err != nil {
-		return nil, err
-	}
-
-	sess, err := s.store.GetSession(contextManifest.Attempt.SessionID)
-	if err != nil {
-		s.failExecution(ctx, executionManifest, contextManifest, execution.FailureToolFailure, err.Error())
-		return nil, fmt.Errorf("commit attempt: session: %w", err)
-	}
-	planResult, err := s.Plan(ctx)
-	if err != nil {
-		s.failExecution(ctx, executionManifest, contextManifest, execution.FailureArchitecturalInconsistency, err.Error())
-		return nil, fmt.Errorf("commit attempt: plan: %w", err)
-	}
-	resourceID := contextManifest.Attempt.ResourceID
-	resource, ok := planResult.Registry.Resources[resourceID]
-	if !ok {
-		s.failExecution(ctx, executionManifest, contextManifest, execution.FailureMissingProjectIntent, "resource is absent from current specification")
-		return nil, fmt.Errorf("commit attempt: resource not found: %s", resourceID)
-	}
-	action, _ := actionForSession(sess, resourceID)
-	validations := s.executeCommitValidations(ctx, planResult.Registry.Project.Name, resource, validationProvenance{
-		SessionID: contextManifest.Attempt.SessionID, AttemptID: contextManifest.Attempt.ID,
-		ExecutionID: executionManifest.ID,
+	commit.validations = s.executeCommitValidations(ctx, commit.plan.Registry.Project.Name, commit.resource, validationProvenance{
+		SessionID: contextManifest.Attempt.SessionID, AttemptID: attemptID, ExecutionID: executionManifest.ID,
 	})
-	if failureMessage := firstFailureMessage(validations); failureMessage != "" {
-		category := execution.FailureImplementationError
-		if action.Category == "integrative" {
-			category = execution.FailureIntegrationError
-		}
-		if strings.HasPrefix(failureMessage, "validation could not run:") {
-			category = execution.FailureInvalidValidation
-		}
-		evidence, _ := json.Marshal(validations)
-		route := execution.RouteFailure(category)
-		_, finalizeErr := s.store.FinalizeCandidate(ctx, store.CandidateDisposition{
-			ExecutionID: executionManifest.ID, Reason: failureMessage,
-			Details: map[string]any{"validations": validations}, Attempts: contextManifest.Attempt.RetryNumber,
-			DurationMS: metadata.DurationMS, InputTokens: metadata.InputTokens,
-			OutputTokens: metadata.OutputTokens, CostUSD: metadata.CostUSD, HostCommitRef: metadata.HostCommitRef,
-			GoalProgress: executionGoalProgress(action, "blocked", failureMessage),
-			Failure: &store.FailureClassificationWrite{
-				Category: category, Origin: "engine", Confidence: 1, EvidenceSource: "mechanical_validation",
-				EvidenceReference: executionManifest.ID, Evidence: string(evidence), GoalIDs: action.Goals,
-			},
-			HandoffRole: permittedFailureHandoff(policy, route.NextRole),
-		})
-		if finalizeErr != nil {
-			return nil, finalizeErr
-		}
-		s.markAmendmentVerification(resourceID, resource, false)
-		return &CommitResult{
-			Committed: false, Validations: validations, AttemptID: attemptID,
-			ExecutionID: executionManifest.ID, CandidateID: candidate.ID, FailureCategory: string(category),
-		}, nil
+	if failureMessage := firstFailureMessage(commit.validations); failureMessage != "" {
+		return s.rejectCommitCandidate(ctx, commit, failureMessage)
 	}
-
-	var hashes map[string]string
-	_ = json.Unmarshal([]byte(sess.HashesJSON), &hashes)
-	declaration, _ := json.Marshal(resource.Declaration)
-	declarationHash := fmt.Sprintf("%x", sha256.Sum256(declaration))
-	acceptedFiles := make([]store.GeneratedFile, 0, len(candidate.Files))
-	for _, file := range candidate.Files {
-		acceptedFiles = append(acceptedFiles, store.GeneratedFile{
-			Path: file.Path, ResourceID: resourceID, ContentHash: file.ContentHash,
-			PromptHash: executionManifest.ContextHash, Model: executionManifest.Model, CreatedAt: time.Now().UTC(),
-		})
-	}
-	dependencies := make([]store.Dependency, 0, len(resource.Dependencies))
-	for _, dependency := range resource.Dependencies {
-		dependencies = append(dependencies, store.Dependency{SourceID: resourceID, TargetID: dependency.TargetID, Kind: dependency.Kind})
-	}
-	_, err = s.store.FinalizeCandidate(ctx, store.CandidateDisposition{
-		ExecutionID: executionManifest.ID, Accepted: true, Reason: "mechanical validations passed",
-		Details: map[string]any{"validations": validations}, Attempts: contextManifest.Attempt.RetryNumber,
-		Resource: &store.Resource{
-			ID: resourceID, Kind: resource.Kind, ContextName: resource.ContextName,
-			DeclarationHash: declarationHash, EffectiveHash: hashes[resourceID], Model: executionManifest.Model,
-		},
-		Files: acceptedFiles, Dependencies: dependencies, Notes: notes,
-		DurationMS: metadata.DurationMS, InputTokens: metadata.InputTokens,
-		OutputTokens: metadata.OutputTokens, CostUSD: metadata.CostUSD, HostCommitRef: metadata.HostCommitRef,
-		GoalProgress: executionGoalProgress(action, "advanced", "accepted resource candidate"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	_ = s.reprojectCompletion(ctx, planResult, store.TransitionSource{
-		Type: "generation_attempt", ID: contextManifest.Attempt.ID, SessionID: contextManifest.Attempt.SessionID,
-	})
-	s.markAmendmentVerification(resourceID, resource, true)
-	return &CommitResult{
-		Committed: true, Validations: validations, AttemptID: attemptID,
-		ExecutionID: executionManifest.ID, CandidateID: candidate.ID,
-	}, nil
+	return s.acceptCommitCandidate(ctx, commit)
 }
 
 func (s *Spec) terminalCommitResult(ctx context.Context, manifest *store.ExecutionManifest, attemptID string) (*CommitResult, bool, error) {
