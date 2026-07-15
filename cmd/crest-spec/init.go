@@ -88,7 +88,8 @@ func promptAgent(stdin io.Reader, stdout io.Writer) (string, error) {
 	fmt.Fprintln(stdout, "Which agent host should crest-spec initialize?")
 	fmt.Fprintln(stdout, "  1) OpenCode")
 	fmt.Fprintln(stdout, "  2) Claude Code")
-	fmt.Fprintln(stdout, "  3) Both")
+	fmt.Fprintln(stdout, "  3) Codex")
+	fmt.Fprintln(stdout, "  4) All")
 	fmt.Fprint(stdout, "Select [1]: ")
 
 	scanner := bufio.NewScanner(stdin)
@@ -104,8 +105,12 @@ func promptAgent(stdin io.Reader, stdout io.Writer) (string, error) {
 		return "opencode", nil
 	case "2", "claude", "claude-code", "claude code":
 		return "claude-code", nil
-	case "3", "both", "all":
+	case "3", "codex", "openai-codex", "openai codex":
+		return "codex", nil
+	case "both":
 		return "both", nil
+	case "4", "all":
+		return "all", nil
 	default:
 		return "", fmt.Errorf("unknown agent host %q", strings.TrimSpace(scanner.Text()))
 	}
@@ -117,9 +122,16 @@ func buildInitFiles(agent, binaryPath string) ([]initFile, error) {
 		return opencodeInitFiles(binaryPath), nil
 	case "claude-code":
 		return claudeCodeInitFiles(binaryPath), nil
+	case "codex":
+		return codexInitFiles(binaryPath), nil
 	case "both":
 		files := opencodeInitFiles(binaryPath)
 		files = append(files, claudeCodeInitFiles(binaryPath)...)
+		return files, nil
+	case "all":
+		files := opencodeInitFiles(binaryPath)
+		files = append(files, claudeCodeInitFiles(binaryPath)...)
+		files = append(files, codexInitFiles(binaryPath)...)
 		return files, nil
 	default:
 		return nil, fmt.Errorf("unknown agent host %q", agent)

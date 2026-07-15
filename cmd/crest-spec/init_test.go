@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestPromptAgentDefaultsToOpenCode(t *testing.T) {
@@ -19,6 +22,20 @@ func TestPromptAgentDefaultsToOpenCode(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "OpenCode") {
 		t.Fatalf("prompt did not include OpenCode option: %s", out.String())
+	}
+}
+
+func TestPromptAgentSelectsCodex(t *testing.T) {
+	var out bytes.Buffer
+	agent, err := promptAgent(strings.NewReader("3\n"), &out)
+	if err != nil {
+		t.Fatalf("promptAgent returned error: %v", err)
+	}
+	if agent != "codex" {
+		t.Fatalf("agent = %q, want codex", agent)
+	}
+	if !strings.Contains(out.String(), "Codex") {
+		t.Fatalf("prompt did not include Codex option: %s", out.String())
 	}
 }
 
@@ -40,6 +57,86 @@ func TestBuildInitFilesForBothHosts(t *testing.T) {
 	} {
 		if !paths[path] {
 			t.Fatalf("missing generated path %s", path)
+		}
+	}
+}
+
+func TestBuildInitFilesForAllHosts(t *testing.T) {
+	files, err := buildInitFiles("all", "/tmp/crest-spec")
+	if err != nil {
+		t.Fatalf("buildInitFiles returned error: %v", err)
+	}
+	paths := map[string]bool{}
+	for _, file := range files {
+		paths[file.path] = true
+	}
+	for _, path := range []string{
+		"opencode.json",
+		".mcp.json",
+		".codex/config.toml",
+		".codex/agents/crest-generator.toml",
+		".agents/skills/apply-crest-spec/SKILL.md",
+	} {
+		if !paths[path] {
+			t.Fatalf("missing generated path %s", path)
+		}
+	}
+}
+
+func TestBuildCodexInitFilesAreValidAndGoverned(t *testing.T) {
+	files, err := buildInitFiles("codex", "/tmp/crest-spec")
+	if err != nil {
+		t.Fatalf("buildInitFiles returned error: %v", err)
+	}
+	contents := map[string]string{}
+	for _, file := range files {
+		contents[file.path] = file.content
+	}
+
+	config := contents[".codex/config.toml"]
+	var parsed map[string]any
+	if err := toml.Unmarshal([]byte(config), &parsed); err != nil {
+		t.Fatalf("parse generated Codex config: %v\n%s", err, config)
+	}
+	for _, fragment := range []string{
+		"[mcp_servers.crest-spec]",
+		"required = true",
+		"tool_timeout_sec = 1800",
+		"CREST_SPEC_SPEC_DIR = \"./spec\"",
+	} {
+		if !strings.Contains(config, fragment) {
+			t.Fatalf("Codex config missing %q:\n%s", fragment, config)
+		}
+	}
+
+	for _, path := range []string{
+		".codex/agents/crest-generator.toml",
+		".codex/agents/crest-triage.toml",
+		".codex/agents/crest-verifier.toml",
+		".codex/agents/crest-design.toml",
+		".codex/agents/crest-tasks.toml",
+	} {
+		var agent map[string]any
+		if err := toml.Unmarshal([]byte(contents[path]), &agent); err != nil {
+			t.Fatalf("parse generated Codex agent %s: %v", path, err)
+		}
+		for _, field := range []string{"name", "description", "developer_instructions"} {
+			if strings.TrimSpace(fmt.Sprint(agent[field])) == "" {
+				t.Fatalf("generated Codex agent %s has no %s", path, field)
+			}
+		}
+	}
+
+	skill := contents[".agents/skills/apply-crest-spec/SKILL.md"]
+	for _, fragment := range []string{
+		"apply this crest-spec",
+		"explicitly requires native Codex subagents",
+		"spec/execution_start",
+		"spec/confirm_destroys",
+		"spec/verification_inspect",
+	} {
+		if !strings.Contains(skill, fragment) {
+			t.Fatalf("Codex skill missing %q", fragment)
 		}
 	}
 }
@@ -77,6 +174,36 @@ func TestRunInitWritesOpenCodeBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(string(orchestrator), "dispatch one crest-generator subagent concurrently") {
 		t.Fatalf("orchestrator prompt does not require concurrent wave dispatch")
+	}
+	if !strings.Contains(out.String(), "restart your agent host") {
+		t.Fatalf("output did not mention restart: %s", out.String())
+	}
+}
+
+func TestRunInitWritesCodexBootstrap(t *testing.T) {
+	t.Chdir(t.TempDir())
+	var out bytes.Buffer
+	err := runInit(initOptions{
+		agent:  "codex",
+		stdin:  strings.NewReader(""),
+		stdout: &out,
+	})
+	if err != nil {
+		t.Fatalf("runInit returned error: %v", err)
+	}
+
+	for _, path := range []string{
+		".codex/config.toml",
+		".codex/agents/crest-generator.toml",
+		".codex/agents/crest-triage.toml",
+		".codex/agents/crest-verifier.toml",
+		".codex/agents/crest-design.toml",
+		".codex/agents/crest-tasks.toml",
+		".agents/skills/apply-crest-spec/SKILL.md",
+	} {
+		if _, err := os.Stat(filepath.Clean(path)); err != nil {
+			t.Fatalf("expected %s to be written: %v", path, err)
+		}
 	}
 	if !strings.Contains(out.String(), "restart your agent host") {
 		t.Fatalf("output did not mention restart: %s", out.String())
