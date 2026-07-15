@@ -17,6 +17,9 @@ func TestDashboardUsesEscapedDataAttributesAndDelegatedHandlers(t *testing.T) {
 	appBytes, err := fs.ReadFile(staticFiles, "static/js/app.js")
 	require.NoError(t, err)
 	app := string(appBytes)
+	evaluationBytes, err := fs.ReadFile(staticFiles, "static/js/features/evaluations.js")
+	require.NoError(t, err)
+	delegatedHandlers := app + string(evaluationBytes)
 	componentsBytes, err := fs.ReadFile(staticFiles, "static/js/components.js")
 	require.NoError(t, err)
 	components := string(componentsBytes)
@@ -43,7 +46,7 @@ func TestDashboardUsesEscapedDataAttributesAndDelegatedHandlers(t *testing.T) {
 		"toggle-collapsible", "toggle-generation", "toggle-context",
 		"toggle-context-content", "toggle-execution", "toggle-verification",
 	} {
-		require.Contains(t, app, `data-action="`+action+`"`)
+		require.Contains(t, delegatedHandlers, `data-action="`+action+`"`)
 	}
 
 	// Identifiers can originate in specifications and persisted records. These
@@ -64,7 +67,7 @@ func TestDashboardUsesEscapedDataAttributesAndDelegatedHandlers(t *testing.T) {
 		`data-resource-id="' + esc(`,
 		`data-record-url="' + esc(`,
 	} {
-		require.Contains(t, app, dynamicAttribute)
+		require.Contains(t, delegatedHandlers, dynamicAttribute)
 	}
 }
 
@@ -74,6 +77,7 @@ func TestDashboardEmbedsModularAccessibleApplication(t *testing.T) {
 		"static/js/components.js", "static/js/router.js",
 		"static/js/features/project.js", "static/js/features/resources.js",
 		"static/js/features/plan.js", "static/js/features/failures.js", "static/js/features/attempts.js",
+		"static/js/features/evaluations.js",
 	} {
 		content, err := fs.ReadFile(staticFiles, path)
 		require.NoError(t, err, path)
