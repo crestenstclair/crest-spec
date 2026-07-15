@@ -601,20 +601,14 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 	}
 
 	if input.ToStatus == execution.StatusAccepted || input.ToStatus == execution.StatusRejected {
-		candidate, getErr := q.GetCandidateSetByExecution(ctx, input.ExecutionID)
-		if getErr != nil {
-			return nil, fmt.Errorf("transition execution: terminal candidate disposition requires a candidate: %w", mapNotFound(getErr))
-		}
 		disposition := "accepted"
 		attemptStatus := "accepted"
 		if input.ToStatus == execution.StatusRejected {
 			disposition = "rejected"
 			attemptStatus = "rejected"
 		}
-		if changed, updateErr := q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
-			Status: disposition, DispositionReason: input.Reason, DisposedAt: &timestamp, ID: candidate.ID,
-		}); updateErr != nil || changed != 1 {
-			return nil, fmt.Errorf("transition execution: candidate disposition: affected=%d: %w", changed, updateErr)
+		if err := transitionCandidateDisposition(ctx, q, input.ExecutionID, disposition, input.Reason, timestamp); err != nil {
+			return nil, fmt.Errorf("transition execution: terminal candidate disposition: %w", err)
 		}
 		if changed, updateErr := q.UpdateGenerationAttemptStatus(ctx, db.UpdateGenerationAttemptStatusParams{
 			Status: attemptStatus, ID: row.AttemptID, Status_2: "candidate_submitted",
@@ -633,10 +627,8 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 		expectedAttemptStatus := "context_prepared"
 		if from == execution.StatusCandidateSubmitted || from == execution.StatusValidating {
 			expectedAttemptStatus = "candidate_submitted"
-			if candidate, getErr := q.GetCandidateSetByExecution(ctx, input.ExecutionID); getErr == nil {
-				_, _ = q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
-					Status: "rejected", DispositionReason: input.Reason, DisposedAt: &timestamp, ID: candidate.ID,
-				})
+			if err := transitionCandidateDisposition(ctx, q, input.ExecutionID, "rejected", input.Reason, timestamp); err != nil {
+				return nil, fmt.Errorf("transition execution: reject candidate before %s: %w", input.ToStatus, err)
 			}
 		}
 		if changed, updateErr := q.UpdateGenerationAttemptStatus(ctx, db.UpdateGenerationAttemptStatusParams{
@@ -676,6 +668,31 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 		return nil, fmt.Errorf("transition execution: commit: %w", err)
 	}
 	return s.GetExecutionManifest(ctx, input.ExecutionID)
+}
+
+// transitionCandidateDisposition updates the immutable candidate projection
+// inside its caller's execution transaction. A candidate-bearing execution
+// cannot enter a terminal state unless the corresponding submitted candidate
+// is found and disposed exactly once.
+func transitionCandidateDisposition(
+	ctx context.Context,
+	q *db.Queries,
+	executionID, disposition, reason, timestamp string,
+) error {
+	candidate, err := q.GetCandidateSetByExecution(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("candidate: %w", mapNotFound(err))
+	}
+	changed, err := q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
+		Status: disposition, DispositionReason: reason, DisposedAt: &timestamp, ID: candidate.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("update candidate %s: %w", candidate.ID, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("candidate %s is not submitted", candidate.ID)
+	}
+	return nil
 }
 
 // FinalizeCandidate commits the complete governance disposition as one SQLite
