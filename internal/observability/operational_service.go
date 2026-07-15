@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,7 +26,13 @@ func (s *Service) Plan(ctx context.Context, projectName, specHash string, action
 			waveByResource[resourceID] = index
 		}
 	}
-	session, _ := s.store.GetActiveSession()
+	session, err := s.store.GetActiveSession()
+	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("load active session: %w", err)
+		}
+		session = nil
+	}
 	states := make(map[string]store.SessionResource)
 	if session != nil {
 		result.ActiveSessionID = session.ID
@@ -37,7 +44,10 @@ func (s *Service) Plan(ctx context.Context, projectName, specHash string, action
 			states[row.ResourceID] = row
 		}
 		var persisted []planpkg.PlannedAction
-		if err := json.Unmarshal([]byte(session.PlanJSON), &persisted); err == nil && !sameOperationIDs(actions, persisted) {
+		if err := json.Unmarshal([]byte(session.PlanJSON), &persisted); err != nil {
+			return nil, fmt.Errorf("decode active session %q plan: %w", session.ID, err)
+		}
+		if !sameOperationIDs(actions, persisted) {
 			result.State.Stale = true
 			result.State.Reason = "active session was created from a different plan revision"
 		}
@@ -224,7 +234,11 @@ func (s *Service) Attempt(ctx context.Context, attemptID string) (*AttemptDetail
 	if manifest.ContextHash == "" || manifest.SelectorVersion == "" || manifest.EstimatorVersion == "" {
 		result.Context.State = RecordState{Legacy: true, Reason: "context predates complete selector, estimator, or hash provenance"}
 	}
-	if execution, getErr := s.store.GetExecutionManifestByAttempt(ctx, attemptID); getErr == nil {
+	execution, getErr := s.store.GetExecutionManifestByAttempt(ctx, attemptID)
+	if getErr != nil && !errors.Is(getErr, cserrors.ErrNotFound) {
+		return nil, fmt.Errorf("load execution manifest for attempt %q: %w", attemptID, getErr)
+	}
+	if getErr == nil {
 		result.Execution = &AttemptExecution{
 			ID: execution.ID, HostName: execution.HostName, HostVersion: execution.HostVersion, Provider: execution.Provider,
 			Model: execution.Model, Role: execution.Role, ContextPolicy: execution.ContextPolicy,
@@ -246,7 +260,11 @@ func (s *Service) Attempt(ctx context.Context, attemptID string) (*AttemptDetail
 			result.Execution.State.Reason = appendReason(result.Execution.State.Reason, "execution context hash does not match the linked manifest")
 		}
 	}
-	if candidate, getErr := s.store.GetCandidateSetByAttempt(ctx, attemptID); getErr == nil {
+	candidate, getErr := s.store.GetCandidateSetByAttempt(ctx, attemptID)
+	if getErr != nil && !errors.Is(getErr, cserrors.ErrNotFound) {
+		return nil, fmt.Errorf("load candidate output for attempt %q: %w", attemptID, getErr)
+	}
+	if getErr == nil {
 		view := &AttemptCandidate{ID: candidate.ID, CandidateHash: candidate.CandidateHash, Status: candidate.Status, DispositionReason: candidate.DispositionReason}
 		for _, file := range candidate.Files {
 			view.Files = append(view.Files, CandidateFileRef{Path: file.Path, ContentHash: file.ContentHash, ByteSize: file.ByteSize, WriteIntent: file.WriteIntent})
