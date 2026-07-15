@@ -102,6 +102,7 @@ func TestBuildCodexInitFilesAreValidAndGoverned(t *testing.T) {
 		"[mcp_servers.crest-spec]",
 		"required = true",
 		"tool_timeout_sec = 1800",
+		"[mcp_servers.crest-spec.tools.\"spec/confirm_destroys\"]",
 		"CREST_SPEC_SPEC_DIR = \"./spec\"",
 	} {
 		if !strings.Contains(config, fragment) {
@@ -207,6 +208,9 @@ func TestRunInitWritesCodexBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "restart your agent host") {
 		t.Fatalf("output did not mention restart: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "apply this crest-spec") {
+		t.Fatalf("output did not include the Codex invocation phrase: %s", out.String())
 	}
 }
 

@@ -80,6 +80,9 @@ func runInit(opts initOptions) error {
 		}
 		fmt.Fprintf(opts.stdout, "wrote %s\n", file.path)
 	}
+	if agent == "codex" || agent == "all" {
+		fmt.Fprintln(opts.stdout, "Codex: trust this repository, then start a new task and say: apply this crest-spec")
+	}
 	fmt.Fprintln(opts.stdout, "restart your agent host so it reloads the new configuration")
 	return nil
 }

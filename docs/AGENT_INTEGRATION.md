@@ -1,7 +1,7 @@
 # How an agent integrates with crest-spec
 
 This document defines the contract between crest-spec and an agent host
-(Claude Code, OpenCode, or any agentic CLI). Read the first section twice —
+(Codex, Claude Code, OpenCode, or any agentic client). Read the first section twice —
 getting the direction of control wrong is the single most common integration
 failure.
 
@@ -31,7 +31,7 @@ and submit their output through the gate.
 
 ```
 ┌──────────────────────────────────────────────┐
-│ Agent host (Claude Code / OpenCode / ...)    │
+│ Agent host (Codex / Claude Code / ...)       │
 │                                              │
 │  Orchestrator loop (a workflow/script YOU    │
 │  run in the host)                            │
@@ -294,7 +294,7 @@ the compatible `check_id` to `spec/verify` and call `spec/graduate` afterward.
    remains the plan/hash default, while the exact host/provider/model belongs
    in `spec/execution_start`; `spec/commit` cannot replace that identity.
 
-## Porting to a non-Claude host (e.g. OpenCode)
+## Porting to another host
 
 You need three host-native capabilities; every serious agent CLI has them:
 
@@ -314,6 +314,7 @@ written.
 
 Host adapters live under `docs/hosts/` and must preserve this contract:
 
+- `docs/hosts/codex.md` — Codex project config, skill discovery, custom agents, and native wave fan-out.
 - `docs/hosts/claude-code.md` — the current reference implementation.
 - `docs/hosts/opencode.md` — OpenCode MCP, subagent, command, and permission templates.
 

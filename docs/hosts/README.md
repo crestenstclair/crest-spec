@@ -13,6 +13,7 @@ The canonical contract is `docs/AGENT_INTEGRATION.md`. Host adapters must not re
 
 | Host | Adapter |
 |---|---|
+| Codex | `docs/hosts/codex.md` |
 | Claude Code | `docs/hosts/claude-code.md` |
 | OpenCode | `docs/hosts/opencode.md` |
 

@@ -154,7 +154,7 @@ implementation architecture. Each DDD resource declares what capability it
 contributes to, and SQLite-backed context/execution manifests record how an
 agent attempted that resource without adding runtime metadata to the CUE spec.
 
-**Your agent host is the orchestrator.** Claude Code is the reference host (via the bundled `spec-generate` skill/workflow); OpenCode is supported via `crest-spec init`; any agentic CLI with an MCP client and native sub-agent dispatch can drive it — see [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md) for the contract. The host spawns one sub-agent per resource per wave; each fetches its scoped prompt, writes code, and commits through the server's validation gate. The server is the quality gate; the host does the writing and never grades its own work: mechanical validations gate the commit, engine-executed real/negative witnesses prove behavior, and `spec/finish` requires evidence-backed project completion for specs using the new model.
+**Your agent host is the orchestrator.** Codex, Claude Code, and OpenCode are supported host adapters; any agentic client with MCP and native sub-agent dispatch can drive the same contract — see [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md). The host spawns one sub-agent per resource per wave; each fetches immutable context, registers its exact execution, authors a candidate, and submits it through the server's validation gate. The server is the quality gate; the host does the writing and never grades its own work: mechanical validations gate the commit, engine-executed real/negative witnesses prove behavior, and `spec/finish` requires evidence-backed project completion for specs using the new model.
 
 ## Proven on real projects
 
@@ -173,7 +173,7 @@ That's roughly a **27–31× amplification** from declaration to verified implem
 ## Prerequisites
 
 - **Go 1.26+**
-- **An agent host** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (reference) or [OpenCode](https://opencode.ai)
+- **An agent host** — [Codex](https://learn.chatgpt.com/docs/codex), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), or [OpenCode](https://opencode.ai)
 
 ## Install
 
@@ -213,15 +213,18 @@ project: {
 EOF
 
 # 2. Bootstrap your agent host's integration files
-crest-spec init                      # interactive: OpenCode, Claude Code, or both
+crest-spec init                      # interactive host selection
+crest-spec init --agent codex        # writes project Codex MCP config, custom agents,
+                                      # and the apply-crest-spec skill
 crest-spec init --agent claude-code  # writes .mcp.json pointing at this binary
 crest-spec init --agent opencode     # writes opencode.json + orchestrator/generator/
                                      # triage/verifier/design/tasks agents + /apply-crest-spec
 
 # 3. Open your host — crest-spec auto-connects over stdio MCP
-claude        # or: opencode
+codex         # or: claude / opencode
 
 # 4. Ask it to run the spec:
+#    Codex:       "apply this crest-spec"
 #    Claude Code: "run the spec" (the spec-generate skill drives the loop)
 #    OpenCode:    /apply-crest-spec
 ```
@@ -338,8 +341,9 @@ crest-spec is host-agnostic by contract: the engine never dispatches agents, so 
 - **[docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md)** — the full engine ↔ host contract: division of responsibilities, the canonical orchestration loop, the rules (iterate don't regenerate, halts are loud, destroys are human-gated, sub-agents return data not vibes), and the observed anti-patterns.
 - **[docs/hosts/claude-code.md](docs/hosts/claude-code.md)** — the reference adapter: `.mcp.json` + the `spec-generate` skill/workflow.
 - **[docs/hosts/opencode.md](docs/hosts/opencode.md)** — the OpenCode adapter: MCP config, orchestrator/generator/triage/verifier/design/tasks subagents with `permission.task` enforcement, and the `/apply-crest-spec` command.
+- **[docs/hosts/codex.md](docs/hosts/codex.md)** — the Codex adapter: trusted project MCP config, discoverable apply skill, custom subagents, exact execution manifests, and wave fan-out.
 
-`crest-spec init` writes these integration files for you (interactively, or with `--agent opencode|claude-code|both`; `--force` overwrites).
+`crest-spec init` writes these integration files for you (interactively, or with `--agent codex|opencode|claude-code|both|all`; `--force` overwrites).
 
 **HTTP transport** — set `CREST_SPEC_HTTP_ADDR` and the same tools are served as JSON-RPC over `POST /mcp`. This is the practical choice for fan-out: worker sub-agents only need `curl`, no MCP client. crest-synth's generation was driven end-to-end this way by workflow scripts (`spec-generate-http.js`, `spec-behavioral-http.js`, `spec-reauthor-http.js`, `spec-verify-pending-http.js`).
 

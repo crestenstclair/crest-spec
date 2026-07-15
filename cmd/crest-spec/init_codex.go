@@ -31,6 +31,12 @@ startup_timeout_sec = 30
 tool_timeout_sec = 1800
 default_tools_approval_mode = "auto"
 
+[mcp_servers.crest-spec.tools."spec/confirm_destroys"]
+approval_mode = "prompt"
+
+[mcp_servers.crest-spec.tools."spec/skip"]
+approval_mode = "prompt"
+
 [mcp_servers.crest-spec.env]
 CREST_SPEC_SPEC_DIR = "./spec"
 CREST_SPEC_GENERATE_MODEL = "codex-gpt-5.6"

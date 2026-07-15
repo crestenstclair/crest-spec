@@ -6,7 +6,7 @@ crest-spec is a **declarative, domain-driven code generation system**. You descr
 
 The mental model is **Terraform for code generation**: you declare what your system *should* look like, the tool plans what needs to change, and then applies those changes — with dependency ordering, retry loops, and verification gates.
 
-**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs declared mechanical and behavioral verification commands, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent receives immutable goal-directed context from `spec/context`; the host registers the exact execution through `spec/execution_start`; and the agent submits candidate files to `spec/commit` by attempt ID. Verification is never self-judged: mechanical validations gate the commit, while `spec/verify` executes declared real and negative witnesses itself and persists their provenance.
+**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs declared mechanical and behavioral verification commands, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven natively by the configured agent host. Codex uses the generated `apply-crest-spec` skill and project subagents; Claude Code and OpenCode use their own native adapters. Each host spawns one subagent per resource per wave. Every generator receives immutable goal-directed context from `spec/context`; the host registers the exact execution through `spec/execution_start`; and the agent submits candidate files to `spec/commit` by attempt ID. Verification is never self-judged: mechanical validations gate the commit, while `spec/verify` executes declared real and negative witnesses itself and persists their provenance.
 
 > **Gate-hardening revision (2026-07-02).** Following the verification-theater audit ("1617 invariant checks, zero failures"), orchestrator-supplied invariant verdicts (`invariant_checks` on `spec/commit`) were **removed** — any older text in this document describing generator-judged invariants is superseded. In the same revision: `spec/context` now injects the resource's own `last_error` and resolve guidance on retries; a validation that cannot launch rejects the commit (fail closed); `spec/finish` blocks on unresolved behavioral checks (pending/failed/theater/malformed) unless explicitly forced; the effective hash covers only the **structural** declaration (guidance fields — prompts, descriptions, notes — no longer cascade regeneration to dependents); and `project.mission` plus project invariants and the bounded context's design contract are injected into generation prompts. The system guides architecture, design, and invariants — it does not police file contents: hand-edits to generated files are not tracked, and formatting is normalized by the gate (`cargo fmt` auto-fix), never a blocking check. Iteration over regeneration: a REJECTED commit records its attempted files, so the retry runs in UPDATE mode — the generator edits its previous attempt against the failure instead of rewriting the resource from scratch.
 
@@ -656,7 +656,7 @@ In CUE, dependencies are expressed as ID strings (e.g., `uses: ["aggregate.Synth
 
 ### 2.1 Component Map
 
-The server is a single layer: the **spec state engine**. It handles CUE loading, planning, prompt construction, mechanical validation, and history — all in-process, with no subprocess management and no LLM calls. Orchestration (sub-agent dispatch, retries, parallelism) lives **outside the server**, in Claude Code's skills and workflows.
+The server is a single layer: the **spec state engine**. It handles CUE loading, planning, prompt construction, mechanical validation, and history — all in-process, with no generation subprocess management and no LLM calls. Orchestration (subagent dispatch, retries, and parallelism) lives **outside the server**, in the selected host's native skills, agents, or workflows.
 
 ```
 cmd/crest-spec/main.go               Entrypoint + flag/help handling
@@ -690,7 +690,7 @@ sql/queries/    sqlc query definitions (source for internal/db)
   workflows/spec-generate.js          per-wave sub-agent fan-out + commit/retry/triage loop
 ```
 
-> **Tombstone — engine/agent layers.** The `internal/agent` (claude CLI wrapper) and `internal/engine` (run_prompt / code_review / bugbot dispatch) packages were removed in the native-workflow pivot. The server no longer touches `os/exec`, the `claude` binary, or any concurrency semaphore. The work those packages did — dispatching sub-agents, retrying, parallelizing a wave — is now done by the Claude Code workflow in `.claude/workflows/spec-generate.js`.
+> **Tombstone — engine/agent layers.** The `internal/agent` (claude CLI wrapper) and `internal/engine` (run_prompt / code_review / bugbot dispatch) packages were removed in the native-workflow pivot. The server no longer invokes a model CLI or owns generation concurrency. Dispatching subagents, retrying, and parallelizing a wave are host responsibilities; Codex, Claude Code, and OpenCode implement the same MCP contract with native host surfaces.
 
 ### 2.2 How the Layers Connect
 
@@ -750,7 +750,7 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 
 > **Tombstone.** This section previously documented the `internal/agent` CLI wrapper and the `internal/engine` sub-agent dispatch layer (`Generate` / `Review` / `CodeReview` / `Bugbot`). Both packages were deleted in the native-workflow pivot. The server no longer generates code, runs reviews, or spawns processes. What follows is the contract that replaced them.
 
-The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **context-out / governed-execution-and-candidate-in**: the server emits immutable context and validates candidate results mechanically; nobody grades their own work.
+The server is a state engine; the configured agent host is the orchestrator. They communicate only through MCP tool calls, and the contract is **context-out / governed-execution-and-candidate-in**: the server emits immutable context and validates candidate results mechanically; nobody grades their own work.
 
 **The contract:**
 
@@ -818,7 +818,7 @@ The core validation loop — the thing that makes generation reliable — surviv
 
 > **Tombstone — `spec/apply`.** The server no longer ships an unattended, server-side apply that dispatches sub-agents and runs an in-server constraint loop. `spec/apply` (and its async job) was removed in the native-workflow pivot. "Applying" a plan is now done by the orchestrator, not the server.
 
-The apply phase is driven by Claude Code through the spec-generate skill/workflow (§4, §8):
+The apply phase is driven by the selected host adapter (§4, §8). Codex uses the generated `apply-crest-spec` skill and project custom agents:
 
 1. **`spec/begin`** runs the planner, acquires the SQLite session lock, computes dependency waves, and returns `{session_id, plan, waves, PendingDestroys}`.
 2. **`spec/confirm_destroys`** (when `PendingDestroys` is non-empty) deletes files and state for removed resources — only for the resource IDs the operator confirms.
@@ -1010,7 +1010,7 @@ Single `Store` struct exposes all operations:
 |  ~ domainService.Synth.Allocator (dependency changed)      |
 |  - aggregate.Audio.SineVoice (removed)                     |
 +-------------+-----------------------------------------------+
-              | Claude Code workflow (.claude/workflows/spec-generate.js)
+              | Host-native orchestrator (Codex skill / Claude workflow / OpenCode command)
               v
 +-------------------------------------------------------------+
 |         Orchestrator (per wave, resources in parallel)      |
@@ -1305,7 +1305,7 @@ There is one execution model — the orchestrator drives it — but resolution c
 
 ### 8.6 Concurrency Model
 
-Concurrency lives in the orchestrator, not the server. The workflow runs a wave's resources with `parallel(resources.map(...))` — one sub-agent per resource, all in flight at once; the degree of parallelism is whatever the Claude Code workflow runtime allows. Across waves, execution is sequential: wave N+1 does not begin until every resource in wave N is `committed`, `skipped`, or terminally accounted for.
+Concurrency lives in the orchestrator, not the server. The host dispatches one subagent per resource in the current wave, bounded by its native thread limit. Across waves, execution is sequential: wave N+1 does not begin until every resource in wave N is `committed`, `skipped`, or terminally accounted for.
 
 The **server is a single-writer SQLite state engine**. Every `spec/commit` (and every other state-mutating tool) is a synchronous, serialized write against `.crest-spec/state.db` (WAL mode, `busy_timeout=5000`), and a session holds an exclusive lock for its duration. So even though many sub-agents generate in parallel, their commits are linearized by the database — there is no in-server concurrency semaphore and no subprocess pool to size.
 
@@ -1519,7 +1519,7 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 
 | Tool | Purpose |
 |------|---------|
-| `about` | Static system info + a one-paragraph workflow guide ("state engine only; Claude Code orchestrates"). No subprocess. |
+| `about` | Static system info + a one-paragraph workflow guide ("state engine only; the agent host orchestrates"). No generation subprocess. |
 | `live_metrics` | Self-monitoring snapshot: uptime, call counts, error rates, per-tool stats. Recorded per tool call at dispatch (`handleToolCall` times every call and records into `metrics`). |
 
 > **Tombstone — removed tools.** The native-workflow pivot deleted every async/subprocess tool: `run_prompt`, `poll_result`, `cancel_job`, `list_jobs`, `code_review`, `bugbot`, `list_models`, `status`, and the server-orchestration tools `spec/apply`, `spec/dispatch`, `spec/run_wave`, `spec/deep_review`, `spec/propose_amendments`. None of these have replacements *in the server* — the orchestrator's own sub-agents (and the spec-generate workflow) do that work.
@@ -1709,7 +1709,7 @@ The primary mode. An orchestrating AI agent (Claude Code, Cursor, or any MCP cli
 }
 ```
 
-Auth: the server does not authenticate to any LLM — it spawns nothing. The orchestrator (Claude Code) uses its own session for the sub-agents it runs.
+Auth: the server does not authenticate to any LLM — it spawns nothing. The orchestrator uses its own Codex, Claude Code, OpenCode, or other host session for the subagents it runs.
 
 ### 13.2 Mode 2: Dashboard
 
