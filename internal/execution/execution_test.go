@@ -24,12 +24,22 @@ func TestClosedRoleRegistryAndHandoffs(t *testing.T) {
 }
 
 func TestExecutionStateMachineFailsClosed(t *testing.T) {
-	require.NoError(t, ValidateTransition(StatusExecuting, StatusCandidateSubmitted))
-	require.NoError(t, ValidateTransition(StatusCandidateSubmitted, StatusValidating))
-	require.NoError(t, ValidateTransition(StatusValidating, StatusAccepted))
+	valid := map[Status][]Status{
+		StatusExecuting:          {StatusExecuting, StatusCandidateSubmitted, StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut},
+		StatusCandidateSubmitted: {StatusCandidateSubmitted, StatusValidating, StatusCancelled, StatusFailed, StatusTimedOut},
+		StatusValidating:         {StatusValidating, StatusAccepted, StatusRejected, StatusFailed, StatusTimedOut},
+	}
+	for from, targets := range valid {
+		for _, to := range targets {
+			require.NoErrorf(t, ValidateTransition(from, to), "%s -> %s", from, to)
+		}
+	}
 	require.ErrorContains(t, ValidateTransition(StatusExecuting, StatusAccepted), "invalid execution transition")
 	require.ErrorContains(t, ValidateTransition(StatusRejected, StatusExecuting), "invalid execution transition")
-	require.True(t, StatusCancelled.Terminal())
+	for _, terminal := range []Status{StatusAccepted, StatusRejected, StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut} {
+		require.True(t, terminal.Terminal())
+		require.Error(t, ValidateTransition(terminal, StatusExecuting))
+	}
 }
 
 func TestCanonicalRedactionIsRecursiveCaseInsensitiveAndStable(t *testing.T) {

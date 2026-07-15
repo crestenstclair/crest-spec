@@ -170,6 +170,35 @@ func (s *Spec) ListExecutions(ctx context.Context, limit int) ([]store.Execution
 	return s.store.ListExecutionManifests(ctx, limit)
 }
 
+// RecoverExecutions marks active host attempts older than the configured
+// policy threshold as timed out. It records infrastructure provenance and
+// deliberately does not infer a model failure from a missing host heartbeat.
+func (s *Spec) RecoverExecutions(ctx context.Context, before time.Time) (int, error) {
+	manifests, err := s.store.ListStaleExecutionManifests(ctx, before)
+	if err != nil {
+		return 0, fmt.Errorf("recover executions: list stale attempts: %w", err)
+	}
+	recovered := 0
+	for index := range manifests {
+		manifest := &manifests[index]
+		reason := fmt.Sprintf("host execution exceeded recovery threshold before %s", before.UTC().Format(time.RFC3339Nano))
+		_, err := s.store.TransitionExecution(ctx, store.ExecutionTransition{
+			ExecutionID: manifest.ID, ToStatus: execution.StatusTimedOut, Reason: reason,
+			Details: map[string]any{"recovery_threshold": before.UTC().Format(time.RFC3339Nano)},
+			Failure: &store.FailureClassificationWrite{
+				Category: execution.FailureHostFailure, Origin: "engine", Confidence: 1,
+				EvidenceSource: "execution_recovery_timeout", EvidenceReference: manifest.ID,
+				Evidence: reason, GoalIDs: manifest.GoalIDs,
+			},
+		})
+		if err != nil {
+			return recovered, fmt.Errorf("recover executions: attempt %s: %w", manifest.AttemptID, err)
+		}
+		recovered++
+	}
+	return recovered, nil
+}
+
 func (s *Spec) ListFailures(ctx context.Context, attemptID string, limit int) ([]store.FailureClassification, error) {
 	if attemptID != "" {
 		return s.store.ListFailureClassificationsByAttempt(ctx, attemptID)

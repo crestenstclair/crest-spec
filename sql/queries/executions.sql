@@ -35,6 +35,12 @@ SELECT * FROM execution_manifests WHERE idempotency_key = ?;
 -- name: ListRecentExecutionManifests :many
 SELECT * FROM execution_manifests ORDER BY created_at DESC, id DESC LIMIT ?;
 
+-- name: ListStaleExecutionManifests :many
+SELECT * FROM execution_manifests
+WHERE status IN ('executing', 'candidate_submitted', 'validating')
+  AND updated_at < ?
+ORDER BY updated_at, id;
+
 -- name: UpdateExecutionManifestStatus :execrows
 UPDATE execution_manifests
 SET status = ?, disposition_reason = ?, completed_at = ?, duration_ms = ?,

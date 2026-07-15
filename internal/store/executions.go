@@ -962,6 +962,22 @@ func (s *Store) ListExecutionManifests(ctx context.Context, limit int) ([]Execut
 	return result, nil
 }
 
+func (s *Store) ListStaleExecutionManifests(ctx context.Context, before time.Time) ([]ExecutionManifest, error) {
+	rows, err := s.queries.ListStaleExecutionManifests(ctx, before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ExecutionManifest, 0, len(rows))
+	for _, row := range rows {
+		manifest, hydrateErr := s.hydrateExecutionManifest(ctx, row)
+		if hydrateErr != nil {
+			return nil, hydrateErr
+		}
+		result = append(result, *manifest)
+	}
+	return result, nil
+}
+
 func (s *Store) hydrateExecutionManifest(ctx context.Context, row db.ExecutionManifest) (*ExecutionManifest, error) {
 	attempt, err := s.queries.GetGenerationAttempt(ctx, row.AttemptID)
 	if err != nil {

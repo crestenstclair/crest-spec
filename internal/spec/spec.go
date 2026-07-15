@@ -71,6 +71,7 @@ type specStore interface {
 	GetExecutionManifest(ctx context.Context, id string) (*store.ExecutionManifest, error)
 	GetExecutionManifestByAttempt(ctx context.Context, attemptID string) (*store.ExecutionManifest, error)
 	ListExecutionManifests(ctx context.Context, limit int) ([]store.ExecutionManifest, error)
+	ListStaleExecutionManifests(ctx context.Context, before time.Time) ([]store.ExecutionManifest, error)
 	SubmitCandidate(ctx context.Context, executionID string, files []store.CandidateFile) (*store.CandidateSet, error)
 	TransitionExecution(ctx context.Context, input store.ExecutionTransition) (*store.ExecutionManifest, error)
 	FinalizeCandidate(ctx context.Context, input store.CandidateDisposition) (*store.ExecutionManifest, error)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/kelseyhightower/envconfig"
 )
@@ -11,14 +12,15 @@ import (
 type Config struct {
 	HTTPAddr string `envconfig:"HTTP_ADDR"`
 
-	GenerateModel    string `envconfig:"GENERATE_MODEL" default:"claude-sonnet-5"`
-	MaxRetries       int    `envconfig:"MAX_RETRIES" default:"3"`
-	WaveMaxRetries   int    `envconfig:"WAVE_MAX_RETRIES" default:"2"`
-	SpecDir          string `envconfig:"SPEC_DIR" default:"./spec"`
-	TypeCheckCommand string `envconfig:"TYPE_CHECK_CMD"`
-	TestCommand      string `envconfig:"TEST_CMD"`
-	Mode             string `envconfig:"MODE" default:"default"`
-	Evolve           string `envconfig:"EVOLVE" default:"all"`
+	GenerateModel    string        `envconfig:"GENERATE_MODEL" default:"claude-sonnet-5"`
+	MaxRetries       int           `envconfig:"MAX_RETRIES" default:"3"`
+	WaveMaxRetries   int           `envconfig:"WAVE_MAX_RETRIES" default:"2"`
+	SpecDir          string        `envconfig:"SPEC_DIR" default:"./spec"`
+	TypeCheckCommand string        `envconfig:"TYPE_CHECK_CMD"`
+	TestCommand      string        `envconfig:"TEST_CMD"`
+	Mode             string        `envconfig:"MODE" default:"default"`
+	Evolve           string        `envconfig:"EVOLVE" default:"all"`
+	ExecutionTimeout time.Duration `envconfig:"EXECUTION_TIMEOUT" default:"30m"`
 }
 
 func New() (*Config, error) {

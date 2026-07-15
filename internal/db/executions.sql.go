@@ -1160,6 +1160,74 @@ func (q *Queries) ListRecentFailureClassifications(ctx context.Context, limit in
 	return items, nil
 }
 
+const listStaleExecutionManifests = `-- name: ListStaleExecutionManifests :many
+SELECT id, attempt_id, context_manifest_id, protocol_version, idempotency_key, plan_operation_id, role, role_policy_version, context_policy, host_name, host_version, provider, model, inference_config_json, inference_config_hash, agent_config_json, agent_config_hash, tool_permissions_json, tool_permissions_hash, template_hashes_json, template_hashes_hash, system_instructions_blob, context_hash, host_session_id, status, disposition_reason, started_at, completed_at, duration_ms, input_tokens, output_tokens, cost_usd, created_at, updated_at, host_commit_ref, goal_progress_json, goal_progress_hash FROM execution_manifests
+WHERE status IN ('executing', 'candidate_submitted', 'validating')
+  AND updated_at < ?
+ORDER BY updated_at, id
+`
+
+func (q *Queries) ListStaleExecutionManifests(ctx context.Context, updatedAt string) ([]ExecutionManifest, error) {
+	rows, err := q.db.QueryContext(ctx, listStaleExecutionManifests, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExecutionManifest
+	for rows.Next() {
+		var i ExecutionManifest
+		if err := rows.Scan(
+			&i.ID,
+			&i.AttemptID,
+			&i.ContextManifestID,
+			&i.ProtocolVersion,
+			&i.IdempotencyKey,
+			&i.PlanOperationID,
+			&i.Role,
+			&i.RolePolicyVersion,
+			&i.ContextPolicy,
+			&i.HostName,
+			&i.HostVersion,
+			&i.Provider,
+			&i.Model,
+			&i.InferenceConfigJson,
+			&i.InferenceConfigHash,
+			&i.AgentConfigJson,
+			&i.AgentConfigHash,
+			&i.ToolPermissionsJson,
+			&i.ToolPermissionsHash,
+			&i.TemplateHashesJson,
+			&i.TemplateHashesHash,
+			&i.SystemInstructionsBlob,
+			&i.ContextHash,
+			&i.HostSessionID,
+			&i.Status,
+			&i.DispositionReason,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.DurationMs,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CostUsd,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HostCommitRef,
+			&i.GoalProgressJson,
+			&i.GoalProgressHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resolveFailureClassification = `-- name: ResolveFailureClassification :execrows
 UPDATE failure_classifications
 SET resolution = ?, resolved_by_attempt = ?, resolved_at = ?

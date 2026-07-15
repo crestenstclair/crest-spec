@@ -82,6 +82,9 @@ func (f *fakeSpec) InspectExecution(ctx context.Context, id, attemptID string) (
 func (f *fakeSpec) ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error) {
 	return nil, nil
 }
+func (f *fakeSpec) RecoverExecutions(ctx context.Context, before time.Time) (int, error) {
+	return 0, nil
+}
 func (f *fakeSpec) ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error) {
 	return nil, nil
 }

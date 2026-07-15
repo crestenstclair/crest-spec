@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,12 +20,14 @@ func TestNew_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.HTTPAddr)
 	assert.Empty(t, cfg.TypeCheckCommand)
 	assert.Empty(t, cfg.TestCommand)
+	assert.Equal(t, 30*time.Minute, cfg.ExecutionTimeout)
 }
 
 func TestNew_EnvOverrides(t *testing.T) {
 	t.Setenv("CREST_SPEC_GENERATE_MODEL", "claude-opus-4-8")
 	t.Setenv("CREST_SPEC_MAX_RETRIES", "5")
 	t.Setenv("CREST_SPEC_SPEC_DIR", "/tmp/specs")
+	t.Setenv("CREST_SPEC_EXECUTION_TIMEOUT", "45m")
 
 	cfg, err := New()
 	require.NoError(t, err)
@@ -32,4 +35,5 @@ func TestNew_EnvOverrides(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-8", cfg.GenerateModel)
 	assert.Equal(t, 5, cfg.MaxRetries)
 	assert.Equal(t, "/tmp/specs", cfg.SpecDir)
+	assert.Equal(t, 45*time.Minute, cfg.ExecutionTimeout)
 }
