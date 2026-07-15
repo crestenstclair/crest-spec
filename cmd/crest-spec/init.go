@@ -284,26 +284,23 @@ Never resolve a resource for a failure outside its owned files. Never treat diff
 
 func crestVerifierAgent() string {
 	return `---
-description: Verifies one crest-spec behavioral check with a real witness and degenerate stub.
+description: Triggers and inspects one crest-spec declared behavioral witness.
 mode: subagent
 model: anthropic/claude-sonnet-4-6
 permission:
   task: deny
-  edit: allow
-  bash: allow
-  external_directory:
-    "*": ask
-    "/tmp/**": allow
+  edit: deny
+  bash: deny
 ---
-You verify exactly one crest-spec behavioral check.
+You verify exactly one declared crest-spec witness.
 
-Inputs must include resource_id, check_id, behavior, and check_json.
+Inputs must include witness_id and may include session_id and a compatible legacy check_id.
 
-Use spec/inspect to understand the public interface. Do not read committed implementation files for the behavior under test. Create a real witness and a degenerate stub baseline outside the project tree, preferably under /tmp. Run both. Extract typed observations. Call spec/verify with both real_observation and stub_observation. If spec/verify passes, call spec/graduate. Clean up temporary harnesses.
+Use spec/verification_definitions to inspect the immutable definition. Call spec/verify with witness_id, session_id, and optional check_id. crest-spec executes both declared commands, captures their provenance, and parses their observations; never supply observations yourself. Inspect the returned run with spec/verification_inspect. If a legacy check_id passed, call spec/graduate.
 
-A missing observation, missing stub field, type mismatch, or stub that passes is a verification failure, not a pass.
+A malformed observation, command failure, source-tree mismatch, or negative case that passes is a verification failure, not a pass.
 
-Return structured data: check_id, passed, theater, reason, graduated.
+Return structured data: witness_id, validation_run_id, classification, reason, and legacy graduation status when applicable.
 `
 }
 

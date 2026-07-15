@@ -69,6 +69,18 @@ func TestGoalOrientedCrestSynthExampleLoadsAndTraces(t *testing.T) {
 	require.Equal(t, "evidence.audible_witness", project.Witnesses["audible_a4"].Evidence[0])
 }
 
+func TestWorkstreamCrestSynthSampleLoadsAsOneProject(t *testing.T) {
+	dir := filepath.Join(filepath.Dir(fixtureSpecDir()), "..", "..", "docs", "plans", "goal-oriented-crest-spec", "examples")
+	project, err := Load(dir)
+	require.NoError(t, err)
+	registry, err := NewRegistry(project)
+	require.NoError(t, err)
+	require.Empty(t, registry.MissingCapabilities)
+	require.Len(t, project.Witnesses, 5)
+	require.Contains(t, project.Witnesses["audible_tone"].Resources, "domainService.Engine.EngineRenderer")
+	require.Equal(t, []string{"evidence.audible_tone"}, project.Witnesses["audible_tone"].Evidence)
+}
+
 // TestPhasesLoadAndResolve: phases/phase-N/ are the ORIGINAL phased spec,
 // hydrated — each directory holds base.cue + the cumulative phase files +
 // the winning override per asset, resolved (what the retired

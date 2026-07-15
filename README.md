@@ -154,7 +154,7 @@ implementation architecture. Each DDD resource declares what capability it
 contributes to, and SQLite-backed context/execution manifests record how an
 agent attempted that resource without adding runtime metadata to the CUE spec.
 
-**Your agent host is the orchestrator.** Claude Code is the reference host (via the bundled `spec-generate` skill/workflow); OpenCode is supported via `crest-spec init`; any agentic CLI with an MCP client and native sub-agent dispatch can drive it — see [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md) for the contract. The host spawns one sub-agent per resource per wave; each fetches its scoped prompt, writes code, and commits through the server's validation gate. The server is the quality gate; the host does the writing — and never grades its own work: mechanical validations gate the commit, independent falsification-gated behavioral checks gate the wave, and `spec/finish` refuses to seal a session while any check is unresolved.
+**Your agent host is the orchestrator.** Claude Code is the reference host (via the bundled `spec-generate` skill/workflow); OpenCode is supported via `crest-spec init`; any agentic CLI with an MCP client and native sub-agent dispatch can drive it — see [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md) for the contract. The host spawns one sub-agent per resource per wave; each fetches its scoped prompt, writes code, and commits through the server's validation gate. The server is the quality gate; the host does the writing and never grades its own work: mechanical validations gate the commit, engine-executed real/negative witnesses prove behavior, and `spec/finish` requires evidence-backed project completion for specs using the new model.
 
 ## Proven on real projects
 
@@ -237,8 +237,8 @@ A plan/apply lifecycle: the **server** plans and checks; the **host** fills.
 1. **Declare** — Write your domain as CUE in the spec directory: contexts, aggregates, value objects, domain/application services, repositories, ports, adapters, and assets. Each is a *resource*.
 2. **Coordinate** (`spec/plan`, `spec/begin`) — The server diffs the CUE spec against SQLite state by declaration hash, computes a dependency graph, and returns an execution plan ordered into waves, plus any pending destroys for removed resources. Destroys never auto-execute — `spec/confirm_destroys` is human-gated.
 3. **Fill** (`spec/next` → `spec/context` → `spec/execution_start` → `spec/commit`) — For each resource in a wave, `spec/context` creates an immutable attempt and selects a budgeted, goal-directed prompt: target goals and acceptance, the task and resource contract, dependencies, consumers, relevant code, design constraints, and retry evidence. Included, truncated, and omitted sources—and the exact bytes served—are stored in SQLite before dispatch. The host then registers its exact role, model, settings, tools, permissions, templates, and context hash before the sub-agent authors candidate files.
-4. **Check** — `spec/commit` accepts candidate files by immutable attempt ID, snapshots them in SQLite, writes them, and runs the resource's declared validations fail-closed (a validation that cannot launch is a failure). Acceptance or rejection, usage, goal progress, failures, and retry handoffs are recorded atomically. Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`, below).
-5. **Finish** (`spec/finish`) — Waves run until none remain. Finish refuses while behavioral checks are unresolved (`force` is an explicit human decision). Optionally a reflection pass distils cross-session learnings via `spec/record_learnings` — real examples from crest-ci include "schedule manifest assets before whole-tree gates" (auto-applied 32×) and "verify the file ledger before integration gates."
+4. **Check** — `spec/commit` accepts candidate files by immutable attempt ID, snapshots them in SQLite, writes them, and runs the resource's declared validations fail-closed (a validation that cannot launch is a failure). Acceptance or rejection, usage, goal progress, failures, and retry handoffs are recorded atomically. For behavioral proof, `spec/verify` executes a declared witness and its declared negative case itself, then persists the complete provenance chain.
+5. **Finish** (`spec/finish`) — Waves run until none remain. Specs using named validations or witnesses cannot finish until the SQLite-derived project state is `complete`; legacy unresolved behavioral checks also remain fail-closed. `force` is an explicit human decision and reports—not rewrites—the incomplete state. Optionally a reflection pass distils cross-session learnings via `spec/record_learnings`.
 
 Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec changes, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. Retries and modifications run in **UPDATE mode**: the existing files are served back with the failure, and the generator makes the minimal edit — a blank-slate rewrite happens only for brand-new resources. Generated files can be **co-owned** by multiple resources (a shared module survives when one of its owners is destroyed), and destroying a resource cascades its behavioral tasks and checks with it.
 
@@ -266,7 +266,9 @@ Before generation, design agents commit each bounded context's observable contra
 }
 ```
 
-To pass a check, an independent verifier sub-agent (which never reads the implementation under test) must submit **two** observations to `spec/verify`: one from a **real witness** exercising the committed code, and one from a **degenerate stub**. The check passes only if the witness satisfies the predicates *and* the stub fails them — a check a stub can pass proves nothing and is recorded as theater. Only a verified pass can `spec/graduate`, and `spec/finish` refuses while any check is pending, failed, theater, or malformed.
+Executable witnesses are named in CUE. Each declares the real command, a distinct degenerate or negative command, one typed stdout observation schema, predicates, and links to goals, capabilities, resources, and required evidence. `spec/verify` accepts a `witness_id`—not observations—and crest-spec executes both commands against the same source tree, captures stdout/stderr/artifacts and executable/source hashes, parses both outputs through the same schema, and applies the falsification gate. The real execution must pass while the negative execution fails; if both pass, the run is classified as theater. Malformed output and execution failure also fail closed.
+
+Definitions, runs, commands, parsed observations, predicate results, evidence currency, and invalidations are normalized SQLite state. When reconciliation changes or removes a contributing resource, its prior evidence becomes stale and a previously complete goal can become regressed until re-verified. The legacy design/task check ledger remains available during migration: a declared witness may advance a compatible `check_id`, after which `spec/graduate` retains its existing behavior.
 
 ## MCP tool surface
 
@@ -281,6 +283,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts) |
 | `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | List, reconstruct, and structurally compare immutable generation contexts |
 | `spec/executions`, `spec/execution_inspect`, `spec/execution_roles` | Inspect execution provenance, lifecycle, candidate linkage, and closed role policies |
+| `spec/verification_definitions`, `spec/verifications`, `spec/verification_inspect` | Inspect named validation/witness definitions and the complete SQLite-backed evidence chain |
 | `spec/failures`, `spec/handoffs` | Inspect classified failures, corrective routes, resolutions, and role handoffs |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db |
 | `spec/sql` | Read-only SQL over the whole state db — the escape hatch |
@@ -295,7 +298,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/resolve` | Attach triage guidance to a failed resource and reset it |
 | `spec/skip` | Skip a resource — requires quoting the spec contradiction |
 | `spec/verify_wave`, `spec/wave_status` | Whole-tree validation gate between waves |
-| `spec/finish` | Finalize; fail-closed while behavioral checks are unresolved |
+| `spec/finish` | Finalize; named-validation/witness specs require evidence-backed project completion, and legacy unresolved checks still block |
 | `spec/unlock` | Break a stale lock after a crash |
 
 **Generation** (called by generator sub-agents)
@@ -315,7 +318,7 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 |------|---------|
 | `spec/design_commit` | Commit a bounded context's observable contract |
 | `spec/tasks_commit` | Commit per-resource tasks/checks; structurally validated at authoring time |
-| `spec/verify` | Submit real-witness + degenerate-stub observations for one check |
+| `spec/verify` | Execute a declared witness and negative case by `witness_id`; caller-supplied observations are rejected |
 | `spec/graduate` | Promote a check — only after a real verified pass |
 
 **Spec evolution & setup** (orchestrator): `spec/amend`, `spec/list_amendments`, `spec/apply_amendments`, `spec/graduate_amendment` (a ledger of spec-resident corrections), `spec/record_learnings`, `spec/learnings`, `spec/promote_learnings` (cross-session lessons folded into future prompts), and `spec/bootstrap`, `spec/import`, `spec/evolve`, `spec/mode`, `spec/prompt`, `spec/vacuum`.
@@ -336,7 +339,7 @@ crest-spec is host-agnostic by contract: the engine never dispatches agents, so 
 
 crest-spec deliberately does **not**:
 
-- **Call an LLM or spawn subprocesses.** The server is a state engine. All generation is driven by your host's own sub-agents — there are no `run_prompt` / `dispatch` tools, and no `spec/apply` / `spec/run_wave`. The one exception: `spec/commit` runs the *validation commands declared in your spec* against the candidate files — deterministic commands, not agents.
+- **Call an LLM or spawn generation processes.** The server is a state engine. All generation is driven by your host's own sub-agents — there are no `run_prompt` / `dispatch` tools, and no `spec/apply` / `spec/run_wave`. The engine only launches commands explicitly declared in the spec: commit/wave validations and controlled real/negative witnesses. It never launches agents.
 - **Generate from prose.** Resources are declared in CUE with DDD structure (contexts, aggregates, value objects, ports…), not free-form feature descriptions.
 - **Pin a language or framework.** `meta.language`, your validation commands, and the asset kinds in your spec decide the target. crest-synth is Rust; crest-ci is Elixir/OTP; the e2e spec targets Go.
 - **Judge correctness on your behalf.** It runs the mechanical validations *you* declare and mechanically enforces the behavioral falsification gate. It never grades semantics itself — and neither does the generator: there are no self-judged verdicts anywhere in the loop.

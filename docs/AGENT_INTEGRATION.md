@@ -8,10 +8,11 @@ failure.
 ## The model, in one paragraph
 
 **crest-spec is a passive state engine served over MCP. Your agent is the
-orchestrator.** The engine never spawns processes, never calls an LLM, never
-interprets a natural-language task, and never dispatches sub-agents. It holds
+orchestrator.** The engine never calls an LLM, interprets a natural-language
+task, or dispatches sub-agents. It only launches validation and witness
+commands explicitly declared in CUE. It holds
 the spec-derived plan, session state, per-resource prompts, the commit
-validation gate, and the behavioral-check ledger — and it answers tool calls.
+validation gate, and the verification/evidence ledger — and it answers tool calls.
 Everything that *thinks* or *generates* is an agent on YOUR side of the MCP
 boundary, spawned by YOUR host's native sub-agent mechanism.
 
@@ -44,15 +45,16 @@ and submit their output through the gate.
 ┌──────────────────────────────────────────────┐
 │ crest-spec (MCP server, pure state engine)   │
 │  CUE spec → registry → plan/waves            │
-│  SQLite: sessions, files, checks, learnings  │
-│  Validation gate (runs the spec's commands)  │
+│  SQLite: sessions, contexts, executions,     │
+│          validations, evidence, learnings    │
+│  Validation/witness gate (declared commands) │
 └──────────────────────────────────────────────┘
 ```
 
-The ONE exception to "never runs anything": `spec/commit` executes the
-*validation commands declared in the spec* (`cargo test`, `make demo-...`)
-against the candidate files. That is the gate doing its job — deterministic
-commands from the spec, not agents, not LLM calls.
+The only commands crest-spec runs are those declared in the specification:
+commit/wave validations (`cargo test`, `make demo-...`) and controlled
+behavioral witnesses. These are deterministic verification commands, not
+agents or LLM calls.
 
 ## Division of responsibilities
 
@@ -63,7 +65,7 @@ commands from the spec, not agents, not LLM calls.
 | Serve and persist goal-directed per-resource context | ✅ | |
 | Validate the execution protocol, roles, candidates, and failure routes | ✅ | |
 | Run validation commands and accept/reject commits | ✅ | |
-| Track behavioral checks (verify/graduate ledger) | ✅ | |
+| Execute declared real/negative witnesses and persist evidence | ✅ | |
 | Persist sessions across crashes/restarts | ✅ | |
 | Decide WHEN to run a session | | ✅ |
 | Spawn generator/verifier sub-agents | | ✅ (host-native mechanism) |
@@ -127,6 +129,7 @@ spawned for one resource/check.
 | `spec/validate` | Parse + registry-check the spec. Run after every spec edit. |
 | `spec/plan` | Diff spec vs state → `create/modify/destroy` actions + waves. Review before running; a correct increment is small. |
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts). |
+| `spec/verification_definitions`, `spec/verifications`, `spec/verification_inspect` | List named validation/witness definitions and inspect exact commands, hashes, output, parsed observations, predicates, and evidence currency. |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db. |
 | `spec/sql` | Read-only SQL over the whole state db. The escape hatch for any question the views don't answer. |
 
@@ -139,7 +142,7 @@ spawned for one resource/check.
 | `spec/resolve` | Record triage: attach guidance to a failed resource and reset it for another attempt (UPDATE mode will carry the guidance). |
 | `spec/skip` | Explicitly skip a resource — requires quoting the spec contradiction that justifies it. Not a convenience. |
 | `spec/verify_wave`, `spec/wave_status` | Wave-level gate/status for whole-tree validation between waves. |
-| `spec/finish` | Close the session. **Fail-closed**: refuses while behavioral checks are pending/failed/theater/malformed for session resources. `force` exists but is a human decision. |
+| `spec/finish` | Close the session. **Fail-closed**: named-validation/witness specs require the derived project state to be `complete`; legacy task checks must also be resolved. `force` exists but is a human decision and returns the actual incomplete status/reason/goals. |
 | `spec/unlock` | Break a stale lock after a crash (human/orchestrator recovery). |
 
 ### Generation (called BY your generator sub-agents)
@@ -188,13 +191,13 @@ contract and dependency graph. Goals/capabilities supply project intent and
 acceptance traceability. Context and execution manifests are runtime
 governance records stored only in SQLite.
 
-### Behavioral verification (called BY your verifier sub-agents)
+### Behavioral verification (triggered BY your orchestrator or verifier agents)
 | Tool | Purpose |
 |---|---|
 | `spec/design_commit` | Commit a bounded context's observable contract (behaviors + typed predicates). |
 | `spec/tasks_commit` | Commit per-resource tasks/checks derived from the contract. Structurally validated: prose or expression field names, missing bounds, etc. are rejected HERE, at authoring time. |
-| `spec/verify` | Submit a real-witness observation AND a degenerate-stub observation for one check. Fail-closed: missing fields, empty stubs, or stub-passes (theater) are recorded against the check. |
-| `spec/graduate` | Promote a passed check. Only valid after a real `spec/verify` pass. |
+| `spec/verify` | Execute a named CUE witness by `witness_id`. crest-spec runs its real and negative commands against one source tree, parses both through one schema, applies the falsification gate, and stores the full provenance. Caller observations are rejected. An optional compatible `check_id` advances the legacy task ledger. |
+| `spec/graduate` | Promote a passed legacy task check. Named witness evidence does not require graduation. |
 
 ### Amendments & learnings (optional, orchestrator)
 `spec/amend`, `spec/list_amendments`, `spec/apply_amendments`,
@@ -240,13 +243,15 @@ loop:
       # next spec/next re-serves them in UPDATE mode with your guidance
   if stalled N times on the same resources: HALT LOUDLY. Never auto-skip.
 
-spec/finish(sessionId)               # refuses if behavioral checks unresolved
+spec/finish(sessionId)               # refuses until governed project completion is satisfied
 git commit the spec + generated code together
 ```
 
-Behavioral verification is a second loop with the same shape: one sub-agent
-per context for `design_commit`, one per resource for `tasks_commit`, one per
-check for witness/stub + `spec/verify` (+ `spec/graduate` on pass).
+Behavioral verification is a second loop: reconcile the named definitions,
+then call `spec/verify(witness_id, session_id?)` for each required witness.
+crest-spec—not the agent—runs and parses the real and negative cases. During
+migration, design/task agents may still populate the legacy check ledger; pass
+the compatible `check_id` to `spec/verify` and call `spec/graduate` afterward.
 
 ### Rules the orchestrator must respect
 
@@ -310,7 +315,8 @@ or sub-agent dispatcher.
 - **Two orchestrators against one project** (two sessions, or a session
   while another host is mid-wave). Locks will fight; cargo will fight.
 - **Self-reported success.** A sub-agent claiming "verified" without a
-  `spec/verify` row in the db did nothing. Reconcile against tables.
+  SQLite-backed validation run and current evidence did nothing. Inspect it
+  with `spec/verification_inspect`.
 - **Blank-slate retries.** If your sub-agent ignores the served previous
   attempt and errors, you've re-created the expensive failure mode UPDATE
   mode exists to prevent.

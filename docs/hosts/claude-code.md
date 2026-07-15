@@ -71,5 +71,5 @@ Reference HTTP-transport drivers live outside this repository in crest-synth und
 - Sub-agents call `spec/context`, register the exact host attempt through
   `spec/execution_start`, and call `spec/commit` by attempt ID directly.
 - Retries must use UPDATE-mode context.
-- Verification must be recorded through `spec/verify` and reconciled against engine state.
+- Verification must execute a declared witness through `spec/verify`; inspect the resulting SQLite-backed run and evidence rather than accepting agent-supplied observations.
 - `spec/skip` and `spec/finish force` are human-level decisions.
