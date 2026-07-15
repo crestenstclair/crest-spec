@@ -99,7 +99,7 @@ type specStore interface {
 	GetGeneration(id string) (*store.Generation, error)
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)
-	ReadOnlyQuery(query string) ([]map[string]interface{}, error)
+	ReadOnlyQueryContext(ctx context.Context, query string) ([]map[string]interface{}, error)
 	ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error)
 	IncrementLearningApplied(id string) error
 	ListLearnings(status string) ([]store.Learning, error)

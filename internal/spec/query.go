@@ -341,7 +341,7 @@ func (s *Spec) Vacuum(ctx context.Context, before time.Time) (int, error) {
 // ReadOnlyQuery executes a read-only SQL query and returns the results as
 // a slice of column-to-value maps.
 func (s *Spec) ReadOnlyQuery(ctx context.Context, query string) ([]map[string]interface{}, error) {
-	return s.store.ReadOnlyQuery(query)
+	return s.store.ReadOnlyQueryContext(ctx, query)
 }
 
 // ---------------------------------------------------------------------------

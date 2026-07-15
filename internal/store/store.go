@@ -12,7 +12,6 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/db"
 	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
 	"github.com/crestenstclair/crest-spec/migrations"
-	_ "modernc.org/sqlite"
 )
 
 // Job is the store's clean domain type for a job record.
@@ -143,41 +142,6 @@ type AgentNote struct {
 type Store struct {
 	sqlDB   *sql.DB
 	queries *db.Queries
-}
-
-// New opens a SQLite database at dbPath, configures it with WAL mode
-// and busy timeout, runs migrations, and returns a ready Store.
-func New(dbPath string) (*Store, error) {
-	sqlDB, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
-	}
-
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA foreign_keys=ON",
-	}
-	for _, p := range pragmas {
-		if _, err := sqlDB.Exec(p); err != nil {
-			sqlDB.Close()
-			return nil, fmt.Errorf("exec %q: %w", p, err)
-		}
-	}
-
-	queries := db.New(sqlDB)
-
-	s := &Store{
-		sqlDB:   sqlDB,
-		queries: queries,
-	}
-
-	if err := s.migrate(); err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return s, nil
 }
 
 // migrate applies any pending SQL migration files from the embedded FS.
@@ -1651,56 +1615,4 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		return total, fmt.Errorf("vacuum commit: %w", err)
 	}
 	return total, nil
-}
-
-// ---------------------------------------------------------------------------
-// ReadOnlyQuery — execute arbitrary SELECT queries
-// ---------------------------------------------------------------------------
-
-// ReadOnlyQuery executes a read-only SQL query against the database.
-// Only SELECT statements are allowed; any other statement is rejected.
-// Returns the result rows as a slice of column-name-to-value maps.
-func (s *Store) ReadOnlyQuery(query string) ([]map[string]interface{}, error) {
-	trimmed := strings.TrimSpace(query)
-	if len(trimmed) < 6 || strings.ToUpper(trimmed[:6]) != "SELECT" {
-		return nil, fmt.Errorf("only SELECT queries are allowed")
-	}
-
-	rows, err := s.sqlDB.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("columns: %w", err)
-	}
-
-	var results []map[string]interface{}
-	for rows.Next() {
-		values := make([]interface{}, len(cols))
-		ptrs := make([]interface{}, len(cols))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		row := make(map[string]interface{}, len(cols))
-		for i, col := range cols {
-			val := values[i]
-			// Convert []byte to string for readability
-			if b, ok := val.([]byte); ok {
-				val = string(b)
-			}
-			row[col] = val
-		}
-		results = append(results, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-
-	return results, nil
 }
