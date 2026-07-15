@@ -133,6 +133,10 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 		return nil, fmt.Errorf("project intent: %w", err)
 	}
 	intent.ResourceTrace = resourceTraceSnapshot(planResult.Registry)
+	intent.Verification, err = verificationDefinitionSnapshot(planResult.Registry)
+	if err != nil {
+		return nil, fmt.Errorf("verification definitions: %w", err)
+	}
 	if err := s.store.ReconcileProjectIntent(ctx, intent); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
 	}
@@ -634,7 +638,7 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 	s.runVerificationCommand(ctx, s.cfg.TestCommand, "test", resources, result)
 
 	if plan, err := s.Plan(ctx); err == nil && plan != nil {
-		s.runProjectValidations(ctx, []cuepkg.Validation(plan.Registry.Project.Validations), resources, result)
+		s.runProjectValidationsRecorded(ctx, plan.Registry.Project.Name, sessionID, []cuepkg.Validation(plan.Registry.Project.Validations), resources, result)
 	}
 
 	return result
@@ -660,20 +664,12 @@ func (s *Spec) runVerificationCommand(ctx context.Context, command, kind string,
 // runProjectValidations runs whole-crate validations declared at project level
 // (e.g. clippy/fmt/build/test) in the project root and records any failure as a
 // WaveError. Command output is already truncated by RunValidations.
-func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
+func (s *Spec) runProjectValidationsRecorded(ctx context.Context, projectName, sessionID string, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
 	if len(validations) == 0 {
 		return
 	}
 	cwd := filepath.Dir(s.cfg.SpecDir)
-	results, err := RunValidations(ctx, validations, cwd)
-	if err != nil {
-		result.Passed = false
-		result.Errors = append(result.Errors, WaveError{
-			Kind:    "project_validation",
-			Message: fmt.Sprintf("project validation error: %v", err),
-		})
-		return
-	}
+	results := s.executeAndRecordValidations(ctx, projectName, validations, cwd, validationProvenance{SessionID: sessionID})
 	for _, r := range results {
 		if r.Passed {
 			continue
@@ -683,6 +679,31 @@ func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.V
 			ResourceID: s.attributeErrorToResource(r.Message, resources),
 			Kind:       "project_validation",
 			Message:    fmt.Sprintf("%s: %s", r.Kind, r.Message),
+		})
+	}
+}
+
+// runProjectValidations is retained for focused validation tests and callers
+// that do not have a reconciled session. Operational wave verification uses
+// runProjectValidationsRecorded so every command has a SQLite run record.
+func (s *Spec) runProjectValidations(ctx context.Context, validations []cuepkg.Validation, resources []store.SessionResource, result *WaveVerifyResult) {
+	if len(validations) == 0 {
+		return
+	}
+	results, err := RunValidations(ctx, validations, filepath.Dir(s.cfg.SpecDir))
+	if err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{Kind: "project_validation", Message: fmt.Sprintf("project validation error: %v", err)})
+		return
+	}
+	for _, validation := range results {
+		if validation.Passed {
+			continue
+		}
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			ResourceID: s.attributeErrorToResource(validation.Message, resources),
+			Kind:       "project_validation", Message: fmt.Sprintf("%s: %s", validation.Kind, validation.Message),
 		})
 	}
 }

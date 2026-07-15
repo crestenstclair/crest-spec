@@ -62,6 +62,10 @@ func TestNew_AllTablesExist(t *testing.T) {
 		"candidate_files",
 		"failure_classifications",
 		"attempt_handoffs",
+		"verification_definitions",
+		"validation_runs",
+		"validation_executions",
+		"verification_evidence_records",
 	}
 
 	for _, table := range expected {

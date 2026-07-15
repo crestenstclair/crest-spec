@@ -326,7 +326,10 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 		return nil, fmt.Errorf("commit attempt: resource not found: %s", resourceID)
 	}
 	action, _ := actionForSession(sess, resourceID)
-	validations := s.executeCommitValidations(ctx, resource)
+	validations := s.executeCommitValidations(ctx, planResult.Registry.Project.Name, resource, validationProvenance{
+		SessionID: contextManifest.Attempt.SessionID, AttemptID: contextManifest.Attempt.ID,
+		ExecutionID: executionManifest.ID,
+	})
 	if failureMessage := firstFailureMessage(validations); failureMessage != "" {
 		category := execution.FailureImplementationError
 		if action.Category == "integrative" {
@@ -461,18 +464,12 @@ func (s *Spec) projectFilePath(path string) string {
 	return filepath.Join(filepath.Dir(s.cfg.SpecDir), filepath.FromSlash(path))
 }
 
-func (s *Spec) executeCommitValidations(ctx context.Context, resource cuepkg.Resource) []ValidationResult {
+func (s *Spec) executeCommitValidations(ctx context.Context, projectName string, resource cuepkg.Resource, provenance validationProvenance) []ValidationResult {
 	validations := resourceValidations(resource)
 	if len(validations) == 0 {
 		return nil
 	}
-	results, err := RunValidations(ctx, validations, filepath.Dir(s.cfg.SpecDir))
-	if err != nil {
-		return []ValidationResult{{
-			Kind: "validation", Passed: false, Message: fmt.Sprintf("validation could not run: %v", err),
-		}}
-	}
-	return results
+	return s.executeAndRecordValidations(ctx, projectName, validations, filepath.Dir(s.cfg.SpecDir), provenance)
 }
 
 func actionForSession(session *store.Session, resourceID string) (planpkg.PlannedAction, bool) {

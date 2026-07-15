@@ -32,6 +32,10 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 		return nil, fmt.Errorf("build project registry: %w", err)
 	}
 	snapshot.ResourceTrace = resourceTraceSnapshot(registry)
+	snapshot.Verification, err = verificationDefinitionSnapshot(registry)
+	if err != nil {
+		return nil, fmt.Errorf("verification definitions: %w", err)
+	}
 	if err := s.store.ReconcileProjectIntent(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
 	}
