@@ -50,7 +50,8 @@ func TestDestroySparesFilesWithOtherOwners(t *testing.T) {
 
 	sess, err := s.store.GetSession(st.sessionID)
 	require.NoError(t, err)
-	destroyed := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: otherID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	destroyed, err := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: otherID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	require.NoError(t, err)
 	require.Len(t, destroyed, 1)
 
 	// B's private file is gone; the shared file survives because A owns it too.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -245,40 +246,77 @@ func partitionActions(actions []planpkg.PlannedAction) (destroy, other []planpkg
 	return
 }
 
-func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID string) []DestroyedResource {
+func (s *Spec) executeDestroys(destroyActions []planpkg.PlannedAction, applyID string) ([]DestroyedResource, error) {
 	var destroyed []DestroyedResource
 	for _, a := range destroyActions {
 		actionID := uuid.NewString()
-		s.store.CreateApplyAction(actionID, applyID, a.ResourceID, "destroy")
+		if err := s.store.CreateApplyAction(actionID, applyID, a.ResourceID, "destroy"); err != nil {
+			return destroyed, fmt.Errorf("create destroy action for %s: %w", a.ResourceID, err)
+		}
+		fail := func(err error) ([]DestroyedResource, error) {
+			if updateErr := s.store.UpdateApplyAction(actionID, "failed", err.Error()); updateErr != nil {
+				err = errors.Join(err, fmt.Errorf("record destroy failure: %w", updateErr))
+			}
+			return destroyed, err
+		}
 
 		var deletedFiles []string
-		files, _ := s.store.GetGeneratedFiles(a.ResourceID)
+		files, err := s.store.GetGeneratedFiles(a.ResourceID)
+		if err != nil {
+			return fail(fmt.Errorf("list generated files for %s: %w", a.ResourceID, err))
+		}
+
+		// Resolve every ownership decision before touching the filesystem. A
+		// failed lookup is not evidence that a file is sole-owned; proceeding in
+		// that case could delete a shared file before a later lookup exposes the
+		// persistence failure.
+		var removable []store.GeneratedFile
 		for _, f := range files {
-			// A shared module file (src/lib.rs, mod.rs) survives as long as
-			// any other live resource owns it; only sole-owned files leave
-			// the disk with their resource.
-			if n, err := s.store.CountOtherFileOwners(f.Path, a.ResourceID); err == nil && n > 0 {
+			owners, err := s.store.CountOtherFileOwners(f.Path, a.ResourceID)
+			if err != nil {
+				return fail(fmt.Errorf("count other owners for %s: %w", f.Path, err))
+			}
+			if owners > 0 {
 				continue
 			}
-			if err := s.fs.Remove(s.projectFilePath(f.Path)); err == nil {
-				deletedFiles = append(deletedFiles, f.Path)
-			}
+			removable = append(removable, f)
 		}
-		s.store.DeleteGeneratedFiles(a.ResourceID)
-		s.store.DeleteDependencies(a.ResourceID)
+
+		for _, f := range removable {
+			if err := s.fs.Remove(s.projectFilePath(f.Path)); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return fail(fmt.Errorf("remove generated file %s: %w", f.Path, err))
+			}
+			deletedFiles = append(deletedFiles, f.Path)
+		}
+		if err := s.store.DeleteGeneratedFiles(a.ResourceID); err != nil {
+			return fail(fmt.Errorf("delete generated-file records for %s: %w", a.ResourceID, err))
+		}
+		if err := s.store.DeleteDependencies(a.ResourceID); err != nil {
+			return fail(fmt.Errorf("delete dependencies for %s: %w", a.ResourceID, err))
+		}
 		// Behavioral state goes with the resource — dangling checks for a
 		// destroyed resource would haunt every future reconcile.
-		s.store.DeleteChecksByResource(a.ResourceID)
-		s.store.DeleteTasksByResource(a.ResourceID)
-		s.store.DeleteResource(a.ResourceID)
-		s.store.UpdateApplyAction(actionID, "destroyed", "")
-
+		if err := s.store.DeleteChecksByResource(a.ResourceID); err != nil {
+			return fail(fmt.Errorf("delete behavioral checks for %s: %w", a.ResourceID, err))
+		}
+		if err := s.store.DeleteTasksByResource(a.ResourceID); err != nil {
+			return fail(fmt.Errorf("delete behavioral tasks for %s: %w", a.ResourceID, err))
+		}
+		if err := s.store.DeleteResource(a.ResourceID); err != nil {
+			return fail(fmt.Errorf("delete resource %s: %w", a.ResourceID, err))
+		}
 		destroyed = append(destroyed, DestroyedResource{
 			ResourceID:   a.ResourceID,
 			DeletedFiles: deletedFiles,
 		})
+		if err := s.store.UpdateApplyAction(actionID, "destroyed", ""); err != nil {
+			return destroyed, fmt.Errorf("complete destroy action for %s: %w", a.ResourceID, err)
+		}
 	}
-	return destroyed
+	return destroyed, nil
 }
 
 func (s *Spec) ConfirmDestroys(ctx context.Context, sessionID string, resourceIDs []string) ([]DestroyedResource, error) {
@@ -304,7 +342,7 @@ func (s *Spec) ConfirmDestroys(ctx context.Context, sessionID string, resourceID
 		}
 	}
 
-	return s.executeDestroys(destroyActions, sess.ApplyID), nil
+	return s.executeDestroys(destroyActions, sess.ApplyID)
 }
 
 func (s *Spec) seedSessionResources(sessionID string, waves [][]string, actionSets ...[]planpkg.PlannedAction) {
@@ -493,7 +531,10 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 	}
 
 	// Count from session_resources — the authoritative state store
-	allResources, _ := s.store.ListSessionResources(sessionID)
+	allResources, err := s.store.ListSessionResources(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list session resources: %w", err)
+	}
 
 	committed := 0
 	skipped := 0
@@ -562,9 +603,15 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 		reflectionPrompt, _ = s.reflector.BuildSessionPrompt(sessionID, sess.ApplyID)
 	}
 
-	s.store.UpdateSession(sessionID, status, sess.CurrentWave)
-	s.store.CompleteApply(sess.ApplyID)
-	s.store.ReleaseLock()
+	if err := s.store.UpdateSession(sessionID, status, sess.CurrentWave); err != nil {
+		return nil, fmt.Errorf("finalize session: %w", err)
+	}
+	if err := s.store.CompleteApply(sess.ApplyID); err != nil {
+		return nil, fmt.Errorf("complete apply: %w", err)
+	}
+	if err := s.store.ReleaseLock(); err != nil {
+		return nil, fmt.Errorf("release lock: %w", err)
+	}
 
 	return completionFields(&FinishResult{
 		Committed:        committed,
@@ -645,7 +692,15 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 	}
 
 	resources, err := s.store.ListSessionResourcesByWave(sessionID, waveIndex)
-	if err != nil || len(resources) == 0 {
+	if err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			Kind:    "session_resources",
+			Message: fmt.Sprintf("list wave resources: %v", err),
+		})
+		return result
+	}
+	if len(resources) == 0 {
 		return result
 	}
 
@@ -675,7 +730,14 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 	s.runVerificationCommand(ctx, s.cfg.TypeCheckCommand, "type_check", resources, result)
 	s.runVerificationCommand(ctx, s.cfg.TestCommand, "test", resources, result)
 
-	if plan, err := s.Plan(ctx); err == nil && plan != nil {
+	plan, err := s.Plan(ctx)
+	if err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			Kind:    "plan",
+			Message: fmt.Sprintf("load project validations: %v", err),
+		})
+	} else if plan != nil {
 		s.runProjectValidationsRecorded(ctx, plan.Registry.Project.Name, sessionID, []cuepkg.Validation(plan.Registry.Project.Validations), resources, result)
 	}
 
@@ -688,7 +750,15 @@ func (s *Spec) runVerificationCommand(ctx context.Context, command, kind string,
 	}
 	cwd := filepath.Dir(s.cfg.SpecDir)
 	_, stderr, exitCode, err := RunCommand(ctx, []string{"sh", "-c", command}, cwd)
-	if err != nil || exitCode == 0 {
+	if err != nil {
+		result.Passed = false
+		result.Errors = append(result.Errors, WaveError{
+			Kind:    kind,
+			Message: fmt.Sprintf("%s could not run: %v", kind, err),
+		})
+		return
+	}
+	if exitCode == 0 {
 		return
 	}
 	result.Passed = false

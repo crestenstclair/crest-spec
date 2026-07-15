@@ -118,7 +118,8 @@ func TestDestroyRemovesBehavioralState(t *testing.T) {
 
 	sess, err := s.store.GetSession(st.sessionID)
 	require.NoError(t, err)
-	destroyed := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: st.resourceID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	destroyed, err := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: st.resourceID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	require.NoError(t, err)
 	require.Len(t, destroyed, 1)
 
 	checks, err := s.store.ListChecksByResource(st.resourceID)
