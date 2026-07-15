@@ -213,7 +213,8 @@ CREATE TABLE evaluation_promotion_proposals (
     eligibility_reason    TEXT NOT NULL,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
-    FOREIGN KEY (run_id, variant_name) REFERENCES evaluation_run_variants(run_id, variant_name)
+    FOREIGN KEY (run_id, variant_name) REFERENCES evaluation_run_variants(run_id, variant_name),
+    UNIQUE (run_id, configuration_id, variant_name, change_kind, target_identity, change_blob)
 );
 CREATE INDEX idx_evaluation_promotions_status ON evaluation_promotion_proposals(status, created_at, id);
 

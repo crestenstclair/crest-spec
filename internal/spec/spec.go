@@ -10,6 +10,7 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/completion"
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/evolve"
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
@@ -102,6 +103,9 @@ type specStore interface {
 	ListLearnings(status string) ([]store.Learning, error)
 	CreateLearning(l store.Learning) error
 	UpdateLearningStatus(id, status string) error
+	CreateEvaluationPromotionProposal(ctx context.Context, runID, variantName, changeKind, targetIdentity string, change map[string]any, rollbackIdentity string) (*store.EvaluationPromotionProposal, error)
+	GetEvaluationPromotionProposal(ctx context.Context, id string) (*store.EvaluationPromotionProposal, error)
+	RecordEvaluationPromotionDecision(ctx context.Context, proposalID, decision, actor, reason string) (*store.EvaluationPromotionProposal, error)
 	UpsertAmendment(a store.Amendment) error
 	GetAmendment(resourceID, name string) (*store.Amendment, error)
 	ListAmendmentsByResource(resourceID string) ([]store.Amendment, error)
@@ -227,6 +231,13 @@ type PromoteResult struct {
 	Applied bool
 }
 
+// LearningPromotionResult combines the threshold preview with the immutable,
+// evaluation-backed proposal that a human can approve or reject.
+type LearningPromotionResult struct {
+	PromoteResult
+	Proposal *store.EvaluationPromotionProposal
+}
+
 // PromoteLearnings selects active learnings above the given thresholds and
 // either previews (apply=false) or durably writes (apply=true) them into the
 // per-language learned template. Promotion is human-gated: with apply=false this
@@ -244,6 +255,17 @@ type PromoteResult struct {
 // separating newline) and each promoted learning's status is set to "promoted"
 // so it is no longer injected at runtime.
 func (s *Spec) PromoteLearnings(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, apply bool, templatePath string) (PromoteResult, error) {
+	result, err := s.selectLearningPromotion(lang, minConfidence, minTimesApplied, templatePath)
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	if apply {
+		return result, fmt.Errorf("promote learnings: threshold-only apply is disabled; create an evaluation-backed proposal, record human approval, then apply that proposal")
+	}
+	return result, nil
+}
+
+func (s *Spec) selectLearningPromotion(lang string, minConfidence float64, minTimesApplied int, templatePath string) (PromoteResult, error) {
 	if minConfidence == 0 {
 		minConfidence = 0.8
 	}
@@ -282,22 +304,95 @@ func (s *Spec) PromoteLearnings(ctx context.Context, lang string, minConfidence 
 		Applied:       false,
 	}
 
-	if !apply {
-		return result, nil
-	}
-
-	if block != "" {
-		if err := s.appendLearnedTemplate(templatePath, block); err != nil {
-			return result, fmt.Errorf("append learned template: %w", err)
-		}
-		for _, l := range promotable {
-			if err := s.store.UpdateLearningStatus(l.ID, "promoted"); err != nil {
-				return result, fmt.Errorf("mark learning %s promoted: %w", l.ID, err)
-			}
-		}
-	}
-	result.Applied = true
 	return result, nil
+}
+
+// ProposeLearningPromotion binds the exact rendered learning change to a
+// qualifying evaluation variant and the current target-template identity.
+func (s *Spec) ProposeLearningPromotion(ctx context.Context, lang string, minConfidence float64, minTimesApplied int, templatePath, runID, variantName string) (LearningPromotionResult, error) {
+	preview, err := s.selectLearningPromotion(lang, minConfidence, minTimesApplied, templatePath)
+	if err != nil {
+		return LearningPromotionResult{}, err
+	}
+	if preview.MarkdownBlock == "" {
+		return LearningPromotionResult{PromoteResult: preview}, fmt.Errorf("propose learning promotion: no learnings satisfy the thresholds")
+	}
+	existing, readErr := s.fs.ReadFile(preview.TargetPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return LearningPromotionResult{PromoteResult: preview}, fmt.Errorf("read promotion target: %w", readErr)
+	}
+	learningIDs := make([]string, 0, len(preview.Promotable))
+	for _, learning := range preview.Promotable {
+		learningIDs = append(learningIDs, learning.ID)
+	}
+	proposal, err := s.store.CreateEvaluationPromotionProposal(ctx, runID, variantName, "learning", preview.TargetPath, map[string]any{
+		"language": lang, "learning_ids": learningIDs,
+		"markdown": preview.MarkdownBlock, "target_path": preview.TargetPath,
+	}, contextmanifest.Hash(string(existing)))
+	if err != nil {
+		return LearningPromotionResult{PromoteResult: preview}, err
+	}
+	return LearningPromotionResult{PromoteResult: preview, Proposal: proposal}, nil
+}
+
+func (s *Spec) DecideLearningPromotion(ctx context.Context, proposalID, decision, actor, reason string) (*store.EvaluationPromotionProposal, error) {
+	if decision != "approved" && decision != "rejected" {
+		return nil, fmt.Errorf("decide learning promotion: decision must be approved or rejected")
+	}
+	return s.store.RecordEvaluationPromotionDecision(ctx, proposalID, decision, actor, reason)
+}
+
+// ApplyLearningPromotion applies only the exact approved proposal and refuses
+// if the target has changed since the proposal captured its rollback identity.
+func (s *Spec) ApplyLearningPromotion(ctx context.Context, proposalID, actor, reason string) (*store.EvaluationPromotionProposal, error) {
+	proposal, err := s.store.GetEvaluationPromotionProposal(ctx, proposalID)
+	if err != nil {
+		return nil, err
+	}
+	if proposal.ChangeKind != "learning" || proposal.Status != "approved" {
+		return nil, fmt.Errorf("apply learning promotion: proposal must be an approved learning change")
+	}
+	targetPath, _ := proposal.Change["target_path"].(string)
+	markdown, _ := proposal.Change["markdown"].(string)
+	learningIDs, idsOK := promotionLearningIDs(proposal.Change["learning_ids"])
+	if targetPath == "" || targetPath != proposal.TargetIdentity || markdown == "" || !idsOK || len(learningIDs) == 0 {
+		return nil, fmt.Errorf("apply learning promotion: proposal change payload is malformed")
+	}
+	existing, readErr := s.fs.ReadFile(targetPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("read promotion target: %w", readErr)
+	}
+	if contextmanifest.Hash(string(existing)) != proposal.RollbackIdentity {
+		return nil, fmt.Errorf("apply learning promotion: target changed after proposal; create a new proposal")
+	}
+	if err := s.appendLearnedTemplate(targetPath, markdown); err != nil {
+		return nil, fmt.Errorf("append learned template: %w", err)
+	}
+	for _, id := range learningIDs {
+		if err := s.store.UpdateLearningStatus(id, "promoted"); err != nil {
+			return nil, fmt.Errorf("mark learning %s promoted: %w", id, err)
+		}
+	}
+	return s.store.RecordEvaluationPromotionDecision(ctx, proposalID, "applied", actor, reason)
+}
+
+func promotionLearningIDs(value any) ([]string, bool) {
+	switch ids := value.(type) {
+	case []string:
+		return ids, true
+	case []any:
+		result := make([]string, 0, len(ids))
+		for _, raw := range ids {
+			id, ok := raw.(string)
+			if !ok || id == "" {
+				return nil, false
+			}
+			result = append(result, id)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 // appendLearnedTemplate appends block to the learned template at path, creating

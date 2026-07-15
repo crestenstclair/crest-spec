@@ -403,6 +403,126 @@ func (q *Queries) GetEvaluationDataset(ctx context.Context, id string) (Evaluati
 	return i, err
 }
 
+const getEvaluationPromotionProposal = `-- name: GetEvaluationPromotionProposal :one
+SELECT proposal.id, proposal.run_id, proposal.configuration_id, proposal.variant_name, proposal.change_kind, proposal.target_identity, proposal.change_blob, proposal.rollback_identity, proposal.status, proposal.eligibility_reason, proposal.created_at, proposal.updated_at, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE proposal.id = ?
+`
+
+type GetEvaluationPromotionProposalRow struct {
+	ID                        string
+	RunID                     string
+	ConfigurationID           string
+	VariantName               string
+	ChangeKind                string
+	TargetIdentity            string
+	ChangeBlob                string
+	RollbackIdentity          string
+	Status                    string
+	EligibilityReason         string
+	CreatedAt                 string
+	UpdatedAt                 string
+	ConfigurationName         string
+	ConfigurationIdentityHash string
+	ChangeContent             []byte
+}
+
+func (q *Queries) GetEvaluationPromotionProposal(ctx context.Context, id string) (GetEvaluationPromotionProposalRow, error) {
+	row := q.db.QueryRowContext(ctx, getEvaluationPromotionProposal, id)
+	var i GetEvaluationPromotionProposalRow
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.ConfigurationID,
+		&i.VariantName,
+		&i.ChangeKind,
+		&i.TargetIdentity,
+		&i.ChangeBlob,
+		&i.RollbackIdentity,
+		&i.Status,
+		&i.EligibilityReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigurationName,
+		&i.ConfigurationIdentityHash,
+		&i.ChangeContent,
+	)
+	return i, err
+}
+
+const getEvaluationPromotionProposalByIdentity = `-- name: GetEvaluationPromotionProposalByIdentity :one
+SELECT proposal.id, proposal.run_id, proposal.configuration_id, proposal.variant_name, proposal.change_kind, proposal.target_identity, proposal.change_blob, proposal.rollback_identity, proposal.status, proposal.eligibility_reason, proposal.created_at, proposal.updated_at, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE proposal.run_id = ? AND proposal.configuration_id = ?
+  AND proposal.variant_name = ? AND proposal.change_kind = ?
+  AND proposal.target_identity = ? AND proposal.change_blob = ?
+`
+
+type GetEvaluationPromotionProposalByIdentityParams struct {
+	RunID           string
+	ConfigurationID string
+	VariantName     string
+	ChangeKind      string
+	TargetIdentity  string
+	ChangeBlob      string
+}
+
+type GetEvaluationPromotionProposalByIdentityRow struct {
+	ID                        string
+	RunID                     string
+	ConfigurationID           string
+	VariantName               string
+	ChangeKind                string
+	TargetIdentity            string
+	ChangeBlob                string
+	RollbackIdentity          string
+	Status                    string
+	EligibilityReason         string
+	CreatedAt                 string
+	UpdatedAt                 string
+	ConfigurationName         string
+	ConfigurationIdentityHash string
+	ChangeContent             []byte
+}
+
+func (q *Queries) GetEvaluationPromotionProposalByIdentity(ctx context.Context, arg GetEvaluationPromotionProposalByIdentityParams) (GetEvaluationPromotionProposalByIdentityRow, error) {
+	row := q.db.QueryRowContext(ctx, getEvaluationPromotionProposalByIdentity,
+		arg.RunID,
+		arg.ConfigurationID,
+		arg.VariantName,
+		arg.ChangeKind,
+		arg.TargetIdentity,
+		arg.ChangeBlob,
+	)
+	var i GetEvaluationPromotionProposalByIdentityRow
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.ConfigurationID,
+		&i.VariantName,
+		&i.ChangeKind,
+		&i.TargetIdentity,
+		&i.ChangeBlob,
+		&i.RollbackIdentity,
+		&i.Status,
+		&i.EligibilityReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigurationName,
+		&i.ConfigurationIdentityHash,
+		&i.ChangeContent,
+	)
+	return i, err
+}
+
 const getEvaluationRun = `-- name: GetEvaluationRun :one
 SELECT id, dataset_id, name, status, metric_policy_json, metric_policy_hash, minimum_sample_size, practical_significance, require_held_out, conclusion, winning_variant, conclusion_reason, created_at, started_at, completed_at FROM evaluation_runs WHERE id = ?
 `
@@ -870,6 +990,115 @@ func (q *Queries) ListEvaluationMetricObservationsByRun(ctx context.Context, run
 			&i.CaseID,
 			&i.VariantName,
 			&i.Split,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationPromotionDecisions = `-- name: ListEvaluationPromotionDecisions :many
+SELECT id, proposal_id, decision, actor, reason, created_at FROM evaluation_promotion_decisions
+WHERE proposal_id = ? ORDER BY created_at, id
+`
+
+func (q *Queries) ListEvaluationPromotionDecisions(ctx context.Context, proposalID string) ([]EvaluationPromotionDecision, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationPromotionDecisions, proposalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvaluationPromotionDecision
+	for rows.Next() {
+		var i EvaluationPromotionDecision
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProposalID,
+			&i.Decision,
+			&i.Actor,
+			&i.Reason,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationPromotionProposals = `-- name: ListEvaluationPromotionProposals :many
+SELECT proposal.id, proposal.run_id, proposal.configuration_id, proposal.variant_name, proposal.change_kind, proposal.target_identity, proposal.change_blob, proposal.rollback_identity, proposal.status, proposal.eligibility_reason, proposal.created_at, proposal.updated_at, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE (?1 = '' OR proposal.status = ?1)
+ORDER BY proposal.created_at DESC, proposal.id DESC
+LIMIT ?2
+`
+
+type ListEvaluationPromotionProposalsParams struct {
+	StatusFilter interface{}
+	RowLimit     int64
+}
+
+type ListEvaluationPromotionProposalsRow struct {
+	ID                        string
+	RunID                     string
+	ConfigurationID           string
+	VariantName               string
+	ChangeKind                string
+	TargetIdentity            string
+	ChangeBlob                string
+	RollbackIdentity          string
+	Status                    string
+	EligibilityReason         string
+	CreatedAt                 string
+	UpdatedAt                 string
+	ConfigurationName         string
+	ConfigurationIdentityHash string
+	ChangeContent             []byte
+}
+
+func (q *Queries) ListEvaluationPromotionProposals(ctx context.Context, arg ListEvaluationPromotionProposalsParams) ([]ListEvaluationPromotionProposalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationPromotionProposals, arg.StatusFilter, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEvaluationPromotionProposalsRow
+	for rows.Next() {
+		var i ListEvaluationPromotionProposalsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.ConfigurationID,
+			&i.VariantName,
+			&i.ChangeKind,
+			&i.TargetIdentity,
+			&i.ChangeBlob,
+			&i.RollbackIdentity,
+			&i.Status,
+			&i.EligibilityReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ConfigurationName,
+			&i.ConfigurationIdentityHash,
+			&i.ChangeContent,
 		); err != nil {
 			return nil, err
 		}
@@ -1395,6 +1624,76 @@ func (q *Queries) PutEvaluationMetricObservation(ctx context.Context, arg PutEva
 	return err
 }
 
+const putEvaluationPromotionDecision = `-- name: PutEvaluationPromotionDecision :exec
+INSERT INTO evaluation_promotion_decisions (
+    id, proposal_id, decision, actor, reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationPromotionDecisionParams struct {
+	ID         string
+	ProposalID string
+	Decision   string
+	Actor      string
+	Reason     string
+	CreatedAt  string
+}
+
+func (q *Queries) PutEvaluationPromotionDecision(ctx context.Context, arg PutEvaluationPromotionDecisionParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationPromotionDecision,
+		arg.ID,
+		arg.ProposalID,
+		arg.Decision,
+		arg.Actor,
+		arg.Reason,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const putEvaluationPromotionProposal = `-- name: PutEvaluationPromotionProposal :exec
+INSERT INTO evaluation_promotion_proposals (
+    id, run_id, configuration_id, variant_name, change_kind,
+    target_identity, change_blob, rollback_identity, status,
+    eligibility_reason, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id, configuration_id, variant_name, change_kind, target_identity, change_blob)
+DO NOTHING
+`
+
+type PutEvaluationPromotionProposalParams struct {
+	ID                string
+	RunID             string
+	ConfigurationID   string
+	VariantName       string
+	ChangeKind        string
+	TargetIdentity    string
+	ChangeBlob        string
+	RollbackIdentity  string
+	Status            string
+	EligibilityReason string
+	CreatedAt         string
+	UpdatedAt         string
+}
+
+func (q *Queries) PutEvaluationPromotionProposal(ctx context.Context, arg PutEvaluationPromotionProposalParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationPromotionProposal,
+		arg.ID,
+		arg.RunID,
+		arg.ConfigurationID,
+		arg.VariantName,
+		arg.ChangeKind,
+		arg.TargetIdentity,
+		arg.ChangeBlob,
+		arg.RollbackIdentity,
+		arg.Status,
+		arg.EligibilityReason,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const putEvaluationRun = `-- name: PutEvaluationRun :exec
 INSERT INTO evaluation_runs (
     id, dataset_id, name, status, metric_policy_json, metric_policy_hash,
@@ -1583,6 +1882,32 @@ func (q *Queries) UpdateEvaluationAssignmentLeaseExpiry(ctx context.Context, arg
 		arg.UpdatedAt,
 		arg.ID,
 		arg.CurrentLeaseID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateEvaluationPromotionStatus = `-- name: UpdateEvaluationPromotionStatus :execrows
+UPDATE evaluation_promotion_proposals
+SET status = ?, updated_at = ?
+WHERE id = ? AND status = ?
+`
+
+type UpdateEvaluationPromotionStatusParams struct {
+	Status    string
+	UpdatedAt string
+	ID        string
+	Status_2  string
+}
+
+func (q *Queries) UpdateEvaluationPromotionStatus(ctx context.Context, arg UpdateEvaluationPromotionStatusParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateEvaluationPromotionStatus,
+		arg.Status,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.Status_2,
 	)
 	if err != nil {
 		return 0, err

@@ -248,3 +248,57 @@ UPDATE evaluation_runs
 SET status = 'completed', conclusion = ?, winning_variant = ?,
     conclusion_reason = ?, completed_at = ?
 WHERE id = ? AND status = 'running';
+
+-- name: PutEvaluationPromotionProposal :exec
+INSERT INTO evaluation_promotion_proposals (
+    id, run_id, configuration_id, variant_name, change_kind,
+    target_identity, change_blob, rollback_identity, status,
+    eligibility_reason, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id, configuration_id, variant_name, change_kind, target_identity, change_blob)
+DO NOTHING;
+
+-- name: GetEvaluationPromotionProposal :one
+SELECT proposal.*, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE proposal.id = ?;
+
+-- name: GetEvaluationPromotionProposalByIdentity :one
+SELECT proposal.*, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE proposal.run_id = ? AND proposal.configuration_id = ?
+  AND proposal.variant_name = ? AND proposal.change_kind = ?
+  AND proposal.target_identity = ? AND proposal.change_blob = ?;
+
+-- name: ListEvaluationPromotionProposals :many
+SELECT proposal.*, configuration.name AS configuration_name,
+       configuration.identity_hash AS configuration_identity_hash,
+       blob.content AS change_content
+FROM evaluation_promotion_proposals proposal
+JOIN evaluation_configurations configuration ON configuration.id = proposal.configuration_id
+JOIN content_blobs blob ON blob.hash = proposal.change_blob
+WHERE (sqlc.arg(status_filter) = '' OR proposal.status = sqlc.arg(status_filter))
+ORDER BY proposal.created_at DESC, proposal.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: ListEvaluationPromotionDecisions :many
+SELECT * FROM evaluation_promotion_decisions
+WHERE proposal_id = ? ORDER BY created_at, id;
+
+-- name: UpdateEvaluationPromotionStatus :execrows
+UPDATE evaluation_promotion_proposals
+SET status = ?, updated_at = ?
+WHERE id = ? AND status = ?;
+
+-- name: PutEvaluationPromotionDecision :exec
+INSERT INTO evaluation_promotion_decisions (
+    id, proposal_id, decision, actor, reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?);
