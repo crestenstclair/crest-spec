@@ -58,6 +58,11 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/v1/contexts", d.handleContextAttempts)
 	mux.HandleFunc("GET /api/v1/contexts/{id}", d.handleContextManifest)
 	mux.HandleFunc("GET /api/v1/context-comparison", d.handleContextComparison)
+	mux.HandleFunc("GET /api/v1/executions", d.handleExecutions)
+	mux.HandleFunc("GET /api/v1/executions/{id}", d.handleExecutionTrace)
+	mux.HandleFunc("GET /api/v1/execution-comparison", d.handleExecutionComparison)
+	mux.HandleFunc("GET /api/v1/failures", d.handleFailures)
+	mux.HandleFunc("GET /api/v1/handoffs", d.handleHandoffs)
 	mux.HandleFunc("GET /api/plan", d.handlePlan)
 	mux.HandleFunc("GET /api/resources", d.handleResources)
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
@@ -222,6 +227,115 @@ func (d *dashboard) handleContextComparison(w http.ResponseWriter, r *http.Reque
 	d.writeJSON(w, comparison)
 }
 
+func dashboardLimit(r *http.Request) int {
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+	return limit
+}
+
+func (d *dashboard) handleExecutions(w http.ResponseWriter, r *http.Request) {
+	executions, err := d.store.ListExecutionManifests(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, executions)
+}
+
+type dashboardExecutionTrace struct {
+	Execution  *store.ExecutionManifest      `json:"execution"`
+	Context    *store.ContextManifest        `json:"context"`
+	Candidate  *store.CandidateSet           `json:"candidate,omitempty"`
+	Failures   []store.FailureClassification `json:"failures"`
+	Handoffs   []store.AttemptHandoff        `json:"handoffs"`
+	Generation *store.Generation             `json:"generation,omitempty"`
+}
+
+func (d *dashboard) executionTrace(ctx context.Context, executionID string) (*dashboardExecutionTrace, error) {
+	manifest, err := d.store.GetExecutionManifest(ctx, executionID)
+	if err != nil {
+		return nil, err
+	}
+	contextRecord, err := d.store.GetContextManifestByAttempt(ctx, manifest.AttemptID)
+	if err != nil {
+		return nil, err
+	}
+	trace := &dashboardExecutionTrace{Execution: manifest, Context: contextRecord}
+	trace.Candidate, _ = d.store.GetCandidateSetByAttempt(ctx, manifest.AttemptID)
+	trace.Failures, _ = d.store.ListFailureClassificationsByAttempt(ctx, manifest.AttemptID)
+	trace.Handoffs, _ = d.store.ListAttemptHandoffsBySource(ctx, manifest.AttemptID)
+	generations, _ := d.store.ListGenerations(contextRecord.Attempt.ResourceID, 100)
+	for index := range generations {
+		if generations[index].ExecutionID == manifest.ID {
+			trace.Generation = &generations[index]
+			break
+		}
+	}
+	return trace, nil
+}
+
+func (d *dashboard) handleExecutionTrace(w http.ResponseWriter, r *http.Request) {
+	trace, err := d.executionTrace(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, trace)
+}
+
+func (d *dashboard) handleExecutionComparison(w http.ResponseWriter, r *http.Request) {
+	leftID, rightID := r.URL.Query().Get("left"), r.URL.Query().Get("right")
+	if leftID == "" || rightID == "" || leftID == rightID {
+		d.writeError(w, http.StatusBadRequest, "left and right must identify two different executions")
+		return
+	}
+	left, err := d.executionTrace(r.Context(), leftID)
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	right, err := d.executionTrace(r.Context(), rightID)
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, map[string]any{
+		"left": left, "right": right,
+		"changes": map[string]bool{
+			"host":      left.Execution.HostName != right.Execution.HostName,
+			"model":     left.Execution.Model != right.Execution.Model,
+			"role":      left.Execution.Role != right.Execution.Role,
+			"context":   left.Execution.ContextHash != right.Execution.ContextHash,
+			"templates": left.Execution.TemplateHashesHash != right.Execution.TemplateHashesHash,
+			"tools":     left.Execution.ToolPermissionsHash != right.Execution.ToolPermissionsHash,
+			"settings":  left.Execution.InferenceConfigHash != right.Execution.InferenceConfigHash || left.Execution.AgentConfigHash != right.Execution.AgentConfigHash,
+			"outcome":   left.Execution.Status != right.Execution.Status,
+		},
+	})
+}
+
+func (d *dashboard) handleFailures(w http.ResponseWriter, r *http.Request) {
+	failures, err := d.store.ListFailureClassifications(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, failures)
+}
+
+func (d *dashboard) handleHandoffs(w http.ResponseWriter, r *http.Request) {
+	handoffs, err := d.store.ListPendingAttemptHandoffs(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, handoffs)
+}
+
 func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 	result, err := d.spec.Plan(r.Context())
 	if err != nil {
@@ -236,6 +350,7 @@ func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 		WaveIndex        int               `json:"wave_index"`
 		OperationID      string            `json:"operation_id"`
 		Category         string            `json:"category"`
+		RecommendedRole  string            `json:"recommended_role"`
 		Capabilities     []string          `json:"capabilities"`
 		Goals            []string          `json:"goals"`
 		Contributions    map[string]string `json:"contributions"`
@@ -259,6 +374,7 @@ func (d *dashboard) handlePlan(w http.ResponseWriter, r *http.Request) {
 			WaveIndex:        waveMap[a.ResourceID],
 			OperationID:      a.OperationID,
 			Category:         a.Category,
+			RecommendedRole:  a.RecommendedRole,
 			Capabilities:     a.Capabilities,
 			Goals:            a.Goals,
 			Contributions:    a.Contributions,

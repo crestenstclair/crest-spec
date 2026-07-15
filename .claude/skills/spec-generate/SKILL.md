@@ -41,7 +41,8 @@ Tasks agents run in parallel across resources.
 ### Stage 3 — Generate (wave loop)
 The existing generation loop:
 - `spec_next` returns the next wave of resources (dependency order)
-- One generator agent per resource calls `spec_context → generate files → spec_commit`
+- One role-specific agent per resource calls
+  `spec_context → spec_execution_start → generate files → spec_commit(attempt_id)`
   with internal retry on rejection (up to maxRetries)
 - Generator agents within a wave run in parallel
 
@@ -140,7 +141,9 @@ Use `args.model` to override the generation model. Never haiku.
 ## Failure handling
 
 - Generator retries are bounded by maxRetries (default 3) inside the generator
-  agent. `spec_context` injects the prior failure (`## Previous Errors`), any
+  agent. Every retry is a new immutable attempt with its own SQLite execution
+  manifest. `spec_context` selects the required role (including a routed role
+  handoff), injects the prior failure (`## Previous Errors`), any
   triage guidance (`## Guidance`), AND the previous attempt's files (UPDATE
   mode) into every retry prompt — retries iterate on existing code with a
   minimal fix; they never start over because of a minor bug.
@@ -177,6 +180,11 @@ as a failure.
   `spec_commit` so the loop's feedback stays coherent. (The user's own hand
   edits to generated files are fine — once generated, the disk is theirs;
   the planner never polices content.)
+- Every generator must call `spec_execution_start` with
+  `crest-execution-v1`, the exact context/template hashes, role, host, model,
+  settings, tools, permissions, and system instructions before generating.
+  `spec_commit` accepts `attempt_id`, files, and notes only; it derives all
+  other authority from canonical SQLite state.
 - `spec_skip` is for a WRONG SPEC (quote the contradiction), never for hard
   work or non-convergence. Halts are resolved by humans, not by skipping.
 - Waves are sequential; resources within a wave run in parallel.

@@ -24,6 +24,9 @@ import (
 type ExecutionManifest struct {
 	ID                     string
 	AttemptID              string
+	SessionID              string
+	ResourceID             string
+	RetryNumber            int
 	ContextManifestID      string
 	ProtocolVersion        string
 	IdempotencyKey         string
@@ -864,8 +867,13 @@ func (s *Store) ListExecutionManifests(ctx context.Context, limit int) ([]Execut
 }
 
 func (s *Store) hydrateExecutionManifest(ctx context.Context, row db.ExecutionManifest) (*ExecutionManifest, error) {
+	attempt, err := s.queries.GetGenerationAttempt(ctx, row.AttemptID)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate execution: attempt: %w", err)
+	}
 	manifest := ExecutionManifest{
 		ID: row.ID, AttemptID: row.AttemptID, ContextManifestID: row.ContextManifestID,
+		SessionID: attempt.SessionID, ResourceID: attempt.ResourceID, RetryNumber: int(attempt.RetryNumber),
 		ProtocolVersion: row.ProtocolVersion, IdempotencyKey: row.IdempotencyKey,
 		PlanOperationID: row.PlanOperationID, Role: row.Role, RolePolicyVersion: row.RolePolicyVersion,
 		ContextPolicy: row.ContextPolicy, HostName: row.HostName, HostVersion: row.HostVersion,

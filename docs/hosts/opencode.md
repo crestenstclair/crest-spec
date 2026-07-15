@@ -98,7 +98,7 @@ Never ask crest-spec to perform a task. Use its tools as state, prompt, commit, 
 
 ```markdown
 ---
-description: Generates or updates one crest-spec resource by using spec/context and spec/commit.
+description: Generates or updates one crest-spec resource through an immutable context and execution attempt.
 mode: subagent
 model: anthropic/claude-sonnet-4-6
 permission:
@@ -112,11 +112,12 @@ Inputs from the orchestrator must include session_id, resource_id, model_label, 
 
 Loop until committed or attempts are exhausted:
 1. Call spec/context with the session_id and resource_id.
-2. Treat SystemPrompt and Prompt as authoritative. Honor invariants as hard constraints.
-3. If context contains previous files, Previous Errors, or Guidance, edit the previous attempt. Do not restart from scratch.
-4. Produce only the files requested by the prompt.
-5. Call spec/commit with session_id, resource_id, files, model_label, and a short note.
-6. If Committed is false, read Validations, fetch fresh spec/context, and fix the actual failure.
+2. Treat Role, SystemPrompt, and Prompt as authoritative. Honor invariants as hard constraints.
+3. Call spec/execution_start with crest-execution-v1 and the exact attempt, context/template hashes, host/model/settings/tools/permissions, and system instructions.
+4. If context contains previous files, Previous Errors, Guidance, or a role handoff, edit the previous attempt in the returned role. Do not restart from scratch.
+5. Produce only the files requested by the prompt.
+6. Call spec/commit with attempt_id, files, and a short note.
+7. If Committed is false, read Validations and FailureCategory, fetch fresh spec/context, and follow the routed role handoff.
 
 Return structured data: resource_id, outcome, attempts, error, files.
 ```
@@ -249,7 +250,8 @@ The adapter is working when a user can start OpenCode in the project, ask it to 
 - calls `spec/validate`, `spec/plan`, and `spec/begin`;
 - stops for human approval before `spec/confirm_destroys`;
 - calls `spec/next` and dispatches current-wave resource subagents concurrently;
-- generator subagents call `spec/context` and `spec/commit` themselves;
+- generator subagents call `spec/context`, `spec/execution_start`, and
+  `spec/commit` themselves;
 - retries use UPDATE-mode context rather than blank-slate generation;
 - wave failures are attributed and resolved with `spec/resolve`;
 - outcomes are reconciled against engine state, not subagent self-report;
