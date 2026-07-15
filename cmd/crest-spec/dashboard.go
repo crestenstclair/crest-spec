@@ -177,6 +177,7 @@ func pageRequest(r *http.Request) (observability.PageRequest, error) {
 		Cursor: r.URL.Query().Get("cursor"), Status: r.URL.Query().Get("status"),
 		Kind: r.URL.Query().Get("kind"), Query: r.URL.Query().Get("q"),
 		GoalID: r.URL.Query().Get("goal"), CapabilityID: r.URL.Query().Get("capability"),
+		AttemptID: r.URL.Query().Get("attempt"),
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)

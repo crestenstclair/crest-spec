@@ -11,10 +11,34 @@ import (
 )
 
 type Service struct {
-	store *store.Store
+	store Repository
 }
 
-func NewService(st *store.Store) *Service {
+type Repository interface {
+	GetProjectIntent(ctx context.Context, projectName string) (*store.ProjectIntentState, error)
+	ListCompletionBlockers(ctx context.Context, projectName string) ([]store.CompletionBlocker, error)
+	ListProjectStatusHistory(ctx context.Context, projectName string) ([]store.StatusTransition, error)
+	ListResourceContributions(ctx context.Context, projectName string) ([]store.PersistedContribution, error)
+	ListGoalStatusHistory(ctx context.Context, goalID string) ([]store.StatusTransition, error)
+	GetVerificationCompletionFacts(ctx context.Context, projectName string) (*store.VerificationCompletionFacts, error)
+	ListResources() ([]store.Resource, error)
+	ListContributionsByResource(ctx context.Context, resourceID string) ([]store.PersistedContribution, error)
+	GetResource(id string) (*store.Resource, error)
+	GetDependencies(sourceID string) ([]store.Dependency, error)
+	GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error)
+	ListGenerationAttemptsByResource(ctx context.Context, resourceID string, limit int) ([]store.GenerationAttempt, error)
+	GetContextManifestByAttempt(ctx context.Context, attemptID string) (*store.ContextManifest, error)
+	GetExecutionManifestByAttempt(ctx context.Context, attemptID string) (*store.ExecutionManifest, error)
+	ListValidationRuns(ctx context.Context, limit int) ([]store.ValidationRun, error)
+	GetActiveSession() (*store.Session, error)
+	ListSessionResources(sessionID string) ([]store.SessionResource, error)
+	ListFailureClassifications(ctx context.Context, limit int) ([]store.FailureClassification, error)
+	ListFailureClassificationsByAttempt(ctx context.Context, attemptID string) ([]store.FailureClassification, error)
+	GetFailureClassification(ctx context.Context, id string) (*store.FailureClassification, error)
+	GetCandidateSetByAttempt(ctx context.Context, attemptID string) (*store.CandidateSet, error)
+}
+
+func NewService(st Repository) *Service {
 	return &Service{store: st}
 }
 

@@ -140,6 +140,9 @@ func (s *Service) Failures(ctx context.Context, request PageRequest) (*Page[Fail
 	views := make([]FailureSummary, 0, len(rows))
 	for _, row := range rows {
 		resolved := row.Resolution != ""
+		if request.AttemptID != "" && row.AttemptID != request.AttemptID {
+			continue
+		}
 		if request.Kind != "" && row.Category != request.Kind {
 			continue
 		}

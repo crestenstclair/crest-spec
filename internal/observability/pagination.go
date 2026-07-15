@@ -20,6 +20,7 @@ type PageRequest struct {
 	Query        string
 	GoalID       string
 	CapabilityID string
+	AttemptID    string
 }
 
 type cursor struct {
