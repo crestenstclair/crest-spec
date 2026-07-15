@@ -140,6 +140,22 @@ func (s *Spec) Begin(ctx context.Context, opts BeginOpts) (*BeginResult, error) 
 	if err := s.store.ReconcileProjectIntent(ctx, intent); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
 	}
+	var reverifyResources []string
+	for _, action := range planResult.Actions {
+		if action.Kind == planpkg.ActionModify || action.Kind == planpkg.ActionDestroy {
+			reverifyResources = append(reverifyResources, action.ResourceID)
+		}
+	}
+	if len(reverifyResources) > 0 {
+		if _, err := s.store.InvalidateVerificationEvidence(ctx, intent.ProjectName, reverifyResources,
+			"resource change requires verification evidence to be regenerated",
+			store.TransitionSource{Type: "plan", ID: intent.SpecHash}); err != nil {
+			return nil, fmt.Errorf("invalidate verification evidence: %w", err)
+		}
+	}
+	if err := s.reprojectCompletion(ctx, planResult, store.TransitionSource{Type: "plan", ID: intent.SpecHash}); err != nil {
+		return nil, fmt.Errorf("project completion: %w", err)
+	}
 
 	actions := planResult.Actions
 	waves := planResult.Waves
@@ -681,6 +697,7 @@ func (s *Spec) runProjectValidationsRecorded(ctx context.Context, projectName, s
 			Message:    fmt.Sprintf("%s: %s", r.Kind, r.Message),
 		})
 	}
+	_ = s.refreshCompletion(ctx, store.TransitionSource{Type: "validation_wave", ID: sessionID, SessionID: sessionID})
 }
 
 // runProjectValidations is retained for focused validation tests and callers

@@ -392,6 +392,9 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	if err != nil {
 		return nil, err
 	}
+	_ = s.reprojectCompletion(ctx, planResult, store.TransitionSource{
+		Type: "generation_attempt", ID: contextManifest.Attempt.ID, SessionID: contextManifest.Attempt.SessionID,
+	})
 	s.markAmendmentVerification(resourceID, resource, true)
 	return &CommitResult{
 		Committed: true, Validations: validations, AttemptID: attemptID,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -19,18 +18,16 @@ type ProjectOverviewResult struct {
 // ProjectOverview reconciles current declarations, then reads the canonical
 // SQLite projection. Existing operational statuses are preserved by reconcile.
 func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, error) {
-	project, err := cuepkg.Load(s.cfg.SpecDir)
+	planResult, err := s.Plan(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load project intent: %w", err)
+		return nil, fmt.Errorf("plan project overview: %w", err)
 	}
+	project := planResult.Registry.Project
 	snapshot, err := projectIntentSnapshot(project)
 	if err != nil {
 		return nil, fmt.Errorf("project intent: %w", err)
 	}
-	registry, err := cuepkg.NewRegistry(project)
-	if err != nil {
-		return nil, fmt.Errorf("build project registry: %w", err)
-	}
+	registry := planResult.Registry
 	snapshot.ResourceTrace = resourceTraceSnapshot(registry)
 	snapshot.Verification, err = verificationDefinitionSnapshot(registry)
 	if err != nil {
@@ -38,6 +35,9 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 	}
 	if err := s.store.ReconcileProjectIntent(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("reconcile project intent: %w", err)
+	}
+	if err := s.reprojectCompletion(ctx, planResult, store.TransitionSource{Type: "dashboard_projection", ID: snapshot.SpecHash}); err != nil {
+		return nil, fmt.Errorf("project completion: %w", err)
 	}
 	intent, err := s.store.GetProjectIntent(ctx, project.Name)
 	if err != nil {

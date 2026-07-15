@@ -37,6 +37,9 @@ type fakeSpec struct {
 	lastExecutionStart specmod.ExecutionStartOptions
 	lastVerifySession  string
 	lastVerifyWave     int
+	lastWitnessID      string
+	lastWitnessCheckID string
+	lastWitnessSession string
 	lastContext        specmod.ContextOptions
 }
 
@@ -201,8 +204,18 @@ func (f *fakeSpec) DesignCommit(ctx context.Context, contextName, contractJSON s
 func (f *fakeSpec) TasksCommit(ctx context.Context, resourceID string, tasks []specmod.TaskInput) error {
 	return nil
 }
-func (f *fakeSpec) Verify(ctx context.Context, checkID string, real, stub map[string]any) (specmod.VerifyResult, error) {
-	return specmod.VerifyResult{}, nil
+func (f *fakeSpec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID string) (specmod.VerifyResult, error) {
+	f.lastWitnessID, f.lastWitnessCheckID, f.lastWitnessSession = witnessID, checkID, sessionID
+	return specmod.VerifyResult{WitnessID: witnessID, Classification: "passed", Passed: true}, nil
+}
+func (f *fakeSpec) ListValidationRuns(ctx context.Context, limit int) ([]storemod.ValidationRun, error) {
+	return nil, nil
+}
+func (f *fakeSpec) GetValidationRun(ctx context.Context, runID string) (*storemod.ValidationRun, error) {
+	return nil, nil
+}
+func (f *fakeSpec) ListVerificationDefinitions(ctx context.Context, projectName string) ([]storemod.VerificationDefinition, error) {
+	return nil, nil
 }
 func (f *fakeSpec) Graduate(ctx context.Context, checkID string) (specmod.GraduateResult, error) {
 	return specmod.GraduateResult{}, nil
@@ -319,6 +332,10 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/execution_roles"])
 	assert.True(t, names["spec/execution_inspect"])
 	assert.True(t, names["spec/failures"])
+	assert.True(t, names["spec/verify"])
+	assert.True(t, names["spec/verifications"])
+	assert.True(t, names["spec/verification_inspect"])
+	assert.True(t, names["spec/verification_definitions"])
 	assert.True(t, names["spec/failure_classify"])
 	assert.True(t, names["spec/failure_resolve"])
 	assert.True(t, names["spec/handoffs"])
@@ -391,6 +408,29 @@ func TestVerifyWaveToolForwardsArgs(t *testing.T) {
 	require.False(t, res.IsError)
 	assert.Contains(t, res.Content[0].Text, `"Passed":true`)
 	assert.Contains(t, res.Content[0].Text, `"WaveIndex":2`)
+}
+
+func TestVerifyToolAcceptsOnlyDeclaredWitnessReferences(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	result := srv.toolFns["spec/verify"](context.Background(), json.RawMessage(`{"witness_id":"witness.signal","check_id":"check-1","session_id":"session-1","real_observation":{"forged":true}}`))
+	require.False(t, result.IsError)
+	assert.Equal(t, "witness.signal", fake.lastWitnessID)
+	assert.Equal(t, "check-1", fake.lastWitnessCheckID)
+	assert.Equal(t, "session-1", fake.lastWitnessSession)
+	assert.Contains(t, result.Content[0].Text, `"classification":"passed"`)
+
+	resp := sendRequest(t, srv, nil, "tools/list", 1, nil)
+	require.Nil(t, resp.Error)
+	tools := resp.Result.(map[string]any)["tools"].([]toolDef)
+	for _, definition := range tools {
+		if definition.Name != "spec/verify" {
+			continue
+		}
+		assert.Contains(t, string(definition.InputSchema), `"witness_id"`)
+		assert.NotContains(t, string(definition.InputSchema), "real_observation")
+		assert.NotContains(t, string(definition.InputSchema), "stub_observation")
+	}
 }
 
 func TestAbout_Static(t *testing.T) {

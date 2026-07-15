@@ -188,7 +188,7 @@ func TestVerify_RealPassStubFail(t *testing.T) {
 
 	// real: latency_ms = 50  → passes (50 < 200)
 	// stub: latency_ms = 9999 → fails (9999 >= 200) — check has teeth
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{"latency_ms": float64(9999)},
 	)
@@ -214,7 +214,7 @@ func TestVerify_Theater(t *testing.T) {
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
 	// Both real and stub pass → theater
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"x": float64(1)},
 		map[string]any{"x": float64(1)},
 	)
@@ -239,7 +239,7 @@ func TestVerify_RealFail(t *testing.T) {
 
 	// real: latency_ms = 500 → fails; stub: latency_ms = 9999 → also fails
 	// → real-fail, not theater (stub fails = good), but overall rejected
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(500)},
 		map[string]any{"latency_ms": float64(9999)},
 	)
@@ -265,7 +265,7 @@ func TestVerify_EmptyStubRejected(t *testing.T) {
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
 	// real passes, but stub is empty → no falsification possible → rejected.
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{},
 	)
@@ -292,7 +292,7 @@ func TestVerify_StubMissingPredicateFieldRejected(t *testing.T) {
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
 	// real passes; stub is non-empty but lacks latency_ms → not a real measurement.
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{"unrelated": float64(1)},
 	)
@@ -316,7 +316,7 @@ func TestVerify_PersistsVerification(t *testing.T) {
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
-	_, err := s.Verify(context.Background(), checkID,
+	_, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{"latency_ms": float64(9999)},
 	)
@@ -342,7 +342,7 @@ func TestVerify_StructuralPredicateMarkedMalformed(t *testing.T) {
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"error": "boom"},
 		map[string]any{"error": "boom"},
 	)
@@ -369,7 +369,7 @@ func TestVerify_StubMalformedStaysFailedNotMalformed(t *testing.T) {
 	}
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
-	result, err := s.Verify(context.Background(), checkID,
+	result, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{},
 	)
@@ -396,7 +396,7 @@ func TestGraduate_TransitionsStateAndReturnsPredicates(t *testing.T) {
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
 	// Must verify-pass first
-	_, err := s.Verify(context.Background(), checkID,
+	_, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"latency_ms": float64(50)},
 		map[string]any{"latency_ms": float64(9999)},
 	)
@@ -440,7 +440,7 @@ func TestGraduate_RejectsTheaterCheck(t *testing.T) {
 	checkID := commitTasksAndGetCheckID(t, s, c)
 
 	// Both pass → theater
-	_, err := s.Verify(context.Background(), checkID,
+	_, err := s.verifySuppliedObservationsLegacy(context.Background(), checkID,
 		map[string]any{"x": float64(1)},
 		map[string]any{"x": float64(1)},
 	)

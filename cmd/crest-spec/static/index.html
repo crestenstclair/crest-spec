@@ -222,9 +222,18 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
       <div class="tab" data-tab="generations">Generations</div>
       <div class="tab" data-tab="contexts">Contexts</div>
       <div class="tab" data-tab="executions">Executions</div>
+      <div class="tab" data-tab="verifications">Validation &amp; Evidence</div>
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
       <div class="tab" data-tab="learnings">Learnings</div>
+    </div>
+
+    <!-- Tab: Validation and Evidence Explorer -->
+    <div class="tab-content" id="tab-verifications">
+      <div class="card" style="overflow-x:auto">
+        <div id="verification-definitions" class="empty">Loading definitions...</div>
+        <div id="verifications-table" class="empty">Loading runs...</div>
+      </div>
     </div>
 
     <!-- Tab: Execution Inspector -->
@@ -632,6 +641,7 @@ async function loadTabData(tab) {
     case 'generations': await loadGenerationsTab(); break;
     case 'contexts': await loadContextsTab(); break;
     case 'executions': await loadExecutionsTab(); break;
+    case 'verifications': await loadVerificationsTab(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'learnings': await loadLearningsTab(); break;
@@ -1289,6 +1299,89 @@ async function compareSelectedExecutions() {
   el.innerHTML = '<div class="drilldown" style="margin:0 0 16px 0"><h3>Execution comparison</h3>' +
     (changed.length ? changed.map(key => badge(key + ' changed', 'yellow')).join(' ') : badge('governed inputs and outcome match', 'green')) +
     '</div>';
+}
+
+// ─── Tab: Validation and Evidence Explorer ───────────────────────
+async function loadVerificationsTab() {
+  const definitionsEl = document.getElementById('verification-definitions');
+  const runsEl = document.getElementById('verifications-table');
+  const [definitions, runs] = await Promise.all([
+    fetchJSON('/api/v1/verifications/definitions'),
+    fetchJSON('/api/v1/verifications?limit=100'),
+  ]);
+  if (!definitions || !runs) {
+    definitionsEl.innerHTML = '<div class="error-msg">Error loading verification state</div>';
+    runsEl.innerHTML = '';
+    return;
+  }
+  definitionsEl.innerHTML = '<h2>Current definitions</h2>' + (definitions.length
+    ? '<div class="state-counts" style="margin-bottom:18px">' + definitions.map(definition => {
+        const id = definition.definition_id || definition.DefinitionID || '';
+        const scope = definition.scope || definition.Scope || '';
+        const type = definition.definition_type || definition.DefinitionType || '';
+        return '<span title="' + esc(id) + '">' + badge(type + ' · ' + scope, type === 'witness' ? 'purple' : 'blue') +
+          ' <span class="mono">' + esc(id) + '</span></span>';
+      }).join('') + '</div>'
+    : '<div class="empty">No named definitions have been reconciled.</div>');
+  if (!runs.length) {
+    runsEl.innerHTML = '<div class="empty">No validation or witness runs yet.</div>';
+    return;
+  }
+  let html = '<h2>Run history</h2><table><thead><tr><th>Definition</th><th>Scope</th><th>Classification</th><th>Targets</th><th>Source tree</th><th>Duration</th><th>Time</th></tr></thead><tbody>';
+  runs.forEach((run, index) => {
+    const definition = run.definition || run.Definition || {};
+    const id = run.id || run.ID || '';
+    const definitionID = run.definition_id || run.DefinitionID || '';
+    const scope = definition.scope || definition.Scope || '';
+    const classification = run.classification || run.Classification || '';
+    const targets = run.targets || run.Targets || [];
+    const tree = run.source_tree_hash || run.SourceTreeHash || '';
+    html += '<tr class="clickable" onclick="toggleVerificationDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+      '<td class="resource-id">' + esc(definitionID) + '</td><td>' + badge(scope, 'blue') + '</td>' +
+      '<td>' + statusBadge(classification) + '</td><td><div class="files-list">' + targets.map(target =>
+        '<span>' + esc((target.Kind || target.kind || '') + ':' + (target.ID || target.id || '')) + '</span>').join('') + '</div></td>' +
+      '<td class="mono" title="' + esc(tree) + '">' + esc(shortID(tree)) + '</td>' +
+      '<td class="mono">' + formatDuration(run.duration_ms || run.DurationMS || 0) + '</td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(run.created_at || run.CreatedAt || '') + '</td></tr>' +
+      '<tr id="verification-drilldown-' + index + '" style="display:none"><td colspan="7"></td></tr>';
+  });
+  runsEl.innerHTML = html + '</tbody></table>';
+}
+
+async function toggleVerificationDrilldown(runID, index) {
+  const row = document.getElementById('verification-drilldown-' + index);
+  if (!row) return;
+  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  row.style.display = '';
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Loading captured evidence...</div></div>';
+  const run = await fetchJSON('/api/v1/verifications/' + encodeURIComponent(runID));
+  if (!run) {
+    td.innerHTML = '<div class="drilldown"><div class="error-msg">Could not load verification run</div></div>';
+    return;
+  }
+  const definition = run.definition || run.Definition || {};
+  const executions = run.executions || run.Executions || [];
+  const predicates = run.predicate_results || run.PredicateResults || [];
+  const evidence = run.evidence || run.Evidence || [];
+  let html = '<div class="drilldown"><h3>Definition snapshot</h3><pre>' + esc(definition.definition_json || definition.DefinitionJSON || '') + '</pre>' +
+    '<div style="font-size:11px;color:var(--text-muted);margin:8px 0">definition hash ' +
+    esc(definition.definition_hash || definition.DefinitionHash || '') + ' · source tree ' +
+    esc(run.source_tree_hash || run.SourceTreeHash || '') + '</div>';
+  executions.forEach(execution => {
+    const role = execution.role || execution.Role || '';
+    const observation = execution.observation || execution.Observation;
+    html += '<h3 style="margin-top:12px">' + esc(role) + ' command</h3><pre>' + esc(execution.command_json || execution.CommandJSON || '') + '</pre>' +
+      '<div class="state-counts"><span>' + badge('exit ' + (execution.exit_code ?? execution.ExitCode), (execution.exit_code ?? execution.ExitCode) === 0 ? 'green' : 'red') + '</span>' +
+      '<span class="mono">executable ' + esc(shortID(execution.executable_hash || execution.ExecutableHash || '')) + '</span></div>' +
+      '<h3 style="margin-top:10px">stdout' + ((execution.stdout_truncated || execution.StdoutTruncated) ? ' (truncated)' : '') + '</h3><pre>' + esc(execution.stdout || execution.Stdout || '') + '</pre>' +
+      '<h3 style="margin-top:10px">stderr' + ((execution.stderr_truncated || execution.StderrTruncated) ? ' (truncated)' : '') + '</h3><pre>' + esc(execution.stderr || execution.Stderr || '') + '</pre>' +
+      (observation ? '<h3 style="margin-top:10px">Parsed observation</h3><pre>' + esc(observation.observation_json || observation.ObservationJSON || '') + '</pre>' : '');
+  });
+  html += '<h3 style="margin-top:12px">Predicate results</h3><pre>' + esc(JSON.stringify(predicates, null, 2)) + '</pre>' +
+    '<h3 style="margin-top:12px">Evidence currency</h3><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>' +
+    '<div style="margin-top:12px;font-size:11px;color:var(--text-muted)">Chain: definition → targets → command executions → parsed observations → predicate results → evidence record</div></div>';
+  td.innerHTML = html;
 }
 
 // ─── Tab: Resources ────────────────────────────────────────────────

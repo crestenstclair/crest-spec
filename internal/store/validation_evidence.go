@@ -122,6 +122,18 @@ type ValidationRunWrite struct {
 	ProjectName string
 }
 
+type LatestValidationResult struct {
+	RunID          string
+	Classification string
+	SourceTreeHash string
+	CreatedAt      time.Time
+}
+
+type VerificationCompletionFacts struct {
+	LatestRuns      map[string]LatestValidationResult
+	CurrentEvidence map[string][]VerificationEvidence
+}
+
 func (s *Store) RecordValidationRun(ctx context.Context, input ValidationRunWrite) (_ *ValidationRun, err error) {
 	run := input.Run
 	if input.ProjectName == "" || run.DefinitionID == "" || run.SourceTreeHash == "" || run.Classification == "" {
@@ -347,6 +359,88 @@ func (s *Store) ListValidationRuns(ctx context.Context, limit int) ([]Validation
 		result = append(result, *run)
 	}
 	return result, nil
+}
+
+func (s *Store) GetVerificationCompletionFacts(ctx context.Context, projectName string) (*VerificationCompletionFacts, error) {
+	runs, err := s.queries.ListLatestValidationRunsForProject(ctx, projectName)
+	if err != nil {
+		return nil, err
+	}
+	evidenceRows, err := s.queries.ListCurrentVerificationEvidenceForProject(ctx, projectName)
+	if err != nil {
+		return nil, err
+	}
+	facts := &VerificationCompletionFacts{
+		LatestRuns:      make(map[string]LatestValidationResult),
+		CurrentEvidence: make(map[string][]VerificationEvidence),
+	}
+	for _, run := range runs {
+		facts.LatestRuns[run.DefinitionID] = LatestValidationResult{
+			RunID: run.RunID, Classification: run.Classification,
+			SourceTreeHash: run.SourceTreeHash, CreatedAt: parseTime(run.CreatedAt),
+		}
+	}
+	for _, evidence := range evidenceRows {
+		facts.CurrentEvidence[evidence.EvidenceID] = append(facts.CurrentEvidence[evidence.EvidenceID], VerificationEvidence{
+			ID: evidence.ID, EvidenceID: evidence.EvidenceID, SourceTreeHash: evidence.SourceTreeHash,
+			DefinitionHash: evidence.DefinitionHash, Classification: evidence.Classification,
+			Currency: evidence.Currency, CreatedAt: parseTime(evidence.CreatedAt),
+			InvalidatedAt: parseOptionalTime(evidence.InvalidatedAt),
+		})
+	}
+	return facts, nil
+}
+
+func (s *Store) InvalidateVerificationEvidence(ctx context.Context, projectName string, resourceIDs []string, reason string, source TransitionSource) (count int, err error) {
+	if projectName == "" || len(resourceIDs) == 0 || reason == "" || source.Type == "" {
+		return 0, fmt.Errorf("invalidate verification evidence: project, resources, reason, and source type are required")
+	}
+	tx, err := s.sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	q := s.queries.WithTx(tx)
+	timestamp := now()
+	seen := make(map[string]bool)
+	for _, resourceID := range resourceIDs {
+		records, queryErr := q.ListCurrentVerificationEvidenceForResource(ctx, db.ListCurrentVerificationEvidenceForResourceParams{
+			ProjectName: projectName, TargetID: resourceID,
+		})
+		if queryErr != nil {
+			return count, queryErr
+		}
+		for _, record := range records {
+			if seen[record.ID] {
+				continue
+			}
+			seen[record.ID] = true
+			affected, updateErr := q.MarkVerificationEvidenceRecordStale(ctx, db.MarkVerificationEvidenceRecordStaleParams{
+				InvalidatedAt: &timestamp, ID: record.ID,
+			})
+			if updateErr != nil {
+				return count, updateErr
+			}
+			if affected == 0 {
+				continue
+			}
+			if err = q.PutVerificationEvidenceInvalidation(ctx, db.PutVerificationEvidenceInvalidationParams{
+				ID: uuid.NewString(), EvidenceRecordID: record.ID, Reason: reason,
+				SourceType: source.Type, SourceID: source.ID, CreatedAt: timestamp,
+			}); err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return count, err
+	}
+	return count, nil
 }
 
 func (s *Store) hydrateVerificationDefinition(ctx context.Context, row db.VerificationDefinition) (*VerificationDefinition, error) {

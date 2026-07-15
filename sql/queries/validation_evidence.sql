@@ -108,11 +108,45 @@ SELECT * FROM verification_evidence_records
 WHERE evidence_id = ? AND currency = 'current'
 ORDER BY created_at DESC, id DESC;
 
+-- name: ListLatestValidationRunsForProject :many
+SELECT vr.definition_id, vr.id AS run_id, vr.classification, vr.source_tree_hash, vr.created_at
+FROM validation_runs vr
+JOIN verification_definitions vd ON vd.snapshot_id = vr.definition_snapshot_id
+WHERE vd.project_name = ? AND vd.active = 1
+  AND vr.id = (
+      SELECT latest.id FROM validation_runs latest
+      WHERE latest.definition_id = vr.definition_id
+      ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+  )
+ORDER BY vr.definition_id;
+
+-- name: ListCurrentVerificationEvidenceForProject :many
+SELECT record.*
+FROM verification_evidence_records record
+JOIN evidence_requirements requirement ON requirement.id = record.evidence_id
+WHERE requirement.project_name = ? AND requirement.active = 1 AND record.currency = 'current'
+ORDER BY record.evidence_id, record.created_at DESC, record.id DESC;
+
 -- name: MarkVerificationEvidenceStale :many
 UPDATE verification_evidence_records
 SET currency = 'stale', invalidated_at = ?
 WHERE evidence_id = ? AND currency = 'current'
 RETURNING *;
+
+-- name: ListCurrentVerificationEvidenceForResource :many
+SELECT DISTINCT record.*
+FROM verification_evidence_records record
+JOIN validation_runs run ON run.id = record.run_id
+JOIN verification_definitions definition ON definition.snapshot_id = run.definition_snapshot_id
+JOIN verification_definition_targets target ON target.snapshot_id = definition.snapshot_id
+WHERE definition.project_name = ? AND target.target_kind = 'resource' AND target.target_id = ?
+  AND record.currency = 'current'
+ORDER BY record.created_at, record.id;
+
+-- name: MarkVerificationEvidenceRecordStale :execrows
+UPDATE verification_evidence_records
+SET currency = 'stale', invalidated_at = ?
+WHERE id = ? AND currency = 'current';
 
 -- name: PutVerificationEvidenceInvalidation :exec
 INSERT INTO verification_evidence_invalidations (

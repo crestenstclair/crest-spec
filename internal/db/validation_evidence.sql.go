@@ -225,6 +225,146 @@ func (q *Queries) ListCurrentVerificationEvidence(ctx context.Context, evidenceI
 	return items, nil
 }
 
+const listCurrentVerificationEvidenceForProject = `-- name: ListCurrentVerificationEvidenceForProject :many
+SELECT record.id, record.run_id, record.evidence_id, record.source_tree_hash, record.definition_hash, record.classification, record.currency, record.created_at, record.invalidated_at
+FROM verification_evidence_records record
+JOIN evidence_requirements requirement ON requirement.id = record.evidence_id
+WHERE requirement.project_name = ? AND requirement.active = 1 AND record.currency = 'current'
+ORDER BY record.evidence_id, record.created_at DESC, record.id DESC
+`
+
+func (q *Queries) ListCurrentVerificationEvidenceForProject(ctx context.Context, projectName string) ([]VerificationEvidenceRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentVerificationEvidenceForProject, projectName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VerificationEvidenceRecord
+	for rows.Next() {
+		var i VerificationEvidenceRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.EvidenceID,
+			&i.SourceTreeHash,
+			&i.DefinitionHash,
+			&i.Classification,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentVerificationEvidenceForResource = `-- name: ListCurrentVerificationEvidenceForResource :many
+SELECT DISTINCT record.id, record.run_id, record.evidence_id, record.source_tree_hash, record.definition_hash, record.classification, record.currency, record.created_at, record.invalidated_at
+FROM verification_evidence_records record
+JOIN validation_runs run ON run.id = record.run_id
+JOIN verification_definitions definition ON definition.snapshot_id = run.definition_snapshot_id
+JOIN verification_definition_targets target ON target.snapshot_id = definition.snapshot_id
+WHERE definition.project_name = ? AND target.target_kind = 'resource' AND target.target_id = ?
+  AND record.currency = 'current'
+ORDER BY record.created_at, record.id
+`
+
+type ListCurrentVerificationEvidenceForResourceParams struct {
+	ProjectName string
+	TargetID    string
+}
+
+func (q *Queries) ListCurrentVerificationEvidenceForResource(ctx context.Context, arg ListCurrentVerificationEvidenceForResourceParams) ([]VerificationEvidenceRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentVerificationEvidenceForResource, arg.ProjectName, arg.TargetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VerificationEvidenceRecord
+	for rows.Next() {
+		var i VerificationEvidenceRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.EvidenceID,
+			&i.SourceTreeHash,
+			&i.DefinitionHash,
+			&i.Classification,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLatestValidationRunsForProject = `-- name: ListLatestValidationRunsForProject :many
+SELECT vr.definition_id, vr.id AS run_id, vr.classification, vr.source_tree_hash, vr.created_at
+FROM validation_runs vr
+JOIN verification_definitions vd ON vd.snapshot_id = vr.definition_snapshot_id
+WHERE vd.project_name = ? AND vd.active = 1
+  AND vr.id = (
+      SELECT latest.id FROM validation_runs latest
+      WHERE latest.definition_id = vr.definition_id
+      ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+  )
+ORDER BY vr.definition_id
+`
+
+type ListLatestValidationRunsForProjectRow struct {
+	DefinitionID   string
+	RunID          string
+	Classification string
+	SourceTreeHash string
+	CreatedAt      string
+}
+
+func (q *Queries) ListLatestValidationRunsForProject(ctx context.Context, projectName string) ([]ListLatestValidationRunsForProjectRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLatestValidationRunsForProject, projectName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLatestValidationRunsForProjectRow
+	for rows.Next() {
+		var i ListLatestValidationRunsForProjectRow
+		if err := rows.Scan(
+			&i.DefinitionID,
+			&i.RunID,
+			&i.Classification,
+			&i.SourceTreeHash,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listValidationArtifactsByExecution = `-- name: ListValidationArtifactsByExecution :many
 SELECT execution_id, path, content_blob, content_hash, byte_size, captured_bytes, truncated, missing FROM validation_artifacts WHERE execution_id = ? ORDER BY path
 `
@@ -527,6 +667,25 @@ func (q *Queries) ListVerificationEvidenceByRun(ctx context.Context, runID strin
 		return nil, err
 	}
 	return items, nil
+}
+
+const markVerificationEvidenceRecordStale = `-- name: MarkVerificationEvidenceRecordStale :execrows
+UPDATE verification_evidence_records
+SET currency = 'stale', invalidated_at = ?
+WHERE id = ? AND currency = 'current'
+`
+
+type MarkVerificationEvidenceRecordStaleParams struct {
+	InvalidatedAt *string
+	ID            string
+}
+
+func (q *Queries) MarkVerificationEvidenceRecordStale(ctx context.Context, arg MarkVerificationEvidenceRecordStaleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markVerificationEvidenceRecordStale, arg.InvalidatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markVerificationEvidenceStale = `-- name: MarkVerificationEvidenceStale :many
