@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -63,97 +66,17 @@ the returned Instructions, or read the server instructions from initialize.`)
 
 // registerSpecStubs adds placeholder stubs when no spec handler is provided.
 func (s *Server) registerSpecStubs() {
-	stubs := []toolDef{
-		{Name: "spec/project_overview", Description: "Show project mission, goals, completion, blockers, and history", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/goals", Description: "List or inspect project goals", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
-		{Name: "spec/capabilities", Description: "List or inspect project capabilities", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
-		{Name: "spec/resources", Description: "List or inspect goal-linked resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
-		{Name: "spec/plan_inspect", Description: "Inspect the goal-directed plan", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
-		{Name: "spec/impact", Description: "Trace resource change impact into capabilities, goals, and evidence", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"}},"required":["resource_id"]}`)},
-		{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
-		{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
-		{Name: "spec/begin", Description: "Step 1: Start a generation session.", InputSchema: json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","description":"Target resource filter"},"force":{"type":"boolean","description":"Force regeneration"},"model":{"type":"string","description":"Model override"}}}`)},
-		{Name: "spec/confirm_destroys", Description: "Confirm and execute pending resource destroys.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_ids":{"type":"array","items":{"type":"string"},"description":"Resource IDs to confirm for deletion"}},"required":["session_id","resource_ids"]}`)},
-		{Name: "spec/next", Description: "Step 2: Get next wave of resources.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`)},
-		{Name: "spec/context", Description: "Step 3: Create an immutable context attempt and get the generation prompt for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string"},"resource_id":{"type":"string"},"role":{"type":"string"},"budget_tokens":{"type":"integer"},"parent_attempt_id":{"type":"string"}},"required":["session_id","resource_id"]}`)},
-		{Name: "spec/context_attempts", Description: "List recent immutable generation context attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
-		{Name: "spec/context_inspect", Description: "Inspect the exact immutable context served for an attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_manifest_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
-		{Name: "spec/context_compare", Description: "Compare two context manifests structurally", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`)},
-		{Name: "spec/attempt_inspect", Description: "Inspect a complete generation attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`)},
-		{Name: "spec/attempt_compare", Description: "Compare two complete generation attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_attempt_id":{"type":"string"},"right_attempt_id":{"type":"string"}},"required":["left_attempt_id","right_attempt_id"]}`)},
-		{Name: "spec/execution_start", Description: "Register host execution metadata for an immutable attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`)},
-		{Name: "spec/execution_report", Description: "Complete or fail an execution attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"status":{"type":"string"}},"required":["attempt_id","status"]}`)},
-		{Name: "spec/execution_roles", Description: "List closed agent roles and policies", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/executions", Description: "List execution manifests", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
-		{Name: "spec/execution_inspect", Description: "Inspect one execution manifest", InputSchema: json.RawMessage(`{"type":"object","properties":{"execution_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
-		{Name: "spec/failures", Description: "List classified failures", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
-		{Name: "spec/failure_classify", Description: "Append an evidence-backed failure classification", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"category":{"type":"string"},"origin":{"type":"string"},"evidence_source":{"type":"string"}},"required":["attempt_id","category","origin","evidence_source"]}`)},
-		{Name: "spec/failure_resolve", Description: "Record an explicit failure resolution", InputSchema: json.RawMessage(`{"type":"object","properties":{"failure_id":{"type":"string"},"resolution":{"type":"string"}},"required":["failure_id","resolution"]}`)},
-		{Name: "spec/handoffs", Description: "List role handoffs", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`)},
-		{Name: "spec/validate-resource", Description: "Run invariant checks for a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
-		{Name: "spec/note", Description: "Save a design decision note", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"content":{"type":"string","description":"Note content"},"session_id":{"type":"string","description":"Session ID"}},"required":["resource_id","content"]}`)},
-		{Name: "spec/commit", Description: "Submit candidate files by immutable attempt ID", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"files":{"type":"array","items":{"type":"object"}},"notes":{"type":"string"}},"required":["attempt_id"]}`)},
-		{Name: "spec/resolve", Description: "Provide guidance for blocked resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"guidance":{"type":"string","description":"Resolution guidance"},"model":{"type":"string","description":"Model override"}},"required":["resource_id","guidance"]}`)},
-		{Name: "spec/amend", Description: "Signal spec update for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
-		{Name: "spec/skip", Description: "Skip a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"reason":{"type":"string","description":"Reason for skipping"}},"required":["resource_id"]}`)},
-		{Name: "spec/finish", Description: "Step 6: Finalize the session. Refuses while behavioral checks are unresolved (see blocking_checks); force=true overrides explicitly.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources or unresolved behavioral checks"}},"required":["session_id"]}`)},
-		{Name: "spec/status", Description: "Session-level status overview", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional)"}}}`)},
-		{Name: "spec/wave_status", Description: "Detailed wave-level view", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index"}},"required":["session_id","wave_index"]}`)},
-		{Name: "spec/verify_wave", Description: "Run wave-level verification: project type-check/test commands plus project-level validations, executed in the project root. Returns passed plus per-resource attributed errors. Call after a wave's resources have committed; route failures back via spec/resolve.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`)},
-		{Name: "spec/log", Description: "List past applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","description":"Max entries to return"}}}`)},
-		{Name: "spec/history", Description: "Show generation history for resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"limit":{"type":"integer","description":"Max entries to return"}},"required":["resource_id"]}`)},
-		{Name: "spec/graph", Description: "Return dependency graph", InputSchema: json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","description":"Output format (json, dot)"}}}`)},
-		{Name: "spec/diff", Description: "Reconstruct state delta between applies", InputSchema: json.RawMessage(`{"type":"object","properties":{"apply_id_a":{"type":"string","description":"First apply ID"},"apply_id_b":{"type":"string","description":"Second apply ID"}}}`)},
-		{Name: "spec/state", Description: "Inspect/modify state tracking", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"},"action":{"type":"string","description":"Action: list or rm"}}}`)},
-		{Name: "spec/vacuum", Description: "Compact old history", InputSchema: json.RawMessage(`{"type":"object","properties":{"older_than":{"type":"string","description":"Age threshold (e.g. 30d)"}}}`)},
-		{Name: "spec/sql", Description: "Read-only SQLite shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"SQL query to execute"}},"required":["query"]}`)},
-		{Name: "spec/unlock", Description: "Force-clear stale lock", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/mode", Description: "Show the current mode (environment)", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/inspect", Description: "Full debug view of a resource", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
-		{Name: "spec/import", Description: "Scan directory and generate skeleton CUE spec", InputSchema: json.RawMessage(`{"type":"object","properties":{"directory":{"type":"string","description":"Directory to scan"}},"required":["directory"]}`)},
-		{Name: "spec/prompt", Description: "Build and return the prompt for a resource without dispatching", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`)},
-		{Name: "spec/record_learnings", Description: "Persist learnings distilled by a reflection run.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session the reflection belongs to (provides apply provenance)"},"output":{"type":"string","description":"Raw reflection LLM output"}},"required":["session_id","output"]}`)},
-		{Name: "spec/bootstrap", Description: "Check environment and set up crest-spec", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Override spec directory location"}}}`)},
-		{Name: "spec/apply_amendments", Description: "Human-gated write-back of approved amendments into the CUE spec.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"proposals":{"type":"array","items":{"type":"object"}},"apply":{"type":"boolean"}},"required":["resource_id","proposals"]}`)},
-		{Name: "spec/list_amendments", Description: "List materialized amendments, optionally filtered by resource_id and/or state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"state":{"type":"string"}}}`)},
-		{Name: "spec/graduate_amendment", Description: "Human-gated: fold a VERIFIED amendment's intent into the resource's canonical invariants.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"name":{"type":"string"},"apply":{"type":"boolean"}},"required":["resource_id","name"]}`)},
-		{Name: "spec/evolve", Description: "Build the reflection prompt from a session's failure history. Run the returned prompt with an LLM (sonnet), then submit the raw output to spec/record_learnings. Returns an empty prompt when there is nothing to learn from.", InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to reflect over"}},"required":["session_id"]}`)},
-		{Name: "spec/learnings", Description: "List craft-level learnings extracted by reflection. Filter by status (active, retired, promoted); defaults to active. Returns id, scope, text, confidence, status, and times_applied.", InputSchema: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","description":"Learning status filter (default: active)"}}}`)},
-		{Name: "spec/promote_learnings", Description: "Human-gated promotion of active learnings into the per-language learned prompt template. Selects learnings above thresholds (default confidence >= 0.8, times_applied >= 3) and returns the proposed markdown block. With apply=false (default) it writes nothing — review the block, then re-invoke with apply=true to append it to the template and mark those learnings promoted.", InputSchema: json.RawMessage(`{"type":"object","properties":{"lang":{"type":"string","description":"Language scope (default: rust). Selects learnings whose scope_lang is empty or matches."},"min_confidence":{"type":"number","description":"Minimum confidence threshold (default: 0.8)"},"min_times_applied":{"type":"integer","description":"Minimum times_applied threshold (default: 3)"},"apply":{"type":"boolean","description":"When true, writes the block to the template and marks learnings promoted. Default false (preview only)."},"template_path":{"type":"string","description":"Override the target template path (default: internal/prompt/templates/learned/<lang>.md)"}}}`)},
-		{Name: "spec/design_commit", Description: "Commit a bounded-context design record.", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_name":{"type":"string"},"contract_json":{"type":"string"}},"required":["context_name","contract_json"]}`)},
-		{Name: "spec/tasks_commit", Description: "Commit behavioral tasks and checks for a resource.", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"},"tasks":{"type":"array","items":{"type":"object"}}},"required":["resource_id","tasks"]}`)},
-		{Name: "spec/verify", Description: "Execute a declared witness and its negative case through crest-spec's controlled verifier.", InputSchema: json.RawMessage(`{"type":"object","properties":{"witness_id":{"type":"string"},"check_id":{"type":"string"},"session_id":{"type":"string"}},"required":["witness_id"]}`)},
-		{Name: "spec/verifications", Description: "List SQLite-backed validation and witness runs.", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
-		{Name: "spec/verification_inspect", Description: "Inspect one validation or witness run with commands, outputs, observations, predicates, and evidence.", InputSchema: json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}`)},
-		{Name: "spec/verification_definitions", Description: "List current validation and witness definitions reconciled from CUE.", InputSchema: json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string"}}}`)},
-		{Name: "spec/graduate", Description: "Graduate a passed check to the graduated state.", InputSchema: json.RawMessage(`{"type":"object","properties":{"check_id":{"type":"string"}},"required":["check_id"]}`)},
-		{Name: "spec/evaluation_cases", Description: "List or inspect evaluation cases.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_case_from_attempt", Description: "Create a historical evaluation case.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_case_curate", Description: "Create a curated evaluation case.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_datasets", Description: "List or inspect evaluation datasets.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_dataset_create", Description: "Create an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_dataset_add_case", Description: "Add a case to an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_dataset_seal", Description: "Seal an evaluation dataset.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_configurations", Description: "List or inspect evaluation configurations.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_configuration_create", Description: "Create an evaluation configuration.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_runs", Description: "List or inspect evaluation runs.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_run_create", Description: "Create an evaluation run.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_assignment_claim", Description: "Claim an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_assignment_heartbeat", Description: "Renew an evaluation assignment lease.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_assignment_release", Description: "Release an evaluation assignment.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_assignment_cancel", Description: "Cancel an evaluation assignment with a recorded reason.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_assignment_submit", Description: "Submit an evaluation assignment result.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_run_finalize", Description: "Finalize an evaluation run.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_promotions", Description: "List or inspect evaluation promotions.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_learning_propose", Description: "Propose an evaluated learning promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_promotion_decide", Description: "Approve or reject an evaluated promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-		{Name: "spec/evaluation_promotion_apply", Description: "Apply an approved evaluated promotion.", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
-	}
-
-	for _, def := range stubs {
-		s.addTool(def, func(ctx context.Context, args json.RawMessage) toolResult {
-			return textResult("not implemented yet -- available in a future release")
-		})
+	// Register the canonical live descriptors, then replace only their handlers.
+	// This keeps names, descriptions, and schemas identical in both modes.
+	s.registerSpecLifecycleTools()
+	s.registerSpecQueryTools()
+	s.registerEvaluationTools()
+	for _, def := range s.tools {
+		if strings.HasPrefix(def.Name, "spec/") {
+			s.toolFns[def.Name] = strictToolHandler(def, func(context.Context, json.RawMessage) toolResult {
+				return textResult("not implemented yet -- available in a future release")
+			})
+		}
 	}
 }
 
@@ -166,7 +89,9 @@ func (s *Server) registerSpecStubs() {
 func specTool[A any](label string, fn func(ctx context.Context, args A) (any, error)) toolHandler {
 	return func(ctx context.Context, raw json.RawMessage) toolResult {
 		var a A
-		json.Unmarshal(raw, &a)
+		if err := decodeToolArguments(raw, &a); err != nil {
+			return invalidToolArguments(err)
+		}
 		result, err := fn(ctx, a)
 		if err != nil {
 			return errorResult(fmt.Sprintf("%s: %v", label, err))
@@ -180,7 +105,9 @@ func specTool[A any](label string, fn func(ctx context.Context, args A) (any, er
 func specToolErr[A any](label string, confirmValue any, fn func(ctx context.Context, args A) error) toolHandler {
 	return func(ctx context.Context, raw json.RawMessage) toolResult {
 		var a A
-		json.Unmarshal(raw, &a)
+		if err := decodeToolArguments(raw, &a); err != nil {
+			return invalidToolArguments(err)
+		}
 		if err := fn(ctx, a); err != nil {
 			return errorResult(fmt.Sprintf("%s: %v", label, err))
 		}
@@ -188,19 +115,52 @@ func specToolErr[A any](label string, confirmValue any, fn func(ctx context.Cont
 	}
 }
 
-// specToolStrict is like specTool but fails on malformed JSON args.
-func specToolStrict[A any](label string, fn func(ctx context.Context, args A) (any, error)) toolHandler {
-	return func(ctx context.Context, raw json.RawMessage) toolResult {
-		var a A
-		if err := json.Unmarshal(raw, &a); err != nil {
-			return errorResult("invalid arguments: " + err.Error())
-		}
-		result, err := fn(ctx, a)
-		if err != nil {
-			return errorResult(fmt.Sprintf("%s: %v", label, err))
-		}
-		return jsonResult(result)
+func decodeToolArguments(raw json.RawMessage, destination any) error {
+	normalized, _, err := inspectToolArguments(raw)
+	if err != nil {
+		return err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	return requireJSONEOF(decoder)
+}
+
+func inspectToolArguments(raw json.RawMessage) (json.RawMessage, map[string]json.RawMessage, error) {
+	normalized := bytes.TrimSpace(raw)
+	if len(normalized) == 0 {
+		normalized = json.RawMessage(`{}`)
+	}
+	if normalized[0] != '{' {
+		return nil, nil, fmt.Errorf("arguments must be a JSON object")
+	}
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
+	if err := decoder.Decode(&fields); err != nil {
+		return nil, nil, err
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return nil, nil, err
+	}
+	return normalized, fields, nil
+}
+
+func requireJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	err := decoder.Decode(&trailing)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("arguments contain more than one JSON value")
+	}
+	return err
+}
+
+func invalidToolArguments(err error) toolResult {
+	return errorResult("invalid arguments: " + err.Error())
 }
 
 // ---------------------------------------------------------------------------
@@ -761,7 +721,7 @@ func (s *Server) registerSpecLifecycleTools() {
 		Name:        "spec/verify",
 		Description: "Execute a declared witness against the accepted source tree, execute its declared negative case, parse both through the same schema, and persist the falsification-gated evidence. Caller-supplied observations are not accepted.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"witness_id":{"type":"string","description":"Canonical witness.<name> identifier"},"check_id":{"type":"string","description":"Optional legacy task check to advance when the witness covers its resource"},"session_id":{"type":"string","description":"Optional session provenance"}},"required":["witness_id"]}`),
-	}, specToolStrict("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
+	}, specTool("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
 		return s.spec.VerifyWitness(ctx, a.WitnessID, a.CheckID, a.SessionID)
 	}))
 
@@ -1049,7 +1009,7 @@ func (s *Server) registerSpecQueryTools() {
 	s.addTool(toolDef{
 		Name: "spec/import", Description: "Scan a directory of source files and generate a skeleton CUE spec. Heuristic-based classification by filename — no LLM calls.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"directory":{"type":"string","description":"Directory to scan for source files"},"language":{"type":"string","description":"Language hint (go, rust, typescript, python)"},"output":{"type":"string","description":"Output file path (default: spec/imported.cue)"},"dry_run":{"type":"boolean","description":"If true, return CUE output without writing to disk"}},"required":["directory"]}`),
-	}, specToolStrict("import", func(ctx context.Context, a specImportArgs) (any, error) {
+	}, specTool("import", func(ctx context.Context, a specImportArgs) (any, error) {
 		return s.spec.Import(ctx, specmod.ImportOpts{
 			Directory:  a.Directory,
 			Language:   a.Language,
@@ -1119,7 +1079,9 @@ func (s *Server) handleSpecValidate(ctx context.Context, _ json.RawMessage) tool
 
 func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage) toolResult {
 	var p specCommitArgs
-	json.Unmarshal(args, &p)
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
+	}
 	files := make([]specmod.CommitFile, len(p.Files))
 	for i, f := range p.Files {
 		files[i] = specmod.CommitFile{Path: f.Path, Content: f.Content}
@@ -1136,7 +1098,9 @@ func (s *Server) handleSpecCommit(ctx context.Context, args json.RawMessage) too
 
 func (s *Server) handleSpecStatus(ctx context.Context, args json.RawMessage) toolResult {
 	var p specSessionArgs
-	json.Unmarshal(args, &p)
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
+	}
 
 	if p.SessionID != "" {
 		result, err := s.spec.SessionStatus(ctx, p.SessionID)
@@ -1163,8 +1127,8 @@ func (s *Server) handleSpecGraph(ctx context.Context, _ json.RawMessage) toolRes
 
 func (s *Server) handleSpecDiff(ctx context.Context, args json.RawMessage) toolResult {
 	var p specDiffArgs
-	if err := json.Unmarshal(args, &p); err != nil {
-		return errorResult("invalid arguments: " + err.Error())
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
 	}
 	if p.ApplyIDA == "" || p.ApplyIDB == "" {
 		return errorResult("both apply_id_a and apply_id_b are required")
@@ -1178,7 +1142,9 @@ func (s *Server) handleSpecDiff(ctx context.Context, args json.RawMessage) toolR
 
 func (s *Server) handleSpecState(ctx context.Context, args json.RawMessage) toolResult {
 	var p specStateArgs
-	json.Unmarshal(args, &p)
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
+	}
 
 	if p.Action == "rm" {
 		if p.ResourceID == "" {
@@ -1200,7 +1166,9 @@ func (s *Server) handleSpecState(ctx context.Context, args json.RawMessage) tool
 
 func (s *Server) handleSpecVacuum(ctx context.Context, args json.RawMessage) toolResult {
 	var p specVacuumArgs
-	json.Unmarshal(args, &p)
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
+	}
 	if p.OlderThan == "" {
 		p.OlderThan = "30d"
 	}
@@ -1222,8 +1190,8 @@ func (s *Server) handleSpecVacuum(ctx context.Context, args json.RawMessage) too
 
 func (s *Server) handleSpecSQL(ctx context.Context, args json.RawMessage) toolResult {
 	var p specSQLArgs
-	if err := json.Unmarshal(args, &p); err != nil {
-		return errorResult("invalid arguments: " + err.Error())
+	if err := decodeToolArguments(args, &p); err != nil {
+		return invalidToolArguments(err)
 	}
 	trimmed := strings.TrimSpace(p.Query)
 	if len(trimmed) < 6 || !strings.EqualFold(trimmed[:6], "SELECT") {
@@ -1246,7 +1214,33 @@ func (s *Server) handleSpecUnlock(ctx context.Context, _ json.RawMessage) toolRe
 // addTool registers a tool definition and its handler.
 func (s *Server) addTool(def toolDef, handler toolHandler) {
 	s.tools = append(s.tools, def)
-	s.toolFns[def.Name] = handler
+	s.toolFns[def.Name] = strictToolHandler(def, handler)
+}
+
+func strictToolHandler(def toolDef, handler toolHandler) toolHandler {
+	var schema struct {
+		Type       string                     `json:"type"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
+		panic(fmt.Sprintf("invalid input schema for tool %s: %v", def.Name, err))
+	}
+	if schema.Type != "object" {
+		panic(fmt.Sprintf("input schema for tool %s must describe an object", def.Name))
+	}
+
+	return func(ctx context.Context, raw json.RawMessage) toolResult {
+		normalized, fields, err := inspectToolArguments(raw)
+		if err != nil {
+			return invalidToolArguments(err)
+		}
+		for field := range fields {
+			if _, ok := schema.Properties[field]; !ok {
+				return invalidToolArguments(fmt.Errorf("unknown field %q", field))
+			}
+		}
+		return handler(ctx, normalized)
+	}
 }
 
 // parseDuration parses duration strings like "30d", "7d", "24h", "2h30m".
