@@ -1,5 +1,5 @@
 import { requestJSON } from '../api.js';
-import { announce, badge, escapeHTML as esc, statusBadge, timeAgo } from '../components.js';
+import { announce, badge, escapeHTML as esc, recordStateNotice, statusBadge, timeAgo } from '../components.js';
 import { updateRouteParameters } from '../router.js';
 
 const categories = [
@@ -19,7 +19,9 @@ async function showFailure(id) {
       '<section><h2>Corrective action</h2><p>' + esc(failure.corrective_action) + (failure.next_role ? ' → ' + esc(failure.next_role) : '') + '</p></section>' +
       '<section><h2>Affected goals</h2><p>' + esc((failure.goal_ids || []).join(', ') || 'None linked') + '</p></section>' +
       '<section><h2>Resolution</h2><p>' + esc(failure.resolution || 'Unresolved') + '</p></section></div>' +
+      recordStateNotice(failure.record_state) +
       '<h2>Evidence · ' + esc(failure.evidence_source) + ':' + esc(failure.evidence_reference) + '</h2><pre>' + esc(data.evidence || 'No captured evidence') + '</pre>' +
+      (data.evidence_truncated ? '<div class="notice">Inline evidence is truncated. Original size: ' + esc(data.evidence_bytes) + ' bytes.</div>' : '') +
       '<p class="subtle">Evidence hash ' + esc(failure.evidence_hash || '—') + '</p></div>';
     announce('Loaded failure ' + id);
   } catch (error) {

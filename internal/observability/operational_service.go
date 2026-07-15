@@ -13,6 +13,8 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
+const maximumInlineEvidenceBytes = 64 * 1024
+
 func (s *Service) Plan(ctx context.Context, projectName, specHash string, actions []planpkg.PlannedAction, waves [][]string, slices []planpkg.CapabilitySlice) (*PlanView, error) {
 	result := &PlanView{Version: APIVersion, ProjectName: projectName, SpecHash: specHash, Links: []Link{
 		link("self", "plan", "current", "/api/v1/plan"), link("project", "project", projectName, "/api/v1/project"),
@@ -181,7 +183,14 @@ func (s *Service) Failure(ctx context.Context, id string) (*FailureDetail, error
 	if err != nil {
 		return nil, err
 	}
-	result := &FailureDetail{Version: APIVersion, Failure: failureSummary(*row), Evidence: row.Evidence}
+	evidence, truncated := boundedText(row.Evidence, maximumInlineEvidenceBytes)
+	result := &FailureDetail{
+		Version: APIVersion, Failure: failureSummary(*row), Evidence: evidence,
+		EvidenceBytes: len(row.Evidence), EvidenceTruncated: truncated,
+	}
+	if truncated {
+		result.Failure.State.Reason = appendReason(result.Failure.State.Reason, "inline evidence is limited to 64 KiB")
+	}
 	if row.Resolution == "" {
 		result.Status = StatusExplanation{State: "unresolved", Reason: row.CorrectiveAction, Blockers: []string{row.Category}, RecommendedNext: []string{row.CorrectiveAction}}
 	} else {
@@ -202,12 +211,18 @@ func (s *Service) Attempt(ctx context.Context, attemptID string) (*AttemptDetail
 		ParentAttemptID: attempt.ParentAttemptID, RetryNumber: attempt.RetryNumber, Role: attempt.Role, Status: attempt.Status,
 		CreatedAt: attempt.CreatedAt, Links: []Link{link("context", "context", manifest.ID, "/api/v1/contexts/"+manifest.ID)},
 	}}
+	if attempt.PlanOperationID == "" || attempt.Role == "" {
+		result.Attempt.State = RecordState{Legacy: true, Reason: "attempt predates complete plan-operation or role provenance"}
+	}
 	result.Context = &AttemptContext{
 		ID: manifest.ID, ContextHash: manifest.ContextHash, SelectorVersion: manifest.SelectorVersion,
 		EstimatorVersion: manifest.EstimatorVersion, SelectionStrategy: manifest.SelectionStrategy,
 		BudgetTokens: manifest.BudgetTokens, EstimatedTokens: manifest.EstimatedTokens,
 		TemplateHashes: manifest.TemplateHashes, Blocked: manifest.Blocked, BlockedReason: manifest.BlockedReason,
 		Links: []Link{link("self", "context", manifest.ID, "/api/v1/contexts/"+manifest.ID)},
+	}
+	if manifest.ContextHash == "" || manifest.SelectorVersion == "" || manifest.EstimatorVersion == "" {
+		result.Context.State = RecordState{Legacy: true, Reason: "context predates complete selector, estimator, or hash provenance"}
 	}
 	if execution, getErr := s.store.GetExecutionManifestByAttempt(ctx, attemptID); getErr == nil {
 		result.Execution = &AttemptExecution{
@@ -220,6 +235,16 @@ func (s *Service) Attempt(ctx context.Context, attemptID string) (*AttemptDetail
 			InputTokens: execution.InputTokens, OutputTokens: execution.OutputTokens, CostUSD: execution.CostUSD,
 			GoalProgress: execution.GoalProgress, Links: []Link{link("self", "execution", execution.ID, "/api/v1/executions/"+execution.ID)},
 		}
+		result.Execution.State.Redacted = true
+		result.Execution.State.Reason = "credential-shaped execution settings are redacted before SQLite persistence"
+		if execution.ProtocolVersion == "" || execution.ContextHash == "" || execution.SystemInstructionsHash == "" {
+			result.Execution.State.Legacy = true
+			result.Execution.State.Reason = appendReason(result.Execution.State.Reason, "execution predates complete protocol or hash provenance")
+		}
+		if execution.ContextHash != "" && manifest.ContextHash != "" && execution.ContextHash != manifest.ContextHash {
+			result.Execution.State.Stale = true
+			result.Execution.State.Reason = appendReason(result.Execution.State.Reason, "execution context hash does not match the linked manifest")
+		}
 	}
 	if candidate, getErr := s.store.GetCandidateSetByAttempt(ctx, attemptID); getErr == nil {
 		view := &AttemptCandidate{ID: candidate.ID, CandidateHash: candidate.CandidateHash, Status: candidate.Status, DispositionReason: candidate.DispositionReason}
@@ -227,6 +252,9 @@ func (s *Service) Attempt(ctx context.Context, attemptID string) (*AttemptDetail
 			view.Files = append(view.Files, CandidateFileRef{Path: file.Path, ContentHash: file.ContentHash, ByteSize: file.ByteSize, WriteIntent: file.WriteIntent})
 		}
 		result.Candidate = view
+		if candidate.CandidateHash == "" {
+			result.Candidate.State = RecordState{Legacy: true, Reason: "candidate predates immutable output hashing"}
+		}
 	}
 	runs, err := s.store.ListValidationRuns(ctx, 10000)
 	if err != nil {
@@ -326,18 +354,42 @@ func explainPlanStatus(plan *PlanView) StatusExplanation {
 }
 
 func failureSummary(row store.FailureClassification) FailureSummary {
+	state := RecordState{}
+	if row.Evidence != "" {
+		state.Redacted = true
+		state.Reason = "credential-shaped evidence is redacted before SQLite persistence"
+	}
+	if row.Evidence != "" && row.EvidenceHash == "" {
+		state.Legacy = true
+		state.Reason = appendReason(state.Reason, "failure predates hashed evidence provenance")
+	}
 	return FailureSummary{
 		ID: row.ID, AttemptID: row.AttemptID, ExecutionID: row.ExecutionID, ResourceID: row.ResourceID,
 		Category: row.Category, Origin: row.Origin, Confidence: row.Confidence, EvidenceSource: row.EvidenceSource,
 		EvidenceReference: row.EvidenceReference, EvidenceHash: row.EvidenceHash, CorrectiveAction: row.CorrectiveAction,
 		NextRole: row.NextRole, BlocksRetry: row.BlocksRetry, GoalIDs: append([]string(nil), row.GoalIDs...),
 		Resolution: row.Resolution, ResolvedByAttempt: row.ResolvedByAttempt, CreatedAt: row.CreatedAt, ResolvedAt: row.ResolvedAt,
+		State: state,
 		Links: []Link{
 			link("self", "failure", row.ID, "/api/v1/failures/"+row.ID),
 			link("attempt", "attempt", row.AttemptID, "/api/v1/attempts/"+row.AttemptID),
 			link("resource", "resource", row.ResourceID, "/api/v1/resources/"+row.ResourceID),
 		},
 	}
+}
+
+func boundedText(value string, limit int) (string, bool) {
+	if limit < 0 || len(value) <= limit {
+		return value, false
+	}
+	return value[:limit], true
+}
+
+func appendReason(existing, reason string) string {
+	if existing == "" {
+		return reason
+	}
+	return existing + "; " + reason
 }
 
 func explainAttemptStatus(attempt *AttemptDetail) StatusExplanation {

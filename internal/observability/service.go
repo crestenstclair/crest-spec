@@ -545,11 +545,16 @@ func projectRelationships(intent *store.ProjectIntentState, contributions []stor
 }
 
 func resourceSummary(row store.Resource, capabilities, goals []string) ResourceSummary {
+	state := RecordState{}
+	if row.DeclarationHash == "" || row.EffectiveHash == "" {
+		state.Legacy = true
+		state.Reason = "resource predates complete declaration and effective-hash provenance"
+	}
 	return ResourceSummary{
 		ID: row.ID, Kind: row.Kind, ContextName: row.ContextName,
 		DeclarationHash: row.DeclarationHash, EffectiveHash: row.EffectiveHash,
 		Model: row.Model, SettledAt: row.SettledAt, Goals: goals, Capabilities: capabilities,
-		State: RecordState{}, Links: []Link{
+		State: state, Links: []Link{
 			link("self", "resource", row.ID, "/api/v1/resources/"+row.ID),
 			link("impact", "impact", row.ID, "/api/v1/resources/"+row.ID+"/impact"),
 		},

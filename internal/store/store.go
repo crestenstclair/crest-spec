@@ -1565,9 +1565,11 @@ func (s *Store) DeleteAmendment(resourceID, name string) error {
 // ---------------------------------------------------------------------------
 
 // Vacuum deletes operational history older than the given time in one
-// transaction. Context ancestry is reference-safe: an old attempt remains
-// while any retained retry descends from it, and content blobs are released
-// only after no manifest or section references them.
+// transaction. Attempt ancestry is reference-safe: an old attempt remains
+// while any retained retry descends from it or any downstream provenance
+// record still refers to it. Content blobs are released only after no context,
+// execution, candidate, validation, failure, or evaluation record refers to
+// them.
 func (s *Store) Vacuum(before time.Time) (int, error) {
 	ts := before.UTC().Format(time.RFC3339Nano)
 	total := 0
@@ -1579,6 +1581,13 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 
 	const retainedAttemptAncestors = `WITH RECURSIVE retained_attempts(id) AS (
 		SELECT id FROM generation_attempts WHERE created_at >= ?
+		UNION SELECT attempt_id FROM execution_manifests
+		UNION SELECT attempt_id FROM validation_runs WHERE attempt_id IS NOT NULL
+		UNION SELECT attempt_id FROM failure_classifications
+		UNION SELECT source_attempt_id FROM attempt_handoffs
+		UNION SELECT target_attempt_id FROM attempt_handoffs WHERE target_attempt_id IS NOT NULL
+		UNION SELECT source_attempt_id FROM evaluation_cases WHERE source_attempt_id IS NOT NULL
+		UNION SELECT attempt_id FROM evaluation_assignments WHERE attempt_id IS NOT NULL
 		UNION
 		SELECT ga.parent_attempt_id
 		FROM generation_attempts ga
@@ -1609,7 +1618,17 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		{retainedAttemptAncestors + `
 		DELETE FROM generation_attempts
 		WHERE created_at < ? AND id NOT IN (SELECT id FROM retained_attempts)`, []any{ts, ts}},
-		{"DELETE FROM content_blobs WHERE NOT EXISTS (SELECT 1 FROM context_manifests WHERE system_prompt_blob = content_blobs.hash OR rendered_prompt_blob = content_blobs.hash) AND NOT EXISTS (SELECT 1 FROM context_sections WHERE content_blob = content_blobs.hash)", nil},
+		{`DELETE FROM content_blobs
+		WHERE NOT EXISTS (SELECT 1 FROM context_manifests WHERE system_prompt_blob = content_blobs.hash OR rendered_prompt_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM context_sections WHERE content_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM execution_manifests WHERE system_instructions_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM candidate_files WHERE content_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM failure_classifications WHERE evidence_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM validation_executions WHERE stdout_blob = content_blobs.hash OR stderr_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM validation_artifacts WHERE content_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM evaluation_cases WHERE payload_blob = content_blobs.hash OR expected_outcome_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM evaluation_configurations WHERE payload_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM evaluation_promotion_proposals WHERE change_blob = content_blobs.hash)`, nil},
 		{"DELETE FROM applies WHERE started_at < ? AND NOT EXISTS (SELECT 1 FROM generation_attempts WHERE generation_attempts.apply_id = applies.id)", []any{ts}},
 	}
 

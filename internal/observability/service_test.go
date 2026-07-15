@@ -132,3 +132,9 @@ func TestPaginationRejectsInvalidOrUnboundedRequests(t *testing.T) {
 	_, err = NormalizePageRequest(PageRequest{Cursor: "not-a-cursor"})
 	require.Error(t, err)
 }
+
+func TestLegacyResourceProvenanceIsExplicit(t *testing.T) {
+	view := resourceSummary(store.Resource{ID: "legacy.resource", Kind: "asset"}, nil, nil)
+	assert.True(t, view.State.Legacy)
+	assert.Contains(t, view.State.Reason, "hash provenance")
+}

@@ -93,11 +93,13 @@ type FailureSummary struct {
 }
 
 type FailureDetail struct {
-	Version  string            `json:"version"`
-	Failure  FailureSummary    `json:"failure"`
-	Evidence string            `json:"evidence,omitempty"`
-	Status   StatusExplanation `json:"status"`
-	Links    []Link            `json:"links"`
+	Version           string            `json:"version"`
+	Failure           FailureSummary    `json:"failure"`
+	Evidence          string            `json:"evidence,omitempty"`
+	EvidenceBytes     int               `json:"evidence_bytes"`
+	EvidenceTruncated bool              `json:"evidence_truncated"`
+	Status            StatusExplanation `json:"status"`
+	Links             []Link            `json:"links"`
 }
 
 type AttemptDetail struct {
@@ -113,16 +115,17 @@ type AttemptDetail struct {
 }
 
 type AttemptSummary struct {
-	ID              string    `json:"id"`
-	SessionID       string    `json:"session_id"`
-	ResourceID      string    `json:"resource_id"`
-	PlanOperationID string    `json:"plan_operation_id"`
-	ParentAttemptID string    `json:"parent_attempt_id,omitempty"`
-	RetryNumber     int       `json:"retry_number"`
-	Role            string    `json:"role"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	Links           []Link    `json:"links"`
+	ID              string      `json:"id"`
+	SessionID       string      `json:"session_id"`
+	ResourceID      string      `json:"resource_id"`
+	PlanOperationID string      `json:"plan_operation_id"`
+	ParentAttemptID string      `json:"parent_attempt_id,omitempty"`
+	RetryNumber     int         `json:"retry_number"`
+	Role            string      `json:"role"`
+	Status          string      `json:"status"`
+	CreatedAt       time.Time   `json:"created_at"`
+	State           RecordState `json:"record_state"`
+	Links           []Link      `json:"links"`
 }
 
 type AttemptContext struct {
@@ -136,6 +139,7 @@ type AttemptContext struct {
 	TemplateHashes    map[string]string `json:"template_hashes"`
 	Blocked           bool              `json:"blocked"`
 	BlockedReason     string            `json:"blocked_reason,omitempty"`
+	State             RecordState       `json:"record_state"`
 	Links             []Link            `json:"links"`
 }
 
@@ -160,6 +164,7 @@ type AttemptExecution struct {
 	OutputTokens      int64          `json:"output_tokens"`
 	CostUSD           float64        `json:"cost_usd"`
 	GoalProgress      map[string]any `json:"goal_progress,omitempty"`
+	State             RecordState    `json:"record_state"`
 	Links             []Link         `json:"links"`
 }
 
@@ -169,6 +174,7 @@ type AttemptCandidate struct {
 	Status            string             `json:"status"`
 	DispositionReason string             `json:"disposition_reason,omitempty"`
 	Files             []CandidateFileRef `json:"files"`
+	State             RecordState        `json:"record_state"`
 	Links             []Link             `json:"links"`
 }
 

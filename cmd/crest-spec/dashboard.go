@@ -122,11 +122,18 @@ func cmdDashboard(flags cliFlags) {
 	}()
 
 	log.Info().Str("addr", addr).Str("db", dbPath).Msg("dashboard ready")
-	fmt.Fprintf(os.Stderr, "\n  Dashboard: http://localhost%s\n\n", addr)
+	fmt.Fprintf(os.Stderr, "\n  Dashboard: %s\n\n", dashboardURL(addr))
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(err)
 	}
+}
+
+func dashboardURL(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	return "http://" + addr
 }
 
 type dashboard struct {

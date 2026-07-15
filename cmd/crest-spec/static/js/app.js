@@ -279,6 +279,9 @@ async function loadEvaluationsTab() {
   renderEvaluationDatasets(datasets || [], configurations || []);
   renderEvaluationCases(cases || []);
   renderEvaluationPromotions(promotions || []);
+  const runID = new URL(window.location.href).searchParams.get('run');
+  const runIndex = (runs || []).findIndex(run => run.id === runID);
+  if (runIndex >= 0) await toggleEvaluationRun(runID, runIndex, true);
 }
 
 function renderEvaluationSummary(summary) {
@@ -318,9 +321,14 @@ function renderEvaluationRuns(runs) {
   el.innerHTML = html + '</tbody></table>';
 }
 
-async function toggleEvaluationRun(runID, index) {
+async function toggleEvaluationRun(runID, index, restoring = false) {
   const row = document.getElementById('evaluation-run-' + index);
-  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    if (!restoring) updateRouteParameters({ run: null });
+    return;
+  }
+  if (!restoring) updateRouteParameters({ view: 'evaluations', run: runID });
   row.style.display = '';
   const td = row.querySelector('td');
   td.innerHTML = '<div class="drilldown"><div class="empty">Loading deterministic comparison...</div></div>';
@@ -480,6 +488,9 @@ async function loadLearningsTab() {
 
   html += '</tbody></table>';
   el.innerHTML = html;
+  const contextID = new URL(window.location.href).searchParams.get('context');
+  const contextIndex = contexts.findIndex(manifest => (manifest.ID || manifest.id) === contextID);
+  if (contextIndex >= 0) await toggleContextDrilldown(contextID, contextIndex, true);
 }
 
 // ─── Tab: Session (Wave Progress) ──────────────────────────────────
@@ -799,13 +810,15 @@ function populateContextCompare(contexts) {
 	return Boolean(leftID && rightID && left.value === leftID && right.value === rightID && leftID !== rightID);
 }
 
-async function toggleContextDrilldown(manifestID, index) {
+async function toggleContextDrilldown(manifestID, index, restoring = false) {
   const row = document.getElementById('context-drilldown-' + index);
   if (!row) return;
   if (row.style.display !== 'none') {
     row.style.display = 'none';
+    if (!restoring) updateRouteParameters({ context: null });
     return;
   }
+  if (!restoring) updateRouteParameters({ view: 'contexts', context: manifestID });
   row.style.display = '';
   const td = row.querySelector('td');
   td.innerHTML = '<div class="drilldown"><div class="empty">Reconstructing immutable context...</div></div>';
@@ -938,6 +951,9 @@ async function loadExecutionsTab() {
     '</tr><tr id="execution-drilldown-' + index + '" style="display:none"><td colspan="8"></td></tr>';
   });
   el.innerHTML = html + '</tbody></table>';
+  const executionID = new URL(window.location.href).searchParams.get('execution');
+  const executionIndex = executions.findIndex(manifest => (manifest.ID || manifest.id) === executionID);
+  if (executionIndex >= 0) await toggleExecutionDrilldown(executionID, executionIndex, true);
 }
 
 function populateExecutionCompare(executions) {
@@ -961,10 +977,15 @@ function populateExecutionCompare(executions) {
 	return Boolean(leftID && rightID && left.value === leftID && right.value === rightID && leftID !== rightID);
 }
 
-async function toggleExecutionDrilldown(executionID, index) {
+async function toggleExecutionDrilldown(executionID, index, restoring = false) {
   const row = document.getElementById('execution-drilldown-' + index);
   if (!row) return;
-  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    if (!restoring) updateRouteParameters({ execution: null });
+    return;
+  }
+  if (!restoring) updateRouteParameters({ view: 'executions', execution: executionID });
   row.style.display = '';
   const td = row.querySelector('td');
   td.innerHTML = '<div class="drilldown"><div class="empty">Loading execution chain...</div></div>';
@@ -1097,12 +1118,20 @@ async function loadVerificationsTab() {
       '<tr id="verification-drilldown-' + index + '" style="display:none"><td colspan="7"></td></tr>';
   });
   runsEl.innerHTML = html + '</tbody></table>';
+  const verificationID = new URL(window.location.href).searchParams.get('verification');
+  const verificationIndex = runs.findIndex(run => (run.id || run.ID) === verificationID);
+  if (verificationIndex >= 0) await toggleVerificationDrilldown(verificationID, verificationIndex, true);
 }
 
-async function toggleVerificationDrilldown(runID, index) {
+async function toggleVerificationDrilldown(runID, index, restoring = false) {
   const row = document.getElementById('verification-drilldown-' + index);
   if (!row) return;
-  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    if (!restoring) updateRouteParameters({ verification: null });
+    return;
+  }
+  if (!restoring) updateRouteParameters({ view: 'verifications', verification: runID });
   row.style.display = '';
   const td = row.querySelector('td');
   td.innerHTML = '<div class="drilldown"><div class="empty">Loading captured evidence...</div></div>';

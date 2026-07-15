@@ -63,3 +63,16 @@ export function announce(message) {
   const region = document.getElementById('dashboard-status');
   if (region) region.textContent = message;
 }
+
+export function recordStateNotice(state) {
+  if (!state) return '';
+  const labels = [];
+  if (state.legacy) labels.push('legacy');
+  if (state.stale) labels.push('stale');
+  if (state.redacted) labels.push('redacted');
+  if (!labels.length) return '';
+  return '<div class="notice record-state">' +
+    labels.map(label => statusBadge(label)).join(' ') +
+    (state.reason ? ' <span>' + escapeHTML(state.reason) + '</span>' : '') +
+    '</div>';
+}

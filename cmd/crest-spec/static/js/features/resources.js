@@ -1,5 +1,5 @@
 import { requestJSON } from '../api.js';
-import { announce, badge, escapeHTML as esc, statusBadge, timeAgo } from '../components.js';
+import { announce, badge, escapeHTML as esc, recordStateNotice, statusBadge, timeAgo } from '../components.js';
 import { updateRouteParameters } from '../router.js';
 
 function list(values, key, empty = 'None') {
@@ -32,6 +32,7 @@ async function renderResource(resourceID) {
     const resource = data.resource;
     element.innerHTML = '<div class="detail-panel"><div class="view-heading"><div><h2>' + esc(resource.id) + '</h2><p>' + esc(resource.kind) + ' in ' + esc(resource.context_name || 'the project boundary') + '</p></div>' + statusBadge(data.status?.state) + '</div>' +
       '<p class="subtle">' + esc(data.status?.reason) + '</p>' +
+      recordStateNotice(resource.record_state) +
       '<div class="relationship-grid"><section><h2>Goals</h2>' + list(resource.goals) + '</section><section><h2>Capabilities</h2>' + list(resource.capabilities) + '</section>' +
       '<section><h2>Dependencies</h2>' + relationship(data.dependencies) + '</section><section><h2>Consumers</h2>' + relationship(data.consumers) + '</section></div>' +
       '<h2>Generated files</h2>' + list(data.files, 'path', 'No generated files') +
@@ -58,7 +59,7 @@ export async function loadResourcesFeature() {
     }
     element.innerHTML = '<table><thead><tr><th>Resource</th><th>Kind</th><th>Goals</th><th>Capabilities</th><th>Context</th><th>Model</th><th>Settled</th></tr></thead><tbody>' + page.items.map(resource =>
       '<tr><td><button type="button" class="relationship-button" data-resource-id="' + esc(resource.id) + '">' + esc(resource.id) + '</button></td><td>' + badge(resource.kind, 'blue') + '</td>' +
-      '<td>' + list(resource.goals) + '</td><td>' + list(resource.capabilities) + '</td><td>' + esc(resource.context_name || '—') + '</td><td>' + esc(resource.model || '—') + '</td><td>' + timeAgo(resource.settled_at) + '</td></tr>').join('') +
+      '<td>' + list(resource.goals) + '</td><td>' + list(resource.capabilities) + '</td><td>' + esc(resource.context_name || '—') + recordStateNotice(resource.record_state) + '</td><td>' + esc(resource.model || '—') + '</td><td>' + timeAgo(resource.settled_at) + '</td></tr>').join('') +
       '</tbody></table>' + (page.page?.has_more ? '<div class="notice">Showing the first ' + page.page.limit + ' resources. Refine through the API filters for a stable cursor.</div>' : '') +
       '<section id="resource-detail" tabindex="-1" aria-live="polite"></section>';
     bindResourceLinks(element);

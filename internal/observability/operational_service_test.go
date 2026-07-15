@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,9 @@ func TestAttemptComparisonAndFailureViewsAreLinkedAndBounded(t *testing.T) {
 	require.NotNil(t, detail.Execution)
 	require.NotNil(t, detail.Candidate)
 	require.Len(t, detail.Failures, 1)
+	assert.True(t, detail.Execution.State.Redacted)
+	assert.False(t, detail.Execution.State.Legacy)
+	assert.True(t, detail.Failures[0].State.Redacted)
 	assert.NotEmpty(t, detail.Candidate.Files[0].ContentHash)
 	assert.Contains(t, detail.Links[1].HREF, "aggregate.Voice")
 
@@ -122,4 +126,13 @@ func TestAttemptComparisonAndFailureViewsAreLinkedAndBounded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "compile failed", failure.Evidence)
 	assert.Equal(t, "unresolved", failure.Status.State)
+	assert.Equal(t, len("compile failed"), failure.EvidenceBytes)
+	assert.False(t, failure.EvidenceTruncated)
+}
+
+func TestInlineFailureEvidenceHasAnExplicitBound(t *testing.T) {
+	value := strings.Repeat("e", maximumInlineEvidenceBytes+1)
+	bounded, truncated := boundedText(value, maximumInlineEvidenceBytes)
+	assert.True(t, truncated)
+	assert.Len(t, bounded, maximumInlineEvidenceBytes)
 }

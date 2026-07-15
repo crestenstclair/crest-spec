@@ -1,5 +1,5 @@
 import { requestJSON } from '../api.js';
-import { announce, badge, escapeHTML as esc, statusBadge, timeAgo } from '../components.js';
+import { announce, badge, escapeHTML as esc, recordStateNotice, statusBadge, timeAgo } from '../components.js';
 import { updateRouteParameters } from '../router.js';
 
 let cachedOverview = null;
@@ -47,6 +47,7 @@ export function renderProjectDetail(data) {
   const actors = project.actors || [];
   let html = '<div class="view-heading"><div><h2>Project overview</h2><p class="mission">' + esc(project.mission) + '</p></div>' +
     '<div>' + statusBadge(data.status?.state || project.completion_status) + '</div></div>' +
+    recordStateNotice(project.record_state) +
     explanation(data.status) +
     '<div class="relationship-grid"><section><h2>Actors</h2>' + list(actors.map(actor => actor.id + ' — ' + actor.description)) + '</section>' +
     '<section><h2>Explicit non-goals</h2>' + list((project.non_goals || []).map(item => item.id + ' — ' + item.description)) + '</section></div>' +
