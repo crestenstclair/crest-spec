@@ -55,6 +55,13 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "  context list [limit]            list immutable context attempts")
 			fmt.Fprintln(os.Stderr, "  context show <manifest|attempt> inspect exact served context")
 			fmt.Fprintln(os.Stderr, "  context compare <left> <right>  compare two context manifests")
+			fmt.Fprintln(os.Stderr, "  evaluation runs [limit]         list evaluation runs and conclusions")
+			fmt.Fprintln(os.Stderr, "  evaluation show <run-id>        inspect assignments, metrics, and comparisons")
+			fmt.Fprintln(os.Stderr, "  evaluation cases [limit]        list immutable evaluation cases")
+			fmt.Fprintln(os.Stderr, "  evaluation datasets [limit]     list sealed and draft datasets")
+			fmt.Fprintln(os.Stderr, "  evaluation configurations       list immutable compared configurations")
+			fmt.Fprintln(os.Stderr, "  evaluation promotions [status]  list evidence-gated promotion proposals")
+			fmt.Fprintln(os.Stderr, "  evaluation promotion <id>       inspect exact change and decision history")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
 			fmt.Fprintln(os.Stderr, "  state rm <resourceId>          remove a resource from state")
 			fmt.Fprintln(os.Stderr, "  diff <apply_a> <apply_b>       show changes between two applies")
@@ -84,6 +91,8 @@ func runSubcommand() bool {
 		cmdProject()
 	case "context":
 		cmdContext(os.Args[2:])
+	case "evaluation":
+		cmdEvaluation(os.Args[2:])
 	case "state":
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {
@@ -303,6 +312,58 @@ func writePrettyJSON(value any) {
 		fatal(fmt.Errorf("encode output: %w", err))
 	}
 	fmt.Println(string(encoded))
+}
+
+func cmdEvaluation(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: crest-spec evaluation [runs [limit]|show <run-id>|cases [limit]|datasets [limit]|configurations [limit]|promotions [status]|promotion <id>]")
+		os.Exit(1)
+	}
+	st := openStore()
+	defer st.Close()
+	ctx := context.Background()
+	limit := func(index int) int {
+		if len(args) > index {
+			if parsed, err := strconv.Atoi(args[index]); err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+		return 50
+	}
+	var value any
+	var err error
+	switch args[0] {
+	case "runs":
+		value, err = st.ListEvaluationRuns(ctx, limit(1))
+	case "show":
+		if len(args) != 2 {
+			fatal(fmt.Errorf("usage: crest-spec evaluation show <run-id>"))
+		}
+		value, err = st.GetEvaluationRun(ctx, args[1])
+	case "cases":
+		value, err = st.ListEvaluationCases(ctx, limit(1))
+	case "datasets":
+		value, err = st.ListEvaluationDatasets(ctx, limit(1))
+	case "configurations":
+		value, err = st.ListEvaluationConfigurations(ctx, limit(1))
+	case "promotions":
+		status := ""
+		if len(args) > 1 {
+			status = args[1]
+		}
+		value, err = st.ListEvaluationPromotionProposals(ctx, status, 50)
+	case "promotion":
+		if len(args) != 2 {
+			fatal(fmt.Errorf("usage: crest-spec evaluation promotion <proposal-id>"))
+		}
+		value, err = st.GetEvaluationPromotionProposal(ctx, args[1])
+	default:
+		fatal(fmt.Errorf("usage: crest-spec evaluation [runs|show|cases|datasets|configurations|promotions|promotion]"))
+	}
+	if err != nil {
+		fatal(fmt.Errorf("evaluation %s: %w", args[0], err))
+	}
+	writePrettyJSON(value)
 }
 
 func truncHash(h string) string {

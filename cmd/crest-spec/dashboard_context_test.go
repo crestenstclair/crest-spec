@@ -117,4 +117,67 @@ func TestDashboardIncludesContextInspectorInterface(t *testing.T) {
 	require.Contains(t, html, "Validation and Evidence Explorer")
 	require.Contains(t, html, "/api/v1/verifications")
 	require.Contains(t, html, "Parsed observation")
+	require.Contains(t, html, `data-tab="evaluations"`)
+	require.Contains(t, html, "Runs &amp; comparisons")
+	require.Contains(t, html, "/api/v1/evaluations/runs")
+	require.Contains(t, html, "Assignment provenance")
+	require.Contains(t, html, "Immutable human decisions")
+}
+
+func TestDashboardEvaluationAPIsReadCanonicalSQLiteState(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	ctx := context.Background()
+	evaluationCase, err := st.CreateCuratedEvaluationCase(ctx, store.CuratedEvaluationCase{
+		ProjectName: "dashboard", GoalID: "goal.evaluate", CapabilityID: "capability.compare",
+		ResourceID: "asset.dashboard", SpecHash: "spec-hash", RepositoryHash: "tree-hash",
+		ResourceDeclarationHash: "declaration-hash", Payload: map[string]any{"task": "compare"},
+		ExpectedOutcome: map[string]any{"accepted": true},
+	})
+	require.NoError(t, err)
+	dataset, err := st.CreateEvaluationDataset(ctx, "dashboard dataset", "canonical fixture")
+	require.NoError(t, err)
+	require.NoError(t, st.AddEvaluationDatasetCase(ctx, dataset.ID, evaluationCase.ID, "development"))
+	_, err = st.SealEvaluationDataset(ctx, dataset.ID)
+	require.NoError(t, err)
+	configuration := func(name, selector string) *store.EvaluationConfiguration {
+		created, createErr := st.CreateEvaluationConfiguration(ctx, store.EvaluationConfiguration{
+			Name: name, PlannerVersion: "planner-v1", PlannerPolicy: map[string]any{"slices": true},
+			ContextSelectorVersion: selector, ContextBudgetTokens: 8192,
+			TemplateHashes: map[string]string{"task": "template-v1"}, RolePolicyVersion: "roles-v1",
+			HostName: "fixture-host", Model: "fixture-model", ValidationVersion: "validation-v1",
+		})
+		require.NoError(t, createErr)
+		return created
+	}
+	baseline, candidate := configuration("baseline", "selector-v1"), configuration("candidate", "selector-v2")
+	run, err := st.CreateEvaluationRun(ctx, dataset.ID, "dashboard comparison", []store.EvaluationRunVariantInput{
+		{Name: "baseline", ConfigurationID: baseline.ID, Baseline: true},
+		{Name: "candidate", ConfigurationID: candidate.ID},
+	}, store.EvaluationMetricPolicy{}, 1, 0, false)
+	require.NoError(t, err)
+	d := &dashboard{store: st, spec: specmod.New(st, specmod.OSFileSystem{}, &config.Config{}), cfg: &config.Config{}, log: zerolog.Nop()}
+
+	summaryRecorder := httptest.NewRecorder()
+	d.handleEvaluationSummary(summaryRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/evaluations/summary", nil))
+	require.Equal(t, http.StatusOK, summaryRecorder.Code)
+	require.Contains(t, summaryRecorder.Body.String(), `"cases":1`)
+	require.Contains(t, summaryRecorder.Body.String(), `"runs":1`)
+	require.Contains(t, summaryRecorder.Body.String(), `"running":1`)
+
+	runRequest := httptest.NewRequest(http.MethodGet, "/api/v1/evaluations/runs/"+run.ID, nil)
+	runRequest.SetPathValue("id", run.ID)
+	runRecorder := httptest.NewRecorder()
+	d.handleEvaluationRun(runRecorder, runRequest)
+	require.Equal(t, http.StatusOK, runRecorder.Code)
+	require.Contains(t, runRecorder.Body.String(), "dashboard comparison")
+	require.Contains(t, runRecorder.Body.String(), evaluationCase.ID)
+
+	caseRequest := httptest.NewRequest(http.MethodGet, "/api/v1/evaluations/cases/"+evaluationCase.ID, nil)
+	caseRequest.SetPathValue("id", evaluationCase.ID)
+	caseRecorder := httptest.NewRecorder()
+	d.handleEvaluationCase(caseRecorder, caseRequest)
+	require.Equal(t, http.StatusOK, caseRecorder.Code)
+	require.Contains(t, caseRecorder.Body.String(), `"goal_id":"goal.evaluate"`)
 }

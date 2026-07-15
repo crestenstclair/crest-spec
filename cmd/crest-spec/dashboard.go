@@ -66,6 +66,17 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/v1/verifications", d.handleVerifications)
 	mux.HandleFunc("GET /api/v1/verifications/definitions", d.handleVerificationDefinitions)
 	mux.HandleFunc("GET /api/v1/verifications/{id}", d.handleVerificationRun)
+	mux.HandleFunc("GET /api/v1/evaluations/summary", d.handleEvaluationSummary)
+	mux.HandleFunc("GET /api/v1/evaluations/cases", d.handleEvaluationCases)
+	mux.HandleFunc("GET /api/v1/evaluations/cases/{id}", d.handleEvaluationCase)
+	mux.HandleFunc("GET /api/v1/evaluations/datasets", d.handleEvaluationDatasets)
+	mux.HandleFunc("GET /api/v1/evaluations/datasets/{id}", d.handleEvaluationDataset)
+	mux.HandleFunc("GET /api/v1/evaluations/configurations", d.handleEvaluationConfigurations)
+	mux.HandleFunc("GET /api/v1/evaluations/configurations/{id}", d.handleEvaluationConfiguration)
+	mux.HandleFunc("GET /api/v1/evaluations/runs", d.handleEvaluationRuns)
+	mux.HandleFunc("GET /api/v1/evaluations/runs/{id}", d.handleEvaluationRun)
+	mux.HandleFunc("GET /api/v1/evaluations/promotions", d.handleEvaluationPromotions)
+	mux.HandleFunc("GET /api/v1/evaluations/promotions/{id}", d.handleEvaluationPromotion)
 	mux.HandleFunc("GET /api/plan", d.handlePlan)
 	mux.HandleFunc("GET /api/resources", d.handleResources)
 	mux.HandleFunc("GET /api/applies", d.handleApplies)
@@ -238,6 +249,154 @@ func dashboardLimit(r *http.Request) int {
 		}
 	}
 	return limit
+}
+
+type dashboardEvaluationSummary struct {
+	Cases                int `json:"cases"`
+	Datasets             int `json:"datasets"`
+	Configurations       int `json:"configurations"`
+	Runs                 int `json:"runs"`
+	Running              int `json:"running"`
+	Completed            int `json:"completed"`
+	CandidateWins        int `json:"candidate_wins"`
+	Inconclusive         int `json:"inconclusive"`
+	Promotions           int `json:"promotions"`
+	ActionablePromotions int `json:"actionable_promotions"`
+}
+
+func (d *dashboard) handleEvaluationSummary(w http.ResponseWriter, r *http.Request) {
+	cases, casesErr := d.store.ListEvaluationCases(r.Context(), 10000)
+	datasets, datasetsErr := d.store.ListEvaluationDatasets(r.Context(), 10000)
+	configurations, configurationsErr := d.store.ListEvaluationConfigurations(r.Context(), 10000)
+	runs, runsErr := d.store.ListEvaluationRuns(r.Context(), 10000)
+	promotions, promotionsErr := d.store.ListEvaluationPromotionProposals(r.Context(), "", 10000)
+	if err := firstDashboardError(casesErr, datasetsErr, configurationsErr, runsErr, promotionsErr); err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result := dashboardEvaluationSummary{
+		Cases: len(cases), Datasets: len(datasets), Configurations: len(configurations),
+		Runs: len(runs), Promotions: len(promotions),
+	}
+	for _, run := range runs {
+		switch run.Status {
+		case "running":
+			result.Running++
+		case "completed":
+			result.Completed++
+		}
+		switch run.Conclusion {
+		case "candidate_wins":
+			result.CandidateWins++
+		case "inconclusive":
+			result.Inconclusive++
+		}
+	}
+	for _, proposal := range promotions {
+		if proposal.Status == "eligible" || proposal.Status == "approved" {
+			result.ActionablePromotions++
+		}
+	}
+	d.writeJSON(w, result)
+}
+
+func firstDashboardError(errors ...error) error {
+	for _, err := range errors {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *dashboard) handleEvaluationCases(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.store.ListEvaluationCases(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleEvaluationCase(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetEvaluationCase(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, row)
+}
+
+func (d *dashboard) handleEvaluationDatasets(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.store.ListEvaluationDatasets(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleEvaluationDataset(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetEvaluationDataset(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, row)
+}
+
+func (d *dashboard) handleEvaluationConfigurations(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.store.ListEvaluationConfigurations(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleEvaluationConfiguration(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetEvaluationConfiguration(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, row)
+}
+
+func (d *dashboard) handleEvaluationRuns(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.store.ListEvaluationRuns(r.Context(), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetEvaluationRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, row)
+}
+
+func (d *dashboard) handleEvaluationPromotions(w http.ResponseWriter, r *http.Request) {
+	rows, err := d.store.ListEvaluationPromotionProposals(r.Context(), r.URL.Query().Get("status"), dashboardLimit(r))
+	if err != nil {
+		d.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	d.writeJSON(w, rows)
+}
+
+func (d *dashboard) handleEvaluationPromotion(w http.ResponseWriter, r *http.Request) {
+	row, err := d.store.GetEvaluationPromotionProposal(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	d.writeJSON(w, row)
 }
 
 func (d *dashboard) handleExecutions(w http.ResponseWriter, r *http.Request) {

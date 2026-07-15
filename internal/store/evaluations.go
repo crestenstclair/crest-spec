@@ -48,17 +48,17 @@ type EvaluationCase struct {
 }
 
 type CuratedEvaluationCase struct {
-	Provenance              string
-	ProjectName             string
-	GoalID                  string
-	CapabilityID            string
-	ResourceID              string
-	SpecHash                string
-	RepositoryHash          string
-	ResourceDeclarationHash string
-	PlanOperationID         string
-	Payload                 map[string]any
-	ExpectedOutcome         map[string]any
+	Provenance              string         `json:"provenance,omitempty"`
+	ProjectName             string         `json:"project_name"`
+	GoalID                  string         `json:"goal_id,omitempty"`
+	CapabilityID            string         `json:"capability_id,omitempty"`
+	ResourceID              string         `json:"resource_id"`
+	SpecHash                string         `json:"spec_hash"`
+	RepositoryHash          string         `json:"repository_hash"`
+	ResourceDeclarationHash string         `json:"resource_declaration_hash"`
+	PlanOperationID         string         `json:"plan_operation_id,omitempty"`
+	Payload                 map[string]any `json:"payload"`
+	ExpectedOutcome         map[string]any `json:"expected_outcome"`
 }
 
 type EvaluationDataset struct {
