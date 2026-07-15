@@ -72,4 +72,5 @@ Reference HTTP-transport drivers live outside this repository in crest-synth und
   `spec/execution_start`, and call `spec/commit` by attempt ID directly.
 - Retries must use UPDATE-mode context.
 - Verification must execute a declared witness through `spec/verify`; inspect the resulting SQLite-backed run and evidence rather than accepting agent-supplied observations.
+- Operational diagnosis should start with `spec/project_overview`, then follow `spec/plan_inspect`/`spec/impact` into `spec/attempt_inspect`, `spec/context_inspect`, `spec/execution_inspect`, and `spec/verification_inspect` instead of reconstructing provenance from project files.
 - `spec/skip` and `spec/finish force` are human-level decisions.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
+	"github.com/crestenstclair/crest-spec/internal/observability"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
@@ -48,13 +51,24 @@ func cmdDashboard(flags cliFlags) {
 
 	sp := specmod.New(st, specmod.OSFileSystem{}, cfg)
 
-	d := &dashboard{store: st, spec: sp, cfg: cfg, log: log}
+	d := &dashboard{store: st, spec: sp, views: observability.NewService(st), cfg: cfg, log: log}
 
 	mux := http.NewServeMux()
 
 	// API routes
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/v1/project", d.handleProjectOverview)
+	mux.HandleFunc("GET /api/v1/goals", d.handleGoals)
+	mux.HandleFunc("GET /api/v1/goals/{id}", d.handleGoal)
+	mux.HandleFunc("GET /api/v1/capabilities", d.handleCapabilities)
+	mux.HandleFunc("GET /api/v1/capabilities/{id}", d.handleCapability)
+	mux.HandleFunc("GET /api/v1/resources", d.handleV1Resources)
+	mux.HandleFunc("GET /api/v1/resources/{id}/impact", d.handleResourceImpact)
+	mux.HandleFunc("GET /api/v1/resources/{id}", d.handleV1Resource)
+	mux.HandleFunc("GET /api/v1/plan", d.handleV1Plan)
+	mux.HandleFunc("GET /api/v1/plan/operations/{id}", d.handleV1PlanOperation)
+	mux.HandleFunc("GET /api/v1/attempts/{id}", d.handleAttempt)
+	mux.HandleFunc("GET /api/v1/attempt-comparison", d.handleAttemptComparison)
 	mux.HandleFunc("GET /api/v1/contexts", d.handleContextAttempts)
 	mux.HandleFunc("GET /api/v1/contexts/{id}", d.handleContextManifest)
 	mux.HandleFunc("GET /api/v1/context-comparison", d.handleContextComparison)
@@ -62,6 +76,7 @@ func cmdDashboard(flags cliFlags) {
 	mux.HandleFunc("GET /api/v1/executions/{id}", d.handleExecutionTrace)
 	mux.HandleFunc("GET /api/v1/execution-comparison", d.handleExecutionComparison)
 	mux.HandleFunc("GET /api/v1/failures", d.handleFailures)
+	mux.HandleFunc("GET /api/v1/failures/{id}", d.handleFailure)
 	mux.HandleFunc("GET /api/v1/handoffs", d.handleHandoffs)
 	mux.HandleFunc("GET /api/v1/verifications", d.handleVerifications)
 	mux.HandleFunc("GET /api/v1/verifications/definitions", d.handleVerificationDefinitions)
@@ -107,16 +122,24 @@ func cmdDashboard(flags cliFlags) {
 	}()
 
 	log.Info().Str("addr", addr).Str("db", dbPath).Msg("dashboard ready")
-	fmt.Fprintf(os.Stderr, "\n  Dashboard: http://localhost%s\n\n", addr)
+	fmt.Fprintf(os.Stderr, "\n  Dashboard: %s\n\n", dashboardURL(addr))
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(err)
 	}
 }
 
+func dashboardURL(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	return "http://" + addr
+}
+
 type dashboard struct {
 	store *store.Store
 	spec  *specmod.Spec
+	views *observability.Service
 	cfg   *config.Config
 	log   zerolog.Logger
 }
@@ -130,6 +153,55 @@ func (d *dashboard) writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func (d *dashboard) writeAPIError(w http.ResponseWriter, status int, code, message string, details map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	d.writeJSON(w, observability.ErrorEnvelope{
+		Version: observability.APIVersion,
+		Error:   observability.APIError{Code: code, Message: message, Retryable: status >= http.StatusInternalServerError, Details: details},
+	})
+}
+
+func (d *dashboard) queryViews() *observability.Service {
+	if d.views == nil {
+		d.views = observability.NewService(d.store)
+	}
+	return d.views
+}
+
+func (d *dashboard) projectIdentity(ctx context.Context) (string, bool, error) {
+	overview, err := d.spec.ProjectOverview(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	return overview.Project.ProjectName, overview.CompletionEnforced, nil
+}
+
+func pageRequest(r *http.Request) (observability.PageRequest, error) {
+	request := observability.PageRequest{
+		Cursor: r.URL.Query().Get("cursor"), Status: r.URL.Query().Get("status"),
+		Kind: r.URL.Query().Get("kind"), Query: r.URL.Query().Get("q"),
+		GoalID: r.URL.Query().Get("goal"), CapabilityID: r.URL.Query().Get("capability"),
+		AttemptID: r.URL.Query().Get("attempt"),
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return request, fmt.Errorf("limit must be an integer")
+		}
+		request.Limit = limit
+	}
+	return observability.NormalizePageRequest(request)
+}
+
+func (d *dashboard) writeQueryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, cserrors.ErrNotFound) {
+		d.writeAPIError(w, http.StatusNotFound, "not_found", "the requested observability record does not exist", nil)
+		return
+	}
+	d.writeAPIError(w, http.StatusInternalServerError, "query_failed", err.Error(), nil)
 }
 
 func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -200,12 +272,182 @@ func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request) {
-	overview, err := d.spec.ProjectOverview(r.Context())
+	projectName, completionEnforced, err := d.projectIdentity(r.Context())
 	if err != nil {
-		d.writeError(w, http.StatusInternalServerError, err.Error())
+		d.writeQueryError(w, err)
+		return
+	}
+	overview, err := d.queryViews().Project(r.Context(), projectName, completionEnforced)
+	if err != nil {
+		d.writeQueryError(w, err)
 		return
 	}
 	d.writeJSON(w, overview)
+}
+
+func (d *dashboard) handleGoals(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Goals(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleGoal(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Goal(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Capabilities(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleCapability(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Capability(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleV1Resources(w http.ResponseWriter, r *http.Request) {
+	request, err := pageRequest(r)
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Resources(r.Context(), projectName, request)
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleV1Resource(w http.ResponseWriter, r *http.Request) {
+	projectName, _, err := d.projectIdentity(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := d.queryViews().Resource(r.Context(), projectName, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) currentPlan(ctx context.Context) (*observability.PlanView, error) {
+	overview, err := d.spec.ProjectOverview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := d.spec.Plan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return d.queryViews().Plan(ctx, overview.Project.ProjectName, overview.Project.SpecHash, result.Actions, result.Waves, result.Slices)
+}
+
+func (d *dashboard) handleV1Plan(w http.ResponseWriter, r *http.Request) {
+	result, err := d.currentPlan(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleV1PlanOperation(w http.ResponseWriter, r *http.Request) {
+	plan, err := d.currentPlan(r.Context())
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	result, err := observability.PlanOperationByID(plan, r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, struct {
+		Version   string                      `json:"version"`
+		Operation observability.PlanOperation `json:"operation"`
+		Plan      []observability.Link        `json:"links"`
+	}{Version: observability.APIVersion, Operation: *result, Plan: plan.Links})
+}
+
+func (d *dashboard) handleResourceImpact(w http.ResponseWriter, r *http.Request) {
+	result, err := d.spec.Impact(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, observability.Impact(*result))
+}
+
+func (d *dashboard) handleAttempt(w http.ResponseWriter, r *http.Request) {
+	result, err := d.queryViews().Attempt(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
+}
+
+func (d *dashboard) handleAttemptComparison(w http.ResponseWriter, r *http.Request) {
+	result, err := d.queryViews().CompareAttempts(r.Context(), r.URL.Query().Get("left"), r.URL.Query().Get("right"))
+	if err != nil {
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_comparison", err.Error(), nil)
+		return
+	}
+	d.writeJSON(w, result)
 }
 
 func (d *dashboard) handleContextAttempts(w http.ResponseWriter, r *http.Request) {
@@ -484,12 +726,26 @@ func (d *dashboard) handleExecutionComparison(w http.ResponseWriter, r *http.Req
 }
 
 func (d *dashboard) handleFailures(w http.ResponseWriter, r *http.Request) {
-	failures, err := d.store.ListFailureClassifications(r.Context(), dashboardLimit(r))
+	request, err := pageRequest(r)
 	if err != nil {
-		d.writeError(w, http.StatusInternalServerError, err.Error())
+		d.writeAPIError(w, http.StatusBadRequest, "invalid_page", err.Error(), nil)
+		return
+	}
+	failures, err := d.queryViews().Failures(r.Context(), request)
+	if err != nil {
+		d.writeQueryError(w, err)
 		return
 	}
 	d.writeJSON(w, failures)
+}
+
+func (d *dashboard) handleFailure(w http.ResponseWriter, r *http.Request) {
+	result, err := d.queryViews().Failure(r.Context(), r.PathValue("id"))
+	if err != nil {
+		d.writeQueryError(w, err)
+		return
+	}
+	d.writeJSON(w, result)
 }
 
 func (d *dashboard) handleHandoffs(w http.ResponseWriter, r *http.Request) {

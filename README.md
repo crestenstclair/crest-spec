@@ -244,6 +244,8 @@ Settled resources whose declaration hash is unchanged are skipped — regenerati
 
 Context observability is canonical state, not a sidecar: content-addressed snapshots, attempt ancestry, budgets, selection reasons, omissions, template hashes, and rendered prompts live in the existing SQLite database. The dashboard's **Contexts** tab reads those records directly and can compare a failed attempt with its retry even after the working tree changes. Existing databases migrate additively; older generation history remains visible as legacy history without fabricated context manifests.
 
+The dashboard also provides project/goal, resource, plan/impact, execution/attempt, validation/evidence, evaluation, and failure-analysis views with stable deep links. Equivalent typed inspection is available through Go, `/api/v1`, MCP, and the read-only CLI. See [Dashboard and inspection interfaces](docs/DASHBOARD.md) for the route map, API conventions, historical-record labeling, and retention behavior.
+
 Empirical improvement uses that same provenance chain. Historical or curated cases are assembled into immutable SQLite datasets; baseline and candidate planner/context/template/role/host configurations run over identical cases through leased host assignments. Every submitted result must link to an ordinary terminal generation attempt, so engine-derived acceptance, retries, usage, cost, duration, and candidate churn cannot be replaced by host claims. Finalization reports sample and missing counts, split-level comparisons, practical thresholds, regressions, and an explicit winner or `inconclusive`. The dashboard's **Evaluations** tab traces those conclusions back through cases, contexts, executions, and human-gated promotion decisions.
 
 Once generated, a file's content is yours: the planner guides architecture and invariants, it does not police file contents.
@@ -283,6 +285,8 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/validate` | Parse + registry-check the spec; run after every spec edit |
 | `spec/plan` | Diff spec vs state → create/modify/destroy actions + waves |
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts) |
+| `spec/project_overview`, `spec/goals`, `spec/capabilities`, `spec/resources`, `spec/plan_inspect`, `spec/impact` | Explain project completion, trace functionality into resources, and inspect goal-directed work/impact |
+| `spec/attempt_inspect`, `spec/attempt_compare` | Inspect or compare task, context, execution, candidate, validation, failure, cost, and outcome provenance |
 | `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | List, reconstruct, and structurally compare immutable generation contexts |
 | `spec/executions`, `spec/execution_inspect`, `spec/execution_roles` | Inspect execution provenance, lifecycle, candidate linkage, and closed role policies |
 | `spec/verification_definitions`, `spec/verifications`, `spec/verification_inspect` | Inspect named validation/witness definitions and the complete SQLite-backed evidence chain |
@@ -376,6 +380,10 @@ With no arguments, `crest-spec` starts the MCP server on stdio. Generation is ne
 ```
 crest-spec init [--agent name] [--force]  bootstrap agent-host integration files
 crest-spec dashboard [--addr :8080]       web dashboard for monitoring sessions
+crest-spec status                          explain completion and recommended work
+crest-spec inspect <kind> [id]             inspect project, goal, capability, resource, plan, attempt, failure, context, execution, validation, or impact
+crest-spec compare attempts <a> <b>        compare complete attempt provenance
+crest-spec compare contexts <a> <b>        compare context selection
 crest-spec adopt                          seed baseline state from on-disk code
 crest-spec context list [limit]           list immutable context attempts
 crest-spec context show <manifest|attempt> reconstruct exact served context
@@ -397,7 +405,7 @@ make fmt          # go fmt ./...
 make lint         # golangci-lint run
 ```
 
-See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth` for the reference spec. Its `spec/` directory is the whole-picture design (domain-grouped, one file per bounded context); `phases/phase-1/` through `phases/phase-11/` are the original phased spec hydrated into standalone directories — each holds `base.cue`, the cumulative phase files, and the resolved winning overrides for that stage. Point `CREST_SPEC_SPEC_DIR` at any phase to replay that stage of the evolving design, then at the next one and the planner regenerates exactly the delta.
+See [SPEC.md](SPEC.md) for the full functional and implementation specification, and `fixtures/crest-synth/spec` for the single whole-picture reference spec. It combines project intent, DDD resources, boundaries, artifacts, traceability, and verification. `fixtures/crest-synth/phases` exists only to test incremental fixture evolution; phases are not a crest-spec functionality or authoring concept.
 
 ## Status
 

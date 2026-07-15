@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	observationpkg "github.com/crestenstclair/crest-spec/internal/observability"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -64,6 +65,10 @@ the returned Instructions, or read the server instructions from initialize.`)
 func (s *Server) registerSpecStubs() {
 	stubs := []toolDef{
 		{Name: "spec/project_overview", Description: "Show project mission, goals, completion, blockers, and history", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+		{Name: "spec/goals", Description: "List or inspect project goals", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
+		{Name: "spec/capabilities", Description: "List or inspect project capabilities", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
+		{Name: "spec/resources", Description: "List or inspect goal-linked resources", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
+		{Name: "spec/plan_inspect", Description: "Inspect the goal-directed plan", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`)},
 		{Name: "spec/impact", Description: "Trace resource change impact into capabilities, goals, and evidence", InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string"}},"required":["resource_id"]}`)},
 		{Name: "spec/plan", Description: "Show what would change (dry run)", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"},"filter":{"type":"string","description":"Resource filter pattern"}}}`)},
 		{Name: "spec/validate", Description: "Check structural invariants", InputSchema: json.RawMessage(`{"type":"object","properties":{"spec_dir":{"type":"string","description":"Spec directory path"}}}`)},
@@ -74,6 +79,8 @@ func (s *Server) registerSpecStubs() {
 		{Name: "spec/context_attempts", Description: "List recent immutable generation context attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer"}}}`)},
 		{Name: "spec/context_inspect", Description: "Inspect the exact immutable context served for an attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"context_manifest_id":{"type":"string"},"attempt_id":{"type":"string"}}}`)},
 		{Name: "spec/context_compare", Description: "Compare two context manifests structurally", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_context_manifest_id":{"type":"string"},"right_context_manifest_id":{"type":"string"}},"required":["left_context_manifest_id","right_context_manifest_id"]}`)},
+		{Name: "spec/attempt_inspect", Description: "Inspect a complete generation attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`)},
+		{Name: "spec/attempt_compare", Description: "Compare two complete generation attempts", InputSchema: json.RawMessage(`{"type":"object","properties":{"left_attempt_id":{"type":"string"},"right_attempt_id":{"type":"string"}},"required":["left_attempt_id","right_attempt_id"]}`)},
 		{Name: "spec/execution_start", Description: "Register host execution metadata for an immutable attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`)},
 		{Name: "spec/execution_report", Description: "Complete or fail an execution attempt", InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"status":{"type":"string"}},"required":["attempt_id","status"]}`)},
 		{Name: "spec/execution_roles", Description: "List closed agent roles and policies", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
@@ -310,6 +317,30 @@ type specExecutionInspectArgs struct {
 type specAttemptLimitArgs struct {
 	AttemptID string `json:"attempt_id"`
 	Limit     int    `json:"limit"`
+}
+
+type specObservationArgs struct {
+	ID           string `json:"id"`
+	Limit        int    `json:"limit"`
+	Cursor       string `json:"cursor"`
+	Status       string `json:"status"`
+	Kind         string `json:"kind"`
+	Query        string `json:"q"`
+	GoalID       string `json:"goal_id"`
+	CapabilityID string `json:"capability_id"`
+	AttemptID    string `json:"attempt_id"`
+}
+
+func (a specObservationArgs) pageRequest() observationpkg.PageRequest {
+	return observationpkg.PageRequest{
+		Limit: a.Limit, Cursor: a.Cursor, Status: a.Status, Kind: a.Kind, Query: a.Query,
+		GoalID: a.GoalID, CapabilityID: a.CapabilityID, AttemptID: a.AttemptID,
+	}
+}
+
+type specAttemptCompareArgs struct {
+	LeftAttemptID  string `json:"left_attempt_id"`
+	RightAttemptID string `json:"right_attempt_id"`
 }
 
 type specFailureClassifyArgs struct {
@@ -814,6 +845,20 @@ func (s *Server) registerSpecQueryTools() {
 	}))
 
 	s.addTool(toolDef{
+		Name: "spec/attempt_inspect", Description: "Inspect one generation attempt across task, context, execution, candidate, validation, failure, cost, and outcome records.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}`),
+	}, specTool("attempt inspect", func(ctx context.Context, a specObservationArgs) (any, error) {
+		return s.spec.ObserveAttempt(ctx, a.AttemptID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/attempt_compare", Description: "Compare two attempts across governed context, execution, candidate, validation, failure, cost, and outcome identity.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"left_attempt_id":{"type":"string"},"right_attempt_id":{"type":"string"}},"required":["left_attempt_id","right_attempt_id"]}`),
+	}, specTool("attempt compare", func(ctx context.Context, a specAttemptCompareArgs) (any, error) {
+		return s.spec.CompareAttempts(ctx, a.LeftAttemptID, a.RightAttemptID)
+	}))
+
+	s.addTool(toolDef{
 		Name: "spec/execution_roles", Description: "List the closed agent-role registry, role policy version, context policy, output kind, permitted actions, and handoff targets.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, specTool("execution roles", func(_ context.Context, _ struct{}) (any, error) {
@@ -835,10 +880,13 @@ func (s *Server) registerSpecQueryTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/failures", Description: "List deterministic failure classifications, corrective routes, retry blocks, evidence, and affected goals.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"limit":{"type":"integer"}}}`),
-	}, specTool("failures", func(ctx context.Context, a specAttemptLimitArgs) (any, error) {
-		return s.spec.ListFailures(ctx, a.AttemptID, a.Limit)
+		Name: "spec/failures", Description: "List or inspect typed deterministic failure classifications, corrective routes, retry blocks, evidence, affected goals, and resolutions.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"attempt_id":{"type":"string"},"status":{"type":"string","enum":["resolved","unresolved"]},"kind":{"type":"string"},"goal_id":{"type":"string"},"q":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200},"cursor":{"type":"string"}}}`),
+	}, specTool("failures", func(ctx context.Context, a specObservationArgs) (any, error) {
+		if a.ID != "" {
+			return s.spec.ObserveFailure(ctx, a.ID)
+		}
+		return s.spec.ObserveFailures(ctx, a.pageRequest())
 	}))
 
 	s.addTool(toolDef{
@@ -870,7 +918,48 @@ func (s *Server) registerSpecQueryTools() {
 		Name: "spec/project_overview", Description: "Show the SQLite-backed project mission, required and optional goals, capabilities, acceptance requirements, completion state, blockers, and status history.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, specTool("project_overview", func(ctx context.Context, _ struct{}) (any, error) {
-		return s.spec.ProjectOverview(ctx)
+		return s.spec.ObserveProject(ctx)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/goals", Description: "List filtered goal summaries or inspect one goal's requirements, acceptance scenarios, evidence, blockers, and status history.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"status":{"type":"string"},"capability_id":{"type":"string"},"q":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200},"cursor":{"type":"string"}}}`),
+	}, specTool("goals", func(ctx context.Context, a specObservationArgs) (any, error) {
+		if a.ID != "" {
+			return s.spec.ObserveGoal(ctx, a.ID)
+		}
+		return s.spec.ObserveGoals(ctx, a.pageRequest())
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/capabilities", Description: "List filtered capabilities or inspect one capability's linked goals, requirements, acceptance scenarios, and contributing resources.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"goal_id":{"type":"string"},"q":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200},"cursor":{"type":"string"}}}`),
+	}, specTool("capabilities", func(ctx context.Context, a specObservationArgs) (any, error) {
+		if a.ID != "" {
+			return s.spec.ObserveCapability(ctx, a.ID)
+		}
+		return s.spec.ObserveCapabilities(ctx, a.pageRequest())
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/resources", Description: "List filtered resource summaries or inspect one resource's goal trace, dependencies, consumers, files, attempts, and validation history.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string"},"goal_id":{"type":"string"},"capability_id":{"type":"string"},"q":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200},"cursor":{"type":"string"}}}`),
+	}, specTool("resources", func(ctx context.Context, a specObservationArgs) (any, error) {
+		if a.ID != "" {
+			return s.spec.ObserveResource(ctx, a.ID)
+		}
+		return s.spec.ObserveResources(ctx, a.pageRequest())
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/plan_inspect", Description: "Inspect the current goal-directed capability slices, operation rationale, waves, expected evidence, and actual session progress.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Optional operation id"}}}`),
+	}, specTool("plan inspect", func(ctx context.Context, a specObservationArgs) (any, error) {
+		plan, err := s.spec.ObservePlan(ctx)
+		if err != nil || a.ID == "" {
+			return plan, err
+		}
+		return observationpkg.PlanOperationByID(plan, a.ID)
 	}))
 
 	s.addTool(toolDef{

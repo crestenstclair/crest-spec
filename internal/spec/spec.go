@@ -31,6 +31,7 @@ type specStore interface {
 	SetResource(r store.Resource) error
 	DeleteResource(id string) error
 	GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error)
+	GetDependencies(sourceID string) ([]store.Dependency, error)
 	SetGeneratedFile(f store.GeneratedFile) error
 	DeleteGeneratedFiles(resourceID string) error
 	CountOtherFileOwners(path, resourceID string) (int64, error)
@@ -83,6 +84,7 @@ type specStore interface {
 	ResolveFailureClassification(ctx context.Context, id, resolution, resolvedByAttempt string) error
 	ListFailureClassificationsByAttempt(ctx context.Context, attemptID string) ([]store.FailureClassification, error)
 	ListFailureClassifications(ctx context.Context, limit int) ([]store.FailureClassification, error)
+	GetFailureClassification(ctx context.Context, id string) (*store.FailureClassification, error)
 	CreateAttemptHandoff(ctx context.Context, handoff store.AttemptHandoff) (*store.AttemptHandoff, error)
 	ListPendingAttemptHandoffs(ctx context.Context, limit int) ([]store.AttemptHandoff, error)
 	ListAttemptHandoffsBySource(ctx context.Context, attemptID string) ([]store.AttemptHandoff, error)

@@ -54,6 +54,7 @@ func TestRecordValidationRunPersistsProvenanceAndSupersedesEvidence(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, first.Executions, 2)
 	require.Len(t, first.Evidence, 1)
+	assert.Equal(t, first.ID, first.Evidence[0].RunID)
 	assert.Equal(t, "current", first.Evidence[0].Currency)
 	assert.Equal(t, "wave", first.Executions[1].Artifacts[0].Content) // executions sort negative before real
 	assert.Equal(t, `{"peak":0.7}`, first.Executions[1].Observation.ObservationJSON)
@@ -110,6 +111,7 @@ func TestInvalidateVerificationEvidenceMarksResourceEvidenceStale(t *testing.T) 
 	})
 	require.NoError(t, err)
 	require.Len(t, run.Evidence, 1)
+	assert.Equal(t, run.ID, run.Evidence[0].RunID)
 	assert.Equal(t, "current", run.Evidence[0].Currency)
 
 	count, err := st.InvalidateVerificationEvidence(

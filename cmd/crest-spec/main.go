@@ -20,6 +20,7 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/config"
 	"github.com/crestenstclair/crest-spec/internal/mcp"
+	"github.com/crestenstclair/crest-spec/internal/observability"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -51,7 +52,11 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "Commands:")
 			fmt.Fprintln(os.Stderr, "  init [--agent name] [--force]  bootstrap agent-host integration files")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
+			fmt.Fprintln(os.Stderr, "  status                          explain project completion and recommended work")
 			fmt.Fprintln(os.Stderr, "  project                         show mission, goal state, and blockers")
+			fmt.Fprintln(os.Stderr, "  inspect <kind> [id]             inspect project, goal, capability, resource, plan, attempt, failure, context, execution, validation, or impact")
+			fmt.Fprintln(os.Stderr, "  compare attempts <a> <b>        compare full attempt provenance and outcome")
+			fmt.Fprintln(os.Stderr, "  compare contexts <a> <b>        compare context selection manifests")
 			fmt.Fprintln(os.Stderr, "  context list [limit]            list immutable context attempts")
 			fmt.Fprintln(os.Stderr, "  context show <manifest|attempt> inspect exact served context")
 			fmt.Fprintln(os.Stderr, "  context compare <left> <right>  compare two context manifests")
@@ -87,8 +92,14 @@ func runSubcommand() bool {
 	case "dashboard":
 		flags := parseFlags(os.Args[2:])
 		cmdDashboard(flags)
+	case "status":
+		cmdCompletionStatus()
 	case "project":
 		cmdProject()
+	case "inspect":
+		cmdInspect(os.Args[2:])
+	case "compare":
+		cmdCompare(os.Args[2:])
 	case "context":
 		cmdContext(os.Args[2:])
 	case "evaluation":
@@ -254,6 +265,117 @@ func cmdProject() {
 	for _, blocker := range overview.Blockers {
 		fmt.Printf("BLOCKED %s [%s]: %s\n", blocker.GoalID, blocker.Category, blocker.Reason)
 	}
+}
+
+func inspectionSpec() (*store.Store, *specmod.Spec) {
+	cfg, err := config.New()
+	if err != nil {
+		fatal(fmt.Errorf("config: %w", err))
+	}
+	st := openStore()
+	return st, specmod.New(st, specmod.OSFileSystem{}, cfg)
+}
+
+func cmdCompletionStatus() {
+	st, sp := inspectionSpec()
+	defer st.Close()
+	overview, err := sp.ObserveProject(context.Background())
+	if err != nil {
+		fatal(fmt.Errorf("status: %w", err))
+	}
+	fmt.Printf("%s\n\n", overview.Project.Mission)
+	fmt.Printf("Completion: %s — %s\n", overview.Status.State, overview.Status.Reason)
+	if len(overview.Status.Missing) > 0 {
+		fmt.Printf("Missing: %s\n", strings.Join(overview.Status.Missing, ", "))
+	}
+	for _, blocker := range overview.Blockers {
+		fmt.Printf("BLOCKED %s [%s]: %s\n", blocker.GoalID, blocker.Category, blocker.Reason)
+	}
+	for _, next := range overview.Status.RecommendedNext {
+		fmt.Printf("NEXT: %s\n", next)
+	}
+}
+
+func cmdInspect(args []string) {
+	if len(args) < 1 || len(args) > 2 {
+		fatal(fmt.Errorf("usage: crest-spec inspect <project|goal|capability|resource|plan|attempt|failure|context|execution|validation|impact> [id]"))
+	}
+	kind, id := args[0], ""
+	if len(args) == 2 {
+		id = args[1]
+	}
+	if kind != "project" && kind != "plan" && id == "" {
+		fatal(fmt.Errorf("inspect %s: id is required", kind))
+	}
+	st, sp := inspectionSpec()
+	defer st.Close()
+	ctx := context.Background()
+	var value any
+	var err error
+	switch kind {
+	case "project":
+		value, err = sp.ObserveProject(ctx)
+	case "goal":
+		value, err = sp.ObserveGoal(ctx, id)
+	case "capability":
+		value, err = sp.ObserveCapability(ctx, id)
+	case "resource":
+		value, err = sp.ObserveResource(ctx, id)
+	case "plan":
+		var plan *observability.PlanView
+		plan, err = sp.ObservePlan(ctx)
+		if err == nil && id != "" {
+			value, err = observability.PlanOperationByID(plan, id)
+		} else {
+			value = plan
+		}
+	case "attempt":
+		value, err = sp.ObserveAttempt(ctx, id)
+	case "failure":
+		value, err = sp.ObserveFailure(ctx, id)
+	case "context":
+		value, err = sp.InspectContext(ctx, id, "")
+		if err != nil {
+			value, err = sp.InspectContext(ctx, "", id)
+		}
+	case "execution":
+		value, err = sp.InspectExecution(ctx, id, "")
+		if err != nil {
+			value, err = sp.InspectExecution(ctx, "", id)
+		}
+	case "validation":
+		value, err = sp.GetValidationRun(ctx, id)
+	case "impact":
+		var impactResult any
+		impactResult, err = sp.Impact(ctx, id)
+		value = impactResult
+	default:
+		fatal(fmt.Errorf("inspect: unsupported kind %q", kind))
+	}
+	if err != nil {
+		fatal(fmt.Errorf("inspect %s: %w", kind, err))
+	}
+	writePrettyJSON(value)
+}
+
+func cmdCompare(args []string) {
+	if len(args) != 3 || (args[0] != "attempts" && args[0] != "contexts") {
+		fatal(fmt.Errorf("usage: crest-spec compare <attempts|contexts> <left-id> <right-id>"))
+	}
+	st, sp := inspectionSpec()
+	defer st.Close()
+	ctx := context.Background()
+	var value any
+	var err error
+	if args[0] == "attempts" {
+		value, err = sp.CompareAttempts(ctx, args[1], args[2])
+	} else {
+		value, err = sp.CompareContexts(ctx, args[1], args[2])
+	}
+	if err != nil {
+		fatal(fmt.Errorf("compare %s: %w", args[0], err))
+	}
+	writePrettyJSON(value)
 }
 
 func cmdContext(args []string) {

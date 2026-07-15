@@ -18,6 +18,7 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/config"
 	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	impactpkg "github.com/crestenstclair/crest-spec/internal/impact"
+	observationpkg "github.com/crestenstclair/crest-spec/internal/observability"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -136,6 +137,42 @@ func (f *fakeSpec) Status(ctx context.Context) (*specmod.StatusResult, error) {
 }
 func (f *fakeSpec) ProjectOverview(ctx context.Context) (*specmod.ProjectOverviewResult, error) {
 	return &specmod.ProjectOverviewResult{}, nil
+}
+func (f *fakeSpec) ObserveProject(context.Context) (*observationpkg.ProjectOverview, error) {
+	return &observationpkg.ProjectOverview{Version: observationpkg.APIVersion, Project: observationpkg.Project{Name: "fixture"}}, nil
+}
+func (f *fakeSpec) ObserveGoals(_ context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.GoalSummary], error) {
+	return &observationpkg.Page[observationpkg.GoalSummary]{Version: observationpkg.APIVersion, Items: []observationpkg.GoalSummary{{ID: "goal.fixture"}}, Page: observationpkg.PageInfo{Limit: request.Limit}}, nil
+}
+func (f *fakeSpec) ObserveGoal(_ context.Context, id string) (*observationpkg.GoalDetail, error) {
+	return &observationpkg.GoalDetail{Version: observationpkg.APIVersion, Goal: observationpkg.GoalSummary{ID: id}}, nil
+}
+func (f *fakeSpec) ObserveCapabilities(_ context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.CapabilitySummary], error) {
+	return &observationpkg.Page[observationpkg.CapabilitySummary]{Version: observationpkg.APIVersion, Items: []observationpkg.CapabilitySummary{{ID: "capability.fixture"}}, Page: observationpkg.PageInfo{Limit: request.Limit}}, nil
+}
+func (f *fakeSpec) ObserveCapability(_ context.Context, id string) (*observationpkg.CapabilityDetail, error) {
+	return &observationpkg.CapabilityDetail{Version: observationpkg.APIVersion, Capability: observationpkg.CapabilitySummary{ID: id}}, nil
+}
+func (f *fakeSpec) ObserveResources(_ context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.ResourceSummary], error) {
+	return &observationpkg.Page[observationpkg.ResourceSummary]{Version: observationpkg.APIVersion, Items: []observationpkg.ResourceSummary{{ID: "resource.fixture"}}, Page: observationpkg.PageInfo{Limit: request.Limit}}, nil
+}
+func (f *fakeSpec) ObserveResource(_ context.Context, id string) (*observationpkg.ResourceDetail, error) {
+	return &observationpkg.ResourceDetail{Version: observationpkg.APIVersion, Resource: observationpkg.ResourceSummary{ID: id}}, nil
+}
+func (f *fakeSpec) ObservePlan(context.Context) (*observationpkg.PlanView, error) {
+	return &observationpkg.PlanView{Version: observationpkg.APIVersion, ProjectName: "fixture", Operations: []observationpkg.PlanOperation{{ID: "modify:fixture"}}}, nil
+}
+func (f *fakeSpec) ObserveAttempt(_ context.Context, id string) (*observationpkg.AttemptDetail, error) {
+	return &observationpkg.AttemptDetail{Version: observationpkg.APIVersion, Attempt: observationpkg.AttemptSummary{ID: id}}, nil
+}
+func (f *fakeSpec) CompareAttempts(_ context.Context, left, right string) (*observationpkg.AttemptComparison, error) {
+	return &observationpkg.AttemptComparison{Version: observationpkg.APIVersion, Left: observationpkg.AttemptDetail{Attempt: observationpkg.AttemptSummary{ID: left}}, Right: observationpkg.AttemptDetail{Attempt: observationpkg.AttemptSummary{ID: right}}}, nil
+}
+func (f *fakeSpec) ObserveFailures(_ context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.FailureSummary], error) {
+	return &observationpkg.Page[observationpkg.FailureSummary]{Version: observationpkg.APIVersion, Items: []observationpkg.FailureSummary{{ID: "failure.fixture", Category: request.Kind}}, Page: observationpkg.PageInfo{Limit: request.Limit}}, nil
+}
+func (f *fakeSpec) ObserveFailure(_ context.Context, id string) (*observationpkg.FailureDetail, error) {
+	return &observationpkg.FailureDetail{Version: observationpkg.APIVersion, Failure: observationpkg.FailureSummary{ID: id}}, nil
 }
 func (f *fakeSpec) Impact(ctx context.Context, resourceID string) (*impactpkg.Result, error) {
 	return &impactpkg.Result{SourceResource: resourceID}, nil
@@ -348,6 +385,9 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/context_attempts"])
 	assert.True(t, names["spec/context_inspect"])
 	assert.True(t, names["spec/context_compare"])
+	assert.True(t, names["spec/attempt_inspect"])
+	assert.True(t, names["spec/attempt_compare"])
+	assert.True(t, names["spec/capabilities"])
 	assert.True(t, names["spec/execution_start"])
 	assert.True(t, names["spec/execution_report"])
 	assert.True(t, names["spec/execution_roles"])
@@ -370,12 +410,34 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 		"spec/plan", "spec/begin", "spec/next", "spec/context",
 		"spec/commit", "spec/finish", "spec/evolve", "spec/sql",
 		"spec/project_overview",
+		"spec/goals", "spec/capabilities", "spec/resources", "spec/plan_inspect",
 		"spec/impact",
 		"spec/unlock", "spec/apply_amendments", "spec/list_amendments",
 		"spec/graduate_amendment",
 	} {
 		assert.True(t, names[kept], "tool %q should be registered", kept)
 	}
+}
+
+func TestTypedObservationToolsShareDashboardContracts(t *testing.T) {
+	srv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	project := srv.toolFns["spec/project_overview"](context.Background(), json.RawMessage(`{}`))
+	require.False(t, project.IsError)
+	assert.Contains(t, project.Content[0].Text, `"version":"v1"`)
+	assert.Contains(t, project.Content[0].Text, `"name":"fixture"`)
+
+	goals := srv.toolFns["spec/goals"](context.Background(), json.RawMessage(`{"limit":20,"status":"blocked"}`))
+	require.False(t, goals.IsError)
+	assert.Contains(t, goals.Content[0].Text, `"id":"goal.fixture"`)
+
+	resource := srv.toolFns["spec/resources"](context.Background(), json.RawMessage(`{"id":"aggregate.Fixture"}`))
+	require.False(t, resource.IsError)
+	assert.Contains(t, resource.Content[0].Text, `"id":"aggregate.Fixture"`)
+
+	comparison := srv.toolFns["spec/attempt_compare"](context.Background(), json.RawMessage(`{"left_attempt_id":"left","right_attempt_id":"right"}`))
+	require.False(t, comparison.IsError)
+	assert.Contains(t, comparison.Content[0].Text, `"id":"left"`)
+	assert.Contains(t, comparison.Content[0].Text, `"id":"right"`)
 }
 
 func TestCommitToolForwardsArgs(t *testing.T) {

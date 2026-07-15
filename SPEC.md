@@ -18,6 +18,8 @@ The mental model is **Terraform for code generation**: you declare what your sys
 
 > **Evaluation revision (2026-07-14).** Historical attempts with a complete context/execution/candidate/validation chain and curated imports can become immutable, content-addressed evaluation cases. Sealed datasets assign training, development, and held-out splits; held-out outcomes are withheld from executing roles. Immutable configurations identify planner, selector/budget, template hashes, role policy, host/model, validation policy, and learnings without credentials. External hosts claim token-bound leases and execute ordinary governed attempts. Finalization deterministically persists per-split metrics and baseline comparisons with sample/missing counts and practical thresholds; incomplete or underpowered data is `inconclusive`. Reusable learning/template/policy changes require a unique evaluated winner, complete primary and cost evidence, optional held-out qualification, an exact change and rollback identity, and immutable human approval. Operational evaluation state remains exclusively in SQLite and is exposed through MCP, CLI inspection, HTTP, and the Evaluations dashboard.
 
+> **Operational-interface revision (2026-07-15).** A typed observability query service now supplies versioned project, goal, capability, resource, plan, impact, attempt-comparison, and failure contracts to Go, MCP, CLI, and the embedded dashboard. The dashboard is a dependency-free modular application with stable deep links from project intent through plan, context, execution, candidate, validation, evidence, and completion consequences. Historical, stale, and redacted records are labeled instead of being presented as complete provenance. Cursor bounds and raw-capture limits apply to human query surfaces. Vacuum conservatively retains every attempt with downstream provenance and collects content blobs only after checking context, execution, candidate, validation, failure, and evaluation references.
+
 > **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or generation subprocess; Claude Code is the orchestrator. The engine may run only verification commands declared in CUE. Tombstones throughout this document mark the removed surfaces.
 
 - **Module:** `github.com/crestenstclair/crest-spec`
@@ -1470,6 +1472,9 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/note` | Save a design decision note for a resource. Notes are injected into downstream prompts. |
 | `spec/commit` | Submit an immutable candidate by `attempt_id`; snapshots files, runs mechanical and amendment validations, and transactionally accepts/rejects with usage and goal progress. See §4, §8.2. |
 | `spec/execution_roles` | List the closed role registry, context policies, output kinds, permitted actions, and handoffs. |
+| `spec/project_overview`, `spec/goals`, `spec/capabilities`, `spec/resources` | Return typed SQLite-backed project completion and goal-to-resource query views. |
+| `spec/plan_inspect`, `spec/impact` | Explain goal-directed slices/operations, actual execution progress, and the full resource-to-regression impact chain. |
+| `spec/attempt_inspect`, `spec/attempt_compare` | Inspect or compare task, context, execution, candidate, validation, failure, cost, and outcome provenance. |
 | `spec/executions`, `spec/execution_inspect` | List and reconstruct execution provenance, candidates, metrics, goal impact, and state events. |
 | `spec/verification_definitions` | List current named validation and executable-witness definitions reconciled from CUE into SQLite. |
 | `spec/verifications`, `spec/verification_inspect` | List verification runs or inspect exact commands, source/executable hashes, captured output and artifacts, parsed observations, predicate results, and evidence currency. |
@@ -1708,9 +1713,11 @@ Auth: the server does not authenticate to any LLM — it spawns nothing. The orc
 
 ### 13.2 Mode 2: Dashboard
 
-A monitoring interface that exposes API endpoints for inspecting system state. The dashboard provides visibility into active sessions, resource state, and generation history without going through the MCP protocol.
+A local operational interface that exposes typed `/api/v1` query contracts and an embedded dependency-free HTML/CSS/JavaScript application. It reads canonical SQLite state through the same observability services used by MCP and the CLI; it has no dashboard database, generated status files, or sidecars.
 
-> **Tombstone.** The dashboard lost its **jobs** and **agent-events** views in the native-workflow pivot (there are no jobs and no server-side agent events to display). What remains is state/session/generation inspection.
+Project/goal, plan/impact, resource, context, execution/attempt, validation/evidence, evaluation, and failure views use URL query identities for deep-link restoration and comparison. Typed records explicitly expose completion explanations and legacy/stale/redacted state. List contracts use bounded cursor pagination; raw failure evidence is bounded and reports truncation. The server binds wherever the operator requests but supplies no authentication, so deployments should remain on a trusted local interface. The complete route and developer-question map is in `docs/DASHBOARD.md`.
+
+> **Tombstone.** The dashboard has no **jobs** or server-side **agent-events** views after the native-workflow pivot. Agents remain host-owned; the dashboard observes their persisted attempts and evidence.
 
 ### 13.3 Mode 3: CLI Subcommands
 
@@ -1719,18 +1726,22 @@ The orchestrating agent (or a human) runs these as short-lived shell commands to
 | Invocation | Behavior |
 |------------|----------|
 | `crest-spec dashboard [--addr :8080]` | Start the monitoring dashboard. |
+| `crest-spec status` | Explain project mission, completion state, missing functionality, blockers, regressions, and recommended next work. |
+| `crest-spec inspect <kind> [id]` | Read project, goal, capability, resource, plan, attempt, failure, context, execution, validation, or impact state as JSON. |
+| `crest-spec compare attempts <a> <b>` | Compare full governed attempt provenance and outcomes. |
+| `crest-spec compare contexts <a> <b>` | Compare exact context selection and omission decisions. |
 | `crest-spec state list` | Print all resources in state with hashes and settle times. |
 | `crest-spec state rm <resourceId>` | Remove a resource from state without deleting code on disk. Next plan treats it as `create`. |
 | `crest-spec diff <apply_a> <apply_b>` | Show what changed between two applies (created, modified, destroyed resources). |
-| `crest-spec vacuum --before <date>` | Compact history older than date. Deletes old generations, invariant checks, and apply records. |
+| `crest-spec vacuum --before <date>` | Compact unreferenced history older than date while retaining retry ancestry and every attempt/blob referenced by execution, validation, failure, handoff, or evaluation provenance. |
 | `crest-spec sql <query>` | Run a read-only SQL query against `.crest-spec/state.db`. |
 | `crest-spec -h` / `--help` | Print usage + env-var table; exit 0. |
 
 > **Tombstone — `crest-spec run` / `crest-spec check job`.** The unattended `run` driver and the async-job result collector (`check job`, which blocked on `WaitForCompletion` and consumed a job) were removed. There are no jobs to wait on; generation is driven by the Claude Code workflow, and there is no synchronous CLI apply.
 
-### 13.4 Multi-Phase Agent Runner
+### 13.4 Fixture Evolution Runner
 
-`scripts/run-phased-agent.sh` drives crest-spec through all 10 crest-synth phases with state carry-over. For each phase it symlinks the `spec-generate` skill and workflow into the workspace's `.claude/` dir, then launches an interactive `claude` session (with Remote Control enabled) and tells it to *use the spec-generate skill* to run the full generation pipeline for that phase's spec. SQLite state carries between phases, so the planner only generates what changed.
+`scripts/run-phased-agent.sh` drives the crest-synth test fixture through its stored evolution snapshots with state carry-over. It exists to exercise incremental reconciliation against historical fixture states. A “phase” is not a crest-spec resource, planning primitive, authoring model, or runtime concept. The supported reference input is the combined `fixtures/crest-synth/spec` tree; the snapshots under `fixtures/crest-synth/phases` are test data only.
 
 ### 13.5 Typical Orchestration Flow
 

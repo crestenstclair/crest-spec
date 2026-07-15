@@ -1,6 +1,6 @@
 # Workstream 8: Dashboard and Developer Interfaces
 
-Status: **Draft**  
+Status: **Implemented**
 Depends on: delivered incrementally with WS1–WS7  
 Original scope: Workstream 14 and cross-cutting developer experience
 

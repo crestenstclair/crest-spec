@@ -3,11 +3,41 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/execution"
 )
+
+func TestVacuumRetainsBlobsReferencedByExecutionProvenance(t *testing.T) {
+	st := newContextManifestStore(t, "resource.vacuum-execution")
+	ctx := context.Background()
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.vacuum-execution"), Dispatch: true,
+	})
+	require.NoError(t, err)
+	executionInput := testExecutionManifest()
+	started, err := st.StartExecution(ctx, executionInput)
+	require.NoError(t, err)
+	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "synth.go", Content: "package synth\n", WriteIntent: "modify",
+	}})
+	require.NoError(t, err)
+
+	_, err = st.Vacuum(time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	manifest, err := st.GetContextManifest(ctx, "manifest-1")
+	require.NoError(t, err)
+	require.Equal(t, "attempt-1", manifest.Attempt.ID)
+	gotExecution, err := st.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	require.Equal(t, "use Bearer [REDACTED]", gotExecution.SystemInstructions)
+	gotCandidate, err := st.GetCandidateSetByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Equal(t, candidate.ID, gotCandidate.ID)
+	require.Equal(t, "package synth\n", gotCandidate.Files[0].Content)
+}
 
 func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")

@@ -114,9 +114,10 @@ Config that matters:
   Recovery records an engine-observed host failure, not a model failure.
 - One server per project directory. The SQLite db lives in `.crest-spec/`.
 
-There is also a small human CLI (`crest-spec adopt`, `crest-spec dashboard`)
-for one-off maintenance — that is the ONLY part of crest-spec meant to be
-invoked as a command. Generation is never started from the CLI.
+There is also a human CLI for one-off maintenance and read-only inspection:
+`crest-spec adopt`, `dashboard`, `status`, `inspect`, and `compare`. Generation
+is never started from the CLI. The equivalent dashboard/API/MCP/CLI route map
+is documented in [DASHBOARD.md](DASHBOARD.md).
 
 ## Tool surface (what to call, when, and who calls it)
 
@@ -129,6 +130,11 @@ spawned for one resource/check.
 | `spec/validate` | Parse + registry-check the spec. Run after every spec edit. |
 | `spec/plan` | Diff spec vs state → `create/modify/destroy` actions + waves. Review before running; a correct increment is small. |
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts). |
+| `spec/project_overview`, `spec/goals`, `spec/capabilities`, `spec/resources` | Inspect mission, completion, missing functionality, goal/capability traceability, and resource relationships. |
+| `spec/plan_inspect`, `spec/impact` | Explain vertical slices, operation rationale, actual progress, and regression impact. |
+| `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | Inspect the exact selected context and compare inclusion, truncation, omission, budget, and hash decisions. |
+| `spec/attempt_inspect`, `spec/attempt_compare`, `spec/executions`, `spec/execution_inspect` | Inspect or compare complete attempt and redacted execution provenance. |
+| `spec/failures` | Filter or inspect deterministic failure categories, evidence, corrective routes, retry policy, and resolution. |
 | `spec/verification_definitions`, `spec/verifications`, `spec/verification_inspect` | List named validation/witness definitions and inspect exact commands, hashes, output, parsed observations, predicates, and evidence currency. |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db. |
 | `spec/sql` | Read-only SQL over the whole state db. The escape hatch for any question the views don't answer. |
@@ -327,7 +333,7 @@ or sub-agent dispatcher.
   has neither. See the first section.
 - **Calling the binary as a job CLI** (`crest-spec generate`, `crest-spec
   run`). No such subcommands; generation only happens through session tools
-  driven by your agents. The CLI surface is `adopt` and `dashboard` only.
+  driven by your agents. CLI `status`, `inspect`, and `compare` are read-only.
 - **Two orchestrators against one project** (two sessions, or a session
   while another host is mid-wave). Locks will fight; cargo will fight.
 - **Self-reported success.** A sub-agent claiming "verified" without a

@@ -16,6 +16,7 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/config"
 	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	impactpkg "github.com/crestenstclair/crest-spec/internal/impact"
+	observationpkg "github.com/crestenstclair/crest-spec/internal/observability"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -102,6 +103,18 @@ type specHandler interface {
 	Skip(ctx context.Context, sessionID, resourceID, reason string) error
 	Status(ctx context.Context) (*specmod.StatusResult, error)
 	ProjectOverview(ctx context.Context) (*specmod.ProjectOverviewResult, error)
+	ObserveProject(ctx context.Context) (*observationpkg.ProjectOverview, error)
+	ObserveGoals(ctx context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.GoalSummary], error)
+	ObserveGoal(ctx context.Context, id string) (*observationpkg.GoalDetail, error)
+	ObserveCapabilities(ctx context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.CapabilitySummary], error)
+	ObserveCapability(ctx context.Context, id string) (*observationpkg.CapabilityDetail, error)
+	ObserveResources(ctx context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.ResourceSummary], error)
+	ObserveResource(ctx context.Context, id string) (*observationpkg.ResourceDetail, error)
+	ObservePlan(ctx context.Context) (*observationpkg.PlanView, error)
+	ObserveAttempt(ctx context.Context, id string) (*observationpkg.AttemptDetail, error)
+	CompareAttempts(ctx context.Context, left, right string) (*observationpkg.AttemptComparison, error)
+	ObserveFailures(ctx context.Context, request observationpkg.PageRequest) (*observationpkg.Page[observationpkg.FailureSummary], error)
+	ObserveFailure(ctx context.Context, id string) (*observationpkg.FailureDetail, error)
 	Impact(ctx context.Context, resourceID string) (*impactpkg.Result, error)
 	Log(ctx context.Context, limit int) ([]storemod.Apply, error)
 	History(ctx context.Context, resourceID string, limit int) ([]storemod.Generation, error)

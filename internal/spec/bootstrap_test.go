@@ -114,10 +114,14 @@ func (s *stubStore) ListContributionsByResource(context.Context, string) ([]stor
 	return nil, nil
 }
 
-func (s *stubStore) GetResource(id string) (*store.Resource, error) { return nil, nil }
-func (s *stubStore) ListResources() ([]store.Resource, error)       { return nil, s.listResourcesErr }
-func (s *stubStore) SetResource(r store.Resource) error             { return nil }
-func (s *stubStore) DeleteResource(id string) error                 { return nil }
+func (s *stubStore) GetResource(id string) (*store.Resource, error)     { return nil, nil }
+func (s *stubStore) ListResources() ([]store.Resource, error)           { return nil, s.listResourcesErr }
+func (s *stubStore) GetDependencies(string) ([]store.Dependency, error) { return nil, nil }
+func (s *stubStore) GetFailureClassification(context.Context, string) (*store.FailureClassification, error) {
+	return nil, nil
+}
+func (s *stubStore) SetResource(r store.Resource) error { return nil }
+func (s *stubStore) DeleteResource(id string) error     { return nil }
 func (s *stubStore) GetGeneratedFiles(resourceID string) ([]store.GeneratedFile, error) {
 	return nil, nil
 }
