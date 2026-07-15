@@ -2,11 +2,18 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
+	migrationspkg "github.com/crestenstclair/crest-spec/migrations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +105,98 @@ func TestNew_MigrationsIdempotent(t *testing.T) {
 	// Running migrate a second time should not error.
 	err := s.migrate()
 	require.NoError(t, err)
+}
+
+func TestMigrationFileRollsBackAtomicallyOnInvalidSQL(t *testing.T) {
+	st := testStore(t)
+	err := st.migrateFS(fstest.MapFS{
+		"901_test_valid.sql":   {Data: []byte(`CREATE TABLE migration_test_valid (id TEXT PRIMARY KEY);`)},
+		"902_test_invalid.sql": {Data: []byte(`CREATE TABLE migration_test_partial (id TEXT PRIMARY KEY); THIS IS NOT SQL;`)},
+	})
+	require.ErrorContains(t, err, "902_test_invalid.sql")
+	var count int
+	require.NoError(t, st.sqlDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='migration_test_valid'`).Scan(&count))
+	assert.Equal(t, 1, count, "the preceding migration commits independently")
+	require.NoError(t, st.sqlDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='migration_test_partial'`).Scan(&count))
+	assert.Zero(t, count, "the failing migration must roll back all of its statements")
+	require.NoError(t, st.sqlDB.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE filename='902_test_invalid.sql'`).Scan(&count))
+	assert.Zero(t, count, "a failed migration must not be marked applied")
+}
+
+func TestNewMigratesPopulatedLegacyDatabaseWithoutInventingProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-state.db")
+	database, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = database.Exec("PRAGMA foreign_keys=ON")
+	require.NoError(t, err)
+	_, err = database.Exec(`CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	entries, err := fs.ReadDir(migrationspkg.FS, ".")
+	require.NoError(t, err)
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if name > "016_generated_files_multiowner.sql" {
+			break
+		}
+		contents, readErr := fs.ReadFile(migrationspkg.FS, name)
+		require.NoError(t, readErr)
+		tx, beginErr := database.Begin()
+		require.NoError(t, beginErr)
+		_, execErr := tx.Exec(string(contents))
+		require.NoError(t, execErr, name)
+		_, execErr = tx.Exec("INSERT INTO schema_migrations (filename) VALUES (?)", name)
+		require.NoError(t, execErr, name)
+		require.NoError(t, tx.Commit(), name)
+	}
+	const timestamp = "2026-01-01T00:00:00Z"
+	_, err = database.Exec(`INSERT INTO resources
+		(id, kind, context_name, declaration_hash, effective_hash, model, settled_at)
+		VALUES ('legacy.resource', 'aggregate', 'Legacy', 'declaration', 'effective', 'legacy-model', ?)`, timestamp)
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO applies (id, status, spec_hash, started_at, done_at)
+		VALUES ('legacy-apply', 'completed', 'legacy-spec', ?, ?)`, timestamp, timestamp)
+	require.NoError(t, err)
+	_, err = database.Exec(`INSERT INTO generations
+		(id, apply_id, resource_id, prompt_text, prompt_hash, output_text, model, outcome, retry_count, created_at)
+		VALUES ('legacy-generation', 'legacy-apply', 'legacy.resource', 'old prompt', 'prompt-hash', 'old output', 'legacy-model', 'accepted', 0, ?)`, timestamp)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	st, err := New(path)
+	require.NoError(t, err)
+	resource, err := st.GetResource("legacy.resource")
+	require.NoError(t, err)
+	assert.Equal(t, "effective", resource.EffectiveHash)
+	generations, err := st.ListGenerations("legacy.resource", 10)
+	require.NoError(t, err)
+	require.Len(t, generations, 1)
+	assert.True(t, generations[0].Legacy)
+	assert.Empty(t, generations[0].ExecutionID)
+	assert.Equal(t, "old output", generations[0].OutputText)
+	_, err = st.GetProjectIntent(context.Background(), "legacy-project")
+	assert.Error(t, err, "migration must not fabricate project intent for historical rows")
+	rows, err := st.sqlDB.Query("PRAGMA foreign_key_check")
+	require.NoError(t, err)
+	require.False(t, rows.Next(), "migrated database must preserve referential integrity")
+	require.NoError(t, rows.Close())
+	var migrationCount int
+	require.NoError(t, st.sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount))
+	assert.Equal(t, len(names), migrationCount)
+	require.NoError(t, st.Close())
+
+	reopened, err := New(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	generations, err = reopened.ListGenerations("legacy.resource", 10)
+	require.NoError(t, err)
+	require.Len(t, generations, 1)
+	assert.True(t, generations[0].Legacy)
 }
 
 // ---------------------------------------------------------------------------

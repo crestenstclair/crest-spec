@@ -108,6 +108,7 @@ type ValidationPredicateResult struct {
 
 type VerificationEvidence struct {
 	ID             string     `json:"id"`
+	RunID          string     `json:"run_id"`
 	EvidenceID     string     `json:"evidence_id"`
 	SourceTreeHash string     `json:"source_tree_hash"`
 	DefinitionHash string     `json:"definition_hash"`
@@ -382,7 +383,7 @@ func (s *Store) GetVerificationCompletionFacts(ctx context.Context, projectName 
 	}
 	for _, evidence := range evidenceRows {
 		facts.CurrentEvidence[evidence.EvidenceID] = append(facts.CurrentEvidence[evidence.EvidenceID], VerificationEvidence{
-			ID: evidence.ID, EvidenceID: evidence.EvidenceID, SourceTreeHash: evidence.SourceTreeHash,
+			ID: evidence.ID, RunID: evidence.RunID, EvidenceID: evidence.EvidenceID, SourceTreeHash: evidence.SourceTreeHash,
 			DefinitionHash: evidence.DefinitionHash, Classification: evidence.Classification,
 			Currency: evidence.Currency, CreatedAt: parseTime(evidence.CreatedAt),
 			InvalidatedAt: parseOptionalTime(evidence.InvalidatedAt),
@@ -557,7 +558,7 @@ func (s *Store) hydrateValidationRun(ctx context.Context, row db.ValidationRun) 
 	}
 	for _, evidence := range evidenceRows {
 		run.Evidence = append(run.Evidence, VerificationEvidence{
-			ID: evidence.ID, EvidenceID: evidence.EvidenceID, SourceTreeHash: evidence.SourceTreeHash,
+			ID: evidence.ID, RunID: evidence.RunID, EvidenceID: evidence.EvidenceID, SourceTreeHash: evidence.SourceTreeHash,
 			DefinitionHash: evidence.DefinitionHash, Classification: evidence.Classification,
 			Currency: evidence.Currency, CreatedAt: parseTime(evidence.CreatedAt),
 			InvalidatedAt: parseOptionalTime(evidence.InvalidatedAt),

@@ -1,34 +1,173 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
+	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	"github.com/crestenstclair/crest-spec/internal/observability"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
 func goalOrientedDashboard(t *testing.T) *dashboard {
+	return dashboardForSpecDir(t, filepath.Join("..", "..", "fixtures", "crest-synth", "spec"))
+}
+
+func goalOrientedSampleDashboard(t *testing.T) *dashboard {
+	return dashboardForSpecDir(t, filepath.Join("..", "..", "docs", "plans", "goal-oriented-crest-spec", "examples"))
+}
+
+func dashboardForSpecDir(t *testing.T, relativeDir string) *dashboard {
 	t.Helper()
 	st, err := store.New(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	specDir, err := filepath.Abs(filepath.Join("..", "..", "fixtures", "crest-synth", "spec"))
+	specDir, err := filepath.Abs(relativeDir)
 	require.NoError(t, err)
 	cfg := &config.Config{SpecDir: specDir}
 	return &dashboard{
 		store: st, spec: specmod.New(st, specmod.OSFileSystem{}, cfg),
 		views: observability.NewService(st), cfg: cfg, log: zerolog.Nop(),
 	}
+}
+
+func TestDashboardTracesGoalThroughPlanAttemptAndEvidence(t *testing.T) {
+	d := goalOrientedSampleDashboard(t)
+	ctx := context.Background()
+	begin, err := d.spec.Begin(ctx, specmod.BeginOpts{})
+	require.NoError(t, err)
+	require.NotEmpty(t, begin.SessionID)
+
+	const (
+		resourceID   = "domainService.Engine.EngineRenderer"
+		goalID       = "goal.play_an_instrument"
+		definitionID = "witness.audible_tone"
+	)
+	var operationID string
+	for _, action := range begin.Plan {
+		if action.ResourceID == resourceID {
+			operationID = action.OperationID
+			assert.Contains(t, action.Goals, goalID)
+			break
+		}
+	}
+	require.NotEmpty(t, operationID)
+
+	prepared, err := d.spec.PrepareContext(ctx, specmod.ContextOptions{
+		SessionID: begin.SessionID, ResourceID: resourceID, BudgetTokens: contextmanifest.MaximumBudget,
+	})
+	require.NoError(t, err)
+	require.False(t, prepared.Blocked, prepared.BlockedReason)
+	execution, err := d.spec.StartExecution(ctx, specmod.ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: executionpkg.ProtocolVersion,
+		IdempotencyKey: "dashboard-e2e-execution", ContextHash: prepared.ContextHash, Role: prepared.Role,
+		HostName: "acceptance-host", HostVersion: "1.0", Provider: "fixture", Model: "fixture-model",
+		TemplateHashes: prepared.TemplateHashes, SystemInstructions: prepared.SystemPrompt,
+		Tools: []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+	})
+	require.NoError(t, err)
+	candidate, err := d.store.SubmitCandidate(ctx, execution.ID, []store.CandidateFile{{
+		Path: "src/engine/renderer.rs", Content: "// immutable acceptance candidate\n", WriteIntent: "create",
+	}})
+	require.NoError(t, err)
+
+	started := time.Now().UTC().Add(-20 * time.Millisecond)
+	run, err := d.store.RecordValidationRun(ctx, store.ValidationRunWrite{
+		ProjectName: "crest-synth-goal-oriented-sample",
+		Run: store.ValidationRun{
+			DefinitionID: definitionID, SessionID: begin.SessionID, AttemptID: prepared.AttemptID,
+			ExecutionID: execution.ID, SourceTreeHash: "tree-acceptance", Classification: "passed",
+			Reason:    "real witness passed and the negative case failed",
+			StartedAt: started, CompletedAt: started.Add(20 * time.Millisecond), DurationMS: 20,
+			Executions: []store.ValidationExecution{
+				{
+					Role: "real", CommandJSON: `["tone-witness","real"]`, CommandHash: "command-real",
+					WorkingDirectory: ".", EnvironmentJSON: `{}`, EnvironmentHash: "environment",
+					SourceTreeHash: "tree-acceptance", ExecutableHash: "executable-real",
+					Stdout: `CREST_OBS {"peak":0.7}`, ExitCode: 0,
+					StartedAt: started, CompletedAt: started.Add(10 * time.Millisecond), DurationMS: 10,
+				},
+				{
+					Role: "negative", CommandJSON: `["tone-witness","silent"]`, CommandHash: "command-negative",
+					WorkingDirectory: ".", EnvironmentJSON: `{}`, EnvironmentHash: "environment",
+					SourceTreeHash: "tree-acceptance", ExecutableHash: "executable-negative",
+					Stdout: `CREST_OBS {"peak":0}`, ExitCode: 0,
+					StartedAt: started.Add(10 * time.Millisecond), CompletedAt: started.Add(20 * time.Millisecond), DurationMS: 10,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, run.Evidence)
+
+	goalRequest := httptest.NewRequest(http.MethodGet, "/api/v1/goals/"+goalID, nil)
+	goalRequest.SetPathValue("id", goalID)
+	goalRecorder := httptest.NewRecorder()
+	d.handleGoal(goalRecorder, goalRequest)
+	require.Equal(t, http.StatusOK, goalRecorder.Code, goalRecorder.Body.String())
+	var goal observability.GoalDetail
+	require.NoError(t, json.Unmarshal(goalRecorder.Body.Bytes(), &goal))
+	assert.Contains(t, goal.Goal.Resources, resourceID)
+	var linkedEvidence *observability.EvidenceStatus
+	for index := range goal.Evidence {
+		if goal.Evidence[index].RunID == run.ID {
+			linkedEvidence = &goal.Evidence[index]
+			break
+		}
+	}
+	require.NotNil(t, linkedEvidence)
+	assert.Equal(t, "tree-acceptance", linkedEvidence.SourceTreeHash)
+	assert.Equal(t, "/api/v1/verifications/"+run.ID, linkedEvidence.Links[0].HREF)
+
+	planRecorder := httptest.NewRecorder()
+	d.handleV1Plan(planRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+	require.Equal(t, http.StatusOK, planRecorder.Code, planRecorder.Body.String())
+	var plan observability.PlanView
+	require.NoError(t, json.Unmarshal(planRecorder.Body.Bytes(), &plan))
+	operation, err := observability.PlanOperationByID(&plan, operationID)
+	require.NoError(t, err)
+	assert.Contains(t, operation.Goals, goalID)
+	assert.Contains(t, operation.ExpectedEvidence, "evidence.audible_tone")
+
+	attemptRequest := httptest.NewRequest(http.MethodGet, "/api/v1/attempts/"+prepared.AttemptID, nil)
+	attemptRequest.SetPathValue("id", prepared.AttemptID)
+	attemptRecorder := httptest.NewRecorder()
+	d.handleAttempt(attemptRecorder, attemptRequest)
+	require.Equal(t, http.StatusOK, attemptRecorder.Code, attemptRecorder.Body.String())
+	var attempt observability.AttemptDetail
+	require.NoError(t, json.Unmarshal(attemptRecorder.Body.Bytes(), &attempt))
+	require.NotNil(t, attempt.Context)
+	require.NotNil(t, attempt.Execution)
+	require.NotNil(t, attempt.Candidate)
+	assert.Equal(t, prepared.ContextManifestID, attempt.Context.ID)
+	assert.Equal(t, execution.ID, attempt.Execution.ID)
+	assert.Equal(t, candidate.ID, attempt.Candidate.ID)
+	require.Len(t, attempt.Validations, 1)
+	assert.Equal(t, run.ID, attempt.Validations[0].ID)
+
+	validationRequest := httptest.NewRequest(http.MethodGet, "/api/v1/verifications/"+run.ID, nil)
+	validationRequest.SetPathValue("id", run.ID)
+	validationRecorder := httptest.NewRecorder()
+	d.handleVerificationRun(validationRecorder, validationRequest)
+	require.Equal(t, http.StatusOK, validationRecorder.Code, validationRecorder.Body.String())
+	var validation store.ValidationRun
+	require.NoError(t, json.Unmarshal(validationRecorder.Body.Bytes(), &validation))
+	assert.Equal(t, prepared.AttemptID, validation.AttemptID)
+	assert.Equal(t, execution.ID, validation.ExecutionID)
+	assert.Equal(t, "tree-acceptance", validation.SourceTreeHash)
+	assert.Len(t, validation.Executions, 2)
 }
 
 func TestDashboardV1ProjectGoalAndCapabilityContracts(t *testing.T) {

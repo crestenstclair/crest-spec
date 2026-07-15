@@ -294,7 +294,8 @@ func (s *Service) Goal(ctx context.Context, projectName, goalID string) (*GoalDe
 				view.Currency = evidence.Currency
 				view.Classification = evidence.Classification
 				view.SourceTreeHash = evidence.SourceTreeHash
-				view.Links = append(view.Links, link("validation", "validation", evidence.ID, "/api/v1/verifications?evidence_id="+evidence.ID))
+				view.RunID = evidence.RunID
+				view.Links = append(view.Links, link("validation", "validation", evidence.RunID, "/api/v1/verifications/"+evidence.RunID))
 				break
 			}
 		}

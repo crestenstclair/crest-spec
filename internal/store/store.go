@@ -182,6 +182,10 @@ func New(dbPath string) (*Store, error) {
 
 // migrate applies any pending SQL migration files from the embedded FS.
 func (s *Store) migrate() error {
+	return s.migrateFS(migrations.FS)
+}
+
+func (s *Store) migrateFS(migrationFS fs.FS) error {
 	_, err := s.sqlDB.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
 		filename TEXT PRIMARY KEY
 	)`)
@@ -189,7 +193,7 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	entries, err := fs.ReadDir(migrations.FS, ".")
+	entries, err := fs.ReadDir(migrationFS, ".")
 	if err != nil {
 		return fmt.Errorf("read migration dir: %w", err)
 	}
@@ -212,7 +216,7 @@ func (s *Store) migrate() error {
 			continue
 		}
 
-		content, err := fs.ReadFile(migrations.FS, name)
+		content, err := fs.ReadFile(migrationFS, name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
