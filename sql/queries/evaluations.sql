@@ -83,3 +83,168 @@ SELECT * FROM evaluation_configurations WHERE identity_hash = ?;
 
 -- name: ListEvaluationConfigurations :many
 SELECT * FROM evaluation_configurations ORDER BY created_at DESC, id DESC LIMIT ?;
+
+-- name: PutEvaluationRun :exec
+INSERT INTO evaluation_runs (
+    id, dataset_id, name, status, metric_policy_json, metric_policy_hash,
+    minimum_sample_size, practical_significance, require_held_out,
+    conclusion, winning_variant, conclusion_reason, created_at, started_at,
+    completed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: PutEvaluationRunVariant :exec
+INSERT INTO evaluation_run_variants (
+    run_id, variant_name, configuration_id, is_baseline, ordinal
+) VALUES (?, ?, ?, ?, ?);
+
+-- name: PutEvaluationAssignment :exec
+INSERT INTO evaluation_assignments (
+    id, run_id, case_id, variant_name, configuration_id, split, status,
+    current_lease_id, lease_owner, lease_expires_at, attempt_id,
+    terminal_status, terminal_reason, submitted_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetEvaluationRun :one
+SELECT * FROM evaluation_runs WHERE id = ?;
+
+-- name: ListEvaluationRuns :many
+SELECT * FROM evaluation_runs ORDER BY created_at DESC, id DESC LIMIT ?;
+
+-- name: ListEvaluationRunVariants :many
+SELECT variants.*, configurations.name AS configuration_name,
+       configurations.identity_hash AS configuration_identity_hash
+FROM evaluation_run_variants variants
+JOIN evaluation_configurations configurations ON configurations.id = variants.configuration_id
+WHERE variants.run_id = ?
+ORDER BY variants.ordinal;
+
+-- name: ListEvaluationAssignments :many
+SELECT * FROM evaluation_assignments
+WHERE run_id = ?
+ORDER BY split, case_id, variant_name;
+
+-- name: GetEvaluationAssignment :one
+SELECT * FROM evaluation_assignments WHERE id = ?;
+
+-- name: RequeueExpiredEvaluationAssignments :execrows
+UPDATE evaluation_assignments
+SET status = 'pending', current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE run_id = ? AND status = 'leased' AND lease_expires_at <= ?;
+
+-- name: ExpireEvaluationAssignmentLeases :execrows
+UPDATE evaluation_assignment_leases
+SET status = 'expired', completed_at = ?
+WHERE status = 'active' AND expires_at <= ?
+  AND assignment_id IN (SELECT id FROM evaluation_assignments WHERE run_id = ?);
+
+-- name: GetNextEvaluationAssignment :one
+SELECT * FROM evaluation_assignments
+WHERE run_id = sqlc.arg(run_id) AND status = 'pending'
+  AND (sqlc.arg(split_filter) = '' OR split = sqlc.arg(split_filter))
+ORDER BY CASE split WHEN 'training' THEN 0 WHEN 'development' THEN 1 ELSE 2 END,
+         case_id, variant_name
+LIMIT 1;
+
+-- name: ClaimEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'leased', current_lease_id = ?, lease_owner = ?,
+    lease_expires_at = ?, updated_at = ?
+WHERE id = ? AND status = 'pending';
+
+-- name: CountEvaluationAssignmentLeases :one
+SELECT COUNT(*) FROM evaluation_assignment_leases WHERE assignment_id = ?;
+
+-- name: PutEvaluationAssignmentLease :exec
+INSERT INTO evaluation_assignment_leases (
+    id, assignment_id, lease_owner, lease_token_hash, lease_number,
+    status, claimed_at, expires_at, completed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetEvaluationAssignmentLease :one
+SELECT * FROM evaluation_assignment_leases WHERE id = ?;
+
+-- name: HeartbeatEvaluationAssignmentLease :execrows
+UPDATE evaluation_assignment_leases
+SET expires_at = ?
+WHERE id = ? AND assignment_id = ? AND lease_owner = ?
+  AND lease_token_hash = ? AND status = 'active' AND expires_at > ?;
+
+-- name: UpdateEvaluationAssignmentLeaseExpiry :execrows
+UPDATE evaluation_assignments
+SET lease_expires_at = ?, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased';
+
+-- name: CompleteEvaluationAssignmentLease :execrows
+UPDATE evaluation_assignment_leases
+SET status = ?, completed_at = ?
+WHERE id = ? AND assignment_id = ? AND lease_owner = ?
+  AND lease_token_hash = ? AND status = 'active';
+
+-- name: ReleaseEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'pending', current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased';
+
+-- name: SubmitEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'submitted', attempt_id = ?, terminal_status = ?,
+    terminal_reason = ?, submitted_at = ?, current_lease_id = NULL,
+    lease_owner = '', lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased';
+
+-- name: CancelEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'cancelled', terminal_status = 'cancelled', terminal_reason = ?,
+    submitted_at = ?, current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND status IN ('pending','leased');
+
+-- name: PutEvaluationMetricObservation :exec
+INSERT INTO evaluation_metric_observations (
+    assignment_id, metric_name, value, missing_reason, unit,
+    source_type, source_id, metadata_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListEvaluationMetricObservationsByRun :many
+SELECT observation.*, assignment.run_id, assignment.case_id,
+       assignment.variant_name, assignment.split
+FROM evaluation_metric_observations observation
+JOIN evaluation_assignments assignment ON assignment.id = observation.assignment_id
+WHERE assignment.run_id = ?
+ORDER BY assignment.variant_name, assignment.split, assignment.case_id, observation.metric_name;
+
+-- name: ClearEvaluationRunAnalysis :exec
+DELETE FROM evaluation_metric_aggregates WHERE run_id = ?;
+
+-- name: ClearEvaluationRunComparisons :exec
+DELETE FROM evaluation_comparisons WHERE run_id = ?;
+
+-- name: PutEvaluationMetricAggregate :exec
+INSERT INTO evaluation_metric_aggregates (
+    run_id, variant_name, split, metric_name, sample_count, missing_count,
+    mean_value, minimum_value, maximum_value, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: PutEvaluationComparison :exec
+INSERT INTO evaluation_comparisons (
+    run_id, baseline_variant, candidate_variant, split, metric_name,
+    baseline_sample_count, candidate_sample_count, missing_count,
+    baseline_value, candidate_value, absolute_change, relative_change,
+    practical_threshold, conclusion, regression, reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListEvaluationMetricAggregates :many
+SELECT * FROM evaluation_metric_aggregates
+WHERE run_id = ? ORDER BY split, variant_name, metric_name;
+
+-- name: ListEvaluationComparisons :many
+SELECT * FROM evaluation_comparisons
+WHERE run_id = ? ORDER BY split, candidate_variant, metric_name;
+
+-- name: CompleteEvaluationRun :execrows
+UPDATE evaluation_runs
+SET status = 'completed', conclusion = ?, winning_variant = ?,
+    conclusion_reason = ?, completed_at = ?
+WHERE id = ? AND status = 'running';

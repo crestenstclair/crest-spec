@@ -31,6 +31,222 @@ func (q *Queries) AddEvaluationDatasetCase(ctx context.Context, arg AddEvaluatio
 	return err
 }
 
+const cancelEvaluationAssignment = `-- name: CancelEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'cancelled', terminal_status = 'cancelled', terminal_reason = ?,
+    submitted_at = ?, current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND status IN ('pending','leased')
+`
+
+type CancelEvaluationAssignmentParams struct {
+	TerminalReason string
+	SubmittedAt    *string
+	UpdatedAt      string
+	ID             string
+}
+
+func (q *Queries) CancelEvaluationAssignment(ctx context.Context, arg CancelEvaluationAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelEvaluationAssignment,
+		arg.TerminalReason,
+		arg.SubmittedAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const claimEvaluationAssignment = `-- name: ClaimEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'leased', current_lease_id = ?, lease_owner = ?,
+    lease_expires_at = ?, updated_at = ?
+WHERE id = ? AND status = 'pending'
+`
+
+type ClaimEvaluationAssignmentParams struct {
+	CurrentLeaseID *string
+	LeaseOwner     string
+	LeaseExpiresAt *string
+	UpdatedAt      string
+	ID             string
+}
+
+func (q *Queries) ClaimEvaluationAssignment(ctx context.Context, arg ClaimEvaluationAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimEvaluationAssignment,
+		arg.CurrentLeaseID,
+		arg.LeaseOwner,
+		arg.LeaseExpiresAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const clearEvaluationRunAnalysis = `-- name: ClearEvaluationRunAnalysis :exec
+DELETE FROM evaluation_metric_aggregates WHERE run_id = ?
+`
+
+func (q *Queries) ClearEvaluationRunAnalysis(ctx context.Context, runID string) error {
+	_, err := q.db.ExecContext(ctx, clearEvaluationRunAnalysis, runID)
+	return err
+}
+
+const clearEvaluationRunComparisons = `-- name: ClearEvaluationRunComparisons :exec
+DELETE FROM evaluation_comparisons WHERE run_id = ?
+`
+
+func (q *Queries) ClearEvaluationRunComparisons(ctx context.Context, runID string) error {
+	_, err := q.db.ExecContext(ctx, clearEvaluationRunComparisons, runID)
+	return err
+}
+
+const completeEvaluationAssignmentLease = `-- name: CompleteEvaluationAssignmentLease :execrows
+UPDATE evaluation_assignment_leases
+SET status = ?, completed_at = ?
+WHERE id = ? AND assignment_id = ? AND lease_owner = ?
+  AND lease_token_hash = ? AND status = 'active'
+`
+
+type CompleteEvaluationAssignmentLeaseParams struct {
+	Status         string
+	CompletedAt    *string
+	ID             string
+	AssignmentID   string
+	LeaseOwner     string
+	LeaseTokenHash string
+}
+
+func (q *Queries) CompleteEvaluationAssignmentLease(ctx context.Context, arg CompleteEvaluationAssignmentLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeEvaluationAssignmentLease,
+		arg.Status,
+		arg.CompletedAt,
+		arg.ID,
+		arg.AssignmentID,
+		arg.LeaseOwner,
+		arg.LeaseTokenHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const completeEvaluationRun = `-- name: CompleteEvaluationRun :execrows
+UPDATE evaluation_runs
+SET status = 'completed', conclusion = ?, winning_variant = ?,
+    conclusion_reason = ?, completed_at = ?
+WHERE id = ? AND status = 'running'
+`
+
+type CompleteEvaluationRunParams struct {
+	Conclusion       string
+	WinningVariant   string
+	ConclusionReason string
+	CompletedAt      *string
+	ID               string
+}
+
+func (q *Queries) CompleteEvaluationRun(ctx context.Context, arg CompleteEvaluationRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeEvaluationRun,
+		arg.Conclusion,
+		arg.WinningVariant,
+		arg.ConclusionReason,
+		arg.CompletedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const countEvaluationAssignmentLeases = `-- name: CountEvaluationAssignmentLeases :one
+SELECT COUNT(*) FROM evaluation_assignment_leases WHERE assignment_id = ?
+`
+
+func (q *Queries) CountEvaluationAssignmentLeases(ctx context.Context, assignmentID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countEvaluationAssignmentLeases, assignmentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const expireEvaluationAssignmentLeases = `-- name: ExpireEvaluationAssignmentLeases :execrows
+UPDATE evaluation_assignment_leases
+SET status = 'expired', completed_at = ?
+WHERE status = 'active' AND expires_at <= ?
+  AND assignment_id IN (SELECT id FROM evaluation_assignments WHERE run_id = ?)
+`
+
+type ExpireEvaluationAssignmentLeasesParams struct {
+	CompletedAt *string
+	ExpiresAt   string
+	RunID       string
+}
+
+func (q *Queries) ExpireEvaluationAssignmentLeases(ctx context.Context, arg ExpireEvaluationAssignmentLeasesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, expireEvaluationAssignmentLeases, arg.CompletedAt, arg.ExpiresAt, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getEvaluationAssignment = `-- name: GetEvaluationAssignment :one
+SELECT id, run_id, case_id, variant_name, configuration_id, split, status, current_lease_id, lease_owner, lease_expires_at, attempt_id, terminal_status, terminal_reason, submitted_at, created_at, updated_at FROM evaluation_assignments WHERE id = ?
+`
+
+func (q *Queries) GetEvaluationAssignment(ctx context.Context, id string) (EvaluationAssignment, error) {
+	row := q.db.QueryRowContext(ctx, getEvaluationAssignment, id)
+	var i EvaluationAssignment
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.CaseID,
+		&i.VariantName,
+		&i.ConfigurationID,
+		&i.Split,
+		&i.Status,
+		&i.CurrentLeaseID,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.AttemptID,
+		&i.TerminalStatus,
+		&i.TerminalReason,
+		&i.SubmittedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getEvaluationAssignmentLease = `-- name: GetEvaluationAssignmentLease :one
+SELECT id, assignment_id, lease_owner, lease_token_hash, lease_number, status, claimed_at, expires_at, completed_at FROM evaluation_assignment_leases WHERE id = ?
+`
+
+func (q *Queries) GetEvaluationAssignmentLease(ctx context.Context, id string) (EvaluationAssignmentLease, error) {
+	row := q.db.QueryRowContext(ctx, getEvaluationAssignmentLease, id)
+	var i EvaluationAssignmentLease
+	err := row.Scan(
+		&i.ID,
+		&i.AssignmentID,
+		&i.LeaseOwner,
+		&i.LeaseTokenHash,
+		&i.LeaseNumber,
+		&i.Status,
+		&i.ClaimedAt,
+		&i.ExpiresAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const getEvaluationCase = `-- name: GetEvaluationCase :one
 SELECT id, identity_hash, provenance, source_attempt_id, project_name, goal_id, capability_id, resource_id, spec_hash, repository_hash, resource_declaration_hash, plan_operation_id, context_manifest_id, execution_id, candidate_id, payload_blob, expected_outcome_blob, created_at FROM evaluation_cases WHERE id = ?
 `
@@ -187,6 +403,148 @@ func (q *Queries) GetEvaluationDataset(ctx context.Context, id string) (Evaluati
 	return i, err
 }
 
+const getEvaluationRun = `-- name: GetEvaluationRun :one
+SELECT id, dataset_id, name, status, metric_policy_json, metric_policy_hash, minimum_sample_size, practical_significance, require_held_out, conclusion, winning_variant, conclusion_reason, created_at, started_at, completed_at FROM evaluation_runs WHERE id = ?
+`
+
+func (q *Queries) GetEvaluationRun(ctx context.Context, id string) (EvaluationRun, error) {
+	row := q.db.QueryRowContext(ctx, getEvaluationRun, id)
+	var i EvaluationRun
+	err := row.Scan(
+		&i.ID,
+		&i.DatasetID,
+		&i.Name,
+		&i.Status,
+		&i.MetricPolicyJson,
+		&i.MetricPolicyHash,
+		&i.MinimumSampleSize,
+		&i.PracticalSignificance,
+		&i.RequireHeldOut,
+		&i.Conclusion,
+		&i.WinningVariant,
+		&i.ConclusionReason,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getNextEvaluationAssignment = `-- name: GetNextEvaluationAssignment :one
+SELECT id, run_id, case_id, variant_name, configuration_id, split, status, current_lease_id, lease_owner, lease_expires_at, attempt_id, terminal_status, terminal_reason, submitted_at, created_at, updated_at FROM evaluation_assignments
+WHERE run_id = ?1 AND status = 'pending'
+  AND (?2 = '' OR split = ?2)
+ORDER BY CASE split WHEN 'training' THEN 0 WHEN 'development' THEN 1 ELSE 2 END,
+         case_id, variant_name
+LIMIT 1
+`
+
+type GetNextEvaluationAssignmentParams struct {
+	RunID       string
+	SplitFilter interface{}
+}
+
+func (q *Queries) GetNextEvaluationAssignment(ctx context.Context, arg GetNextEvaluationAssignmentParams) (EvaluationAssignment, error) {
+	row := q.db.QueryRowContext(ctx, getNextEvaluationAssignment, arg.RunID, arg.SplitFilter)
+	var i EvaluationAssignment
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.CaseID,
+		&i.VariantName,
+		&i.ConfigurationID,
+		&i.Split,
+		&i.Status,
+		&i.CurrentLeaseID,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.AttemptID,
+		&i.TerminalStatus,
+		&i.TerminalReason,
+		&i.SubmittedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const heartbeatEvaluationAssignmentLease = `-- name: HeartbeatEvaluationAssignmentLease :execrows
+UPDATE evaluation_assignment_leases
+SET expires_at = ?
+WHERE id = ? AND assignment_id = ? AND lease_owner = ?
+  AND lease_token_hash = ? AND status = 'active' AND expires_at > ?
+`
+
+type HeartbeatEvaluationAssignmentLeaseParams struct {
+	ExpiresAt      string
+	ID             string
+	AssignmentID   string
+	LeaseOwner     string
+	LeaseTokenHash string
+	ExpiresAt_2    string
+}
+
+func (q *Queries) HeartbeatEvaluationAssignmentLease(ctx context.Context, arg HeartbeatEvaluationAssignmentLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, heartbeatEvaluationAssignmentLease,
+		arg.ExpiresAt,
+		arg.ID,
+		arg.AssignmentID,
+		arg.LeaseOwner,
+		arg.LeaseTokenHash,
+		arg.ExpiresAt_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const listEvaluationAssignments = `-- name: ListEvaluationAssignments :many
+SELECT id, run_id, case_id, variant_name, configuration_id, split, status, current_lease_id, lease_owner, lease_expires_at, attempt_id, terminal_status, terminal_reason, submitted_at, created_at, updated_at FROM evaluation_assignments
+WHERE run_id = ?
+ORDER BY split, case_id, variant_name
+`
+
+func (q *Queries) ListEvaluationAssignments(ctx context.Context, runID string) ([]EvaluationAssignment, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationAssignments, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvaluationAssignment
+	for rows.Next() {
+		var i EvaluationAssignment
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.CaseID,
+			&i.VariantName,
+			&i.ConfigurationID,
+			&i.Split,
+			&i.Status,
+			&i.CurrentLeaseID,
+			&i.LeaseOwner,
+			&i.LeaseExpiresAt,
+			&i.AttemptID,
+			&i.TerminalStatus,
+			&i.TerminalReason,
+			&i.SubmittedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvaluationCases = `-- name: ListEvaluationCases :many
 SELECT id, identity_hash, provenance, source_attempt_id, project_name, goal_id, capability_id, resource_id, spec_hash, repository_hash, resource_declaration_hash, plan_operation_id, context_manifest_id, execution_id, candidate_id, payload_blob, expected_outcome_blob, created_at FROM evaluation_cases ORDER BY created_at DESC, id DESC LIMIT ?
 `
@@ -218,6 +576,52 @@ func (q *Queries) ListEvaluationCases(ctx context.Context, limit int64) ([]Evalu
 			&i.CandidateID,
 			&i.PayloadBlob,
 			&i.ExpectedOutcomeBlob,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationComparisons = `-- name: ListEvaluationComparisons :many
+SELECT run_id, baseline_variant, candidate_variant, split, metric_name, baseline_sample_count, candidate_sample_count, missing_count, baseline_value, candidate_value, absolute_change, relative_change, practical_threshold, conclusion, regression, reason, created_at FROM evaluation_comparisons
+WHERE run_id = ? ORDER BY split, candidate_variant, metric_name
+`
+
+func (q *Queries) ListEvaluationComparisons(ctx context.Context, runID string) ([]EvaluationComparison, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationComparisons, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvaluationComparison
+	for rows.Next() {
+		var i EvaluationComparison
+		if err := rows.Scan(
+			&i.RunID,
+			&i.BaselineVariant,
+			&i.CandidateVariant,
+			&i.Split,
+			&i.MetricName,
+			&i.BaselineSampleCount,
+			&i.CandidateSampleCount,
+			&i.MissingCount,
+			&i.BaselineValue,
+			&i.CandidateValue,
+			&i.AbsoluteChange,
+			&i.RelativeChange,
+			&i.PracticalThreshold,
+			&i.Conclusion,
+			&i.Regression,
+			&i.Reason,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -379,6 +783,200 @@ func (q *Queries) ListEvaluationDatasets(ctx context.Context, limit int64) ([]Ev
 	return items, nil
 }
 
+const listEvaluationMetricAggregates = `-- name: ListEvaluationMetricAggregates :many
+SELECT run_id, variant_name, split, metric_name, sample_count, missing_count, mean_value, minimum_value, maximum_value, created_at FROM evaluation_metric_aggregates
+WHERE run_id = ? ORDER BY split, variant_name, metric_name
+`
+
+func (q *Queries) ListEvaluationMetricAggregates(ctx context.Context, runID string) ([]EvaluationMetricAggregate, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationMetricAggregates, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvaluationMetricAggregate
+	for rows.Next() {
+		var i EvaluationMetricAggregate
+		if err := rows.Scan(
+			&i.RunID,
+			&i.VariantName,
+			&i.Split,
+			&i.MetricName,
+			&i.SampleCount,
+			&i.MissingCount,
+			&i.MeanValue,
+			&i.MinimumValue,
+			&i.MaximumValue,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationMetricObservationsByRun = `-- name: ListEvaluationMetricObservationsByRun :many
+SELECT observation.assignment_id, observation.metric_name, observation.value, observation.missing_reason, observation.unit, observation.source_type, observation.source_id, observation.metadata_json, observation.created_at, assignment.run_id, assignment.case_id,
+       assignment.variant_name, assignment.split
+FROM evaluation_metric_observations observation
+JOIN evaluation_assignments assignment ON assignment.id = observation.assignment_id
+WHERE assignment.run_id = ?
+ORDER BY assignment.variant_name, assignment.split, assignment.case_id, observation.metric_name
+`
+
+type ListEvaluationMetricObservationsByRunRow struct {
+	AssignmentID  string
+	MetricName    string
+	Value         *float64
+	MissingReason string
+	Unit          string
+	SourceType    string
+	SourceID      string
+	MetadataJson  string
+	CreatedAt     string
+	RunID         string
+	CaseID        string
+	VariantName   string
+	Split         string
+}
+
+func (q *Queries) ListEvaluationMetricObservationsByRun(ctx context.Context, runID string) ([]ListEvaluationMetricObservationsByRunRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationMetricObservationsByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEvaluationMetricObservationsByRunRow
+	for rows.Next() {
+		var i ListEvaluationMetricObservationsByRunRow
+		if err := rows.Scan(
+			&i.AssignmentID,
+			&i.MetricName,
+			&i.Value,
+			&i.MissingReason,
+			&i.Unit,
+			&i.SourceType,
+			&i.SourceID,
+			&i.MetadataJson,
+			&i.CreatedAt,
+			&i.RunID,
+			&i.CaseID,
+			&i.VariantName,
+			&i.Split,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationRunVariants = `-- name: ListEvaluationRunVariants :many
+SELECT variants.run_id, variants.variant_name, variants.configuration_id, variants.is_baseline, variants.ordinal, configurations.name AS configuration_name,
+       configurations.identity_hash AS configuration_identity_hash
+FROM evaluation_run_variants variants
+JOIN evaluation_configurations configurations ON configurations.id = variants.configuration_id
+WHERE variants.run_id = ?
+ORDER BY variants.ordinal
+`
+
+type ListEvaluationRunVariantsRow struct {
+	RunID                     string
+	VariantName               string
+	ConfigurationID           string
+	IsBaseline                int64
+	Ordinal                   int64
+	ConfigurationName         string
+	ConfigurationIdentityHash string
+}
+
+func (q *Queries) ListEvaluationRunVariants(ctx context.Context, runID string) ([]ListEvaluationRunVariantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationRunVariants, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEvaluationRunVariantsRow
+	for rows.Next() {
+		var i ListEvaluationRunVariantsRow
+		if err := rows.Scan(
+			&i.RunID,
+			&i.VariantName,
+			&i.ConfigurationID,
+			&i.IsBaseline,
+			&i.Ordinal,
+			&i.ConfigurationName,
+			&i.ConfigurationIdentityHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEvaluationRuns = `-- name: ListEvaluationRuns :many
+SELECT id, dataset_id, name, status, metric_policy_json, metric_policy_hash, minimum_sample_size, practical_significance, require_held_out, conclusion, winning_variant, conclusion_reason, created_at, started_at, completed_at FROM evaluation_runs ORDER BY created_at DESC, id DESC LIMIT ?
+`
+
+func (q *Queries) ListEvaluationRuns(ctx context.Context, limit int64) ([]EvaluationRun, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationRuns, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvaluationRun
+	for rows.Next() {
+		var i EvaluationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatasetID,
+			&i.Name,
+			&i.Status,
+			&i.MetricPolicyJson,
+			&i.MetricPolicyHash,
+			&i.MinimumSampleSize,
+			&i.PracticalSignificance,
+			&i.RequireHeldOut,
+			&i.Conclusion,
+			&i.WinningVariant,
+			&i.ConclusionReason,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvaluationSourceValidationRuns = `-- name: ListEvaluationSourceValidationRuns :many
 SELECT id, definition_snapshot_id, definition_id, session_id, attempt_id, execution_id, source_tree_hash, classification, reason, started_at, completed_at, duration_ms, created_at FROM validation_runs
 WHERE attempt_id = ?
@@ -420,6 +1018,89 @@ func (q *Queries) ListEvaluationSourceValidationRuns(ctx context.Context, attemp
 		return nil, err
 	}
 	return items, nil
+}
+
+const putEvaluationAssignment = `-- name: PutEvaluationAssignment :exec
+INSERT INTO evaluation_assignments (
+    id, run_id, case_id, variant_name, configuration_id, split, status,
+    current_lease_id, lease_owner, lease_expires_at, attempt_id,
+    terminal_status, terminal_reason, submitted_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationAssignmentParams struct {
+	ID              string
+	RunID           string
+	CaseID          string
+	VariantName     string
+	ConfigurationID string
+	Split           string
+	Status          string
+	CurrentLeaseID  *string
+	LeaseOwner      string
+	LeaseExpiresAt  *string
+	AttemptID       *string
+	TerminalStatus  string
+	TerminalReason  string
+	SubmittedAt     *string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+func (q *Queries) PutEvaluationAssignment(ctx context.Context, arg PutEvaluationAssignmentParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationAssignment,
+		arg.ID,
+		arg.RunID,
+		arg.CaseID,
+		arg.VariantName,
+		arg.ConfigurationID,
+		arg.Split,
+		arg.Status,
+		arg.CurrentLeaseID,
+		arg.LeaseOwner,
+		arg.LeaseExpiresAt,
+		arg.AttemptID,
+		arg.TerminalStatus,
+		arg.TerminalReason,
+		arg.SubmittedAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const putEvaluationAssignmentLease = `-- name: PutEvaluationAssignmentLease :exec
+INSERT INTO evaluation_assignment_leases (
+    id, assignment_id, lease_owner, lease_token_hash, lease_number,
+    status, claimed_at, expires_at, completed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationAssignmentLeaseParams struct {
+	ID             string
+	AssignmentID   string
+	LeaseOwner     string
+	LeaseTokenHash string
+	LeaseNumber    int64
+	Status         string
+	ClaimedAt      string
+	ExpiresAt      string
+	CompletedAt    *string
+}
+
+func (q *Queries) PutEvaluationAssignmentLease(ctx context.Context, arg PutEvaluationAssignmentLeaseParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationAssignmentLease,
+		arg.ID,
+		arg.AssignmentID,
+		arg.LeaseOwner,
+		arg.LeaseTokenHash,
+		arg.LeaseNumber,
+		arg.Status,
+		arg.ClaimedAt,
+		arg.ExpiresAt,
+		arg.CompletedAt,
+	)
+	return err
 }
 
 const putEvaluationCase = `-- name: PutEvaluationCase :exec
@@ -503,6 +1184,58 @@ func (q *Queries) PutEvaluationCaseAssessment(ctx context.Context, arg PutEvalua
 		arg.Reason,
 		arg.CaseID,
 		arg.AssessedAt,
+	)
+	return err
+}
+
+const putEvaluationComparison = `-- name: PutEvaluationComparison :exec
+INSERT INTO evaluation_comparisons (
+    run_id, baseline_variant, candidate_variant, split, metric_name,
+    baseline_sample_count, candidate_sample_count, missing_count,
+    baseline_value, candidate_value, absolute_change, relative_change,
+    practical_threshold, conclusion, regression, reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationComparisonParams struct {
+	RunID                string
+	BaselineVariant      string
+	CandidateVariant     string
+	Split                string
+	MetricName           string
+	BaselineSampleCount  int64
+	CandidateSampleCount int64
+	MissingCount         int64
+	BaselineValue        *float64
+	CandidateValue       *float64
+	AbsoluteChange       *float64
+	RelativeChange       *float64
+	PracticalThreshold   float64
+	Conclusion           string
+	Regression           int64
+	Reason               string
+	CreatedAt            string
+}
+
+func (q *Queries) PutEvaluationComparison(ctx context.Context, arg PutEvaluationComparisonParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationComparison,
+		arg.RunID,
+		arg.BaselineVariant,
+		arg.CandidateVariant,
+		arg.Split,
+		arg.MetricName,
+		arg.BaselineSampleCount,
+		arg.CandidateSampleCount,
+		arg.MissingCount,
+		arg.BaselineValue,
+		arg.CandidateValue,
+		arg.AbsoluteChange,
+		arg.RelativeChange,
+		arg.PracticalThreshold,
+		arg.Conclusion,
+		arg.Regression,
+		arg.Reason,
+		arg.CreatedAt,
 	)
 	return err
 }
@@ -592,6 +1325,191 @@ func (q *Queries) PutEvaluationDataset(ctx context.Context, arg PutEvaluationDat
 	return err
 }
 
+const putEvaluationMetricAggregate = `-- name: PutEvaluationMetricAggregate :exec
+INSERT INTO evaluation_metric_aggregates (
+    run_id, variant_name, split, metric_name, sample_count, missing_count,
+    mean_value, minimum_value, maximum_value, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationMetricAggregateParams struct {
+	RunID        string
+	VariantName  string
+	Split        string
+	MetricName   string
+	SampleCount  int64
+	MissingCount int64
+	MeanValue    *float64
+	MinimumValue *float64
+	MaximumValue *float64
+	CreatedAt    string
+}
+
+func (q *Queries) PutEvaluationMetricAggregate(ctx context.Context, arg PutEvaluationMetricAggregateParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationMetricAggregate,
+		arg.RunID,
+		arg.VariantName,
+		arg.Split,
+		arg.MetricName,
+		arg.SampleCount,
+		arg.MissingCount,
+		arg.MeanValue,
+		arg.MinimumValue,
+		arg.MaximumValue,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const putEvaluationMetricObservation = `-- name: PutEvaluationMetricObservation :exec
+INSERT INTO evaluation_metric_observations (
+    assignment_id, metric_name, value, missing_reason, unit,
+    source_type, source_id, metadata_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationMetricObservationParams struct {
+	AssignmentID  string
+	MetricName    string
+	Value         *float64
+	MissingReason string
+	Unit          string
+	SourceType    string
+	SourceID      string
+	MetadataJson  string
+	CreatedAt     string
+}
+
+func (q *Queries) PutEvaluationMetricObservation(ctx context.Context, arg PutEvaluationMetricObservationParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationMetricObservation,
+		arg.AssignmentID,
+		arg.MetricName,
+		arg.Value,
+		arg.MissingReason,
+		arg.Unit,
+		arg.SourceType,
+		arg.SourceID,
+		arg.MetadataJson,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const putEvaluationRun = `-- name: PutEvaluationRun :exec
+INSERT INTO evaluation_runs (
+    id, dataset_id, name, status, metric_policy_json, metric_policy_hash,
+    minimum_sample_size, practical_significance, require_held_out,
+    conclusion, winning_variant, conclusion_reason, created_at, started_at,
+    completed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type PutEvaluationRunParams struct {
+	ID                    string
+	DatasetID             string
+	Name                  string
+	Status                string
+	MetricPolicyJson      string
+	MetricPolicyHash      string
+	MinimumSampleSize     int64
+	PracticalSignificance float64
+	RequireHeldOut        int64
+	Conclusion            string
+	WinningVariant        string
+	ConclusionReason      string
+	CreatedAt             string
+	StartedAt             *string
+	CompletedAt           *string
+}
+
+func (q *Queries) PutEvaluationRun(ctx context.Context, arg PutEvaluationRunParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationRun,
+		arg.ID,
+		arg.DatasetID,
+		arg.Name,
+		arg.Status,
+		arg.MetricPolicyJson,
+		arg.MetricPolicyHash,
+		arg.MinimumSampleSize,
+		arg.PracticalSignificance,
+		arg.RequireHeldOut,
+		arg.Conclusion,
+		arg.WinningVariant,
+		arg.ConclusionReason,
+		arg.CreatedAt,
+		arg.StartedAt,
+		arg.CompletedAt,
+	)
+	return err
+}
+
+const putEvaluationRunVariant = `-- name: PutEvaluationRunVariant :exec
+INSERT INTO evaluation_run_variants (
+    run_id, variant_name, configuration_id, is_baseline, ordinal
+) VALUES (?, ?, ?, ?, ?)
+`
+
+type PutEvaluationRunVariantParams struct {
+	RunID           string
+	VariantName     string
+	ConfigurationID string
+	IsBaseline      int64
+	Ordinal         int64
+}
+
+func (q *Queries) PutEvaluationRunVariant(ctx context.Context, arg PutEvaluationRunVariantParams) error {
+	_, err := q.db.ExecContext(ctx, putEvaluationRunVariant,
+		arg.RunID,
+		arg.VariantName,
+		arg.ConfigurationID,
+		arg.IsBaseline,
+		arg.Ordinal,
+	)
+	return err
+}
+
+const releaseEvaluationAssignment = `-- name: ReleaseEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'pending', current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased'
+`
+
+type ReleaseEvaluationAssignmentParams struct {
+	UpdatedAt      string
+	ID             string
+	CurrentLeaseID *string
+}
+
+func (q *Queries) ReleaseEvaluationAssignment(ctx context.Context, arg ReleaseEvaluationAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseEvaluationAssignment, arg.UpdatedAt, arg.ID, arg.CurrentLeaseID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const requeueExpiredEvaluationAssignments = `-- name: RequeueExpiredEvaluationAssignments :execrows
+UPDATE evaluation_assignments
+SET status = 'pending', current_lease_id = NULL, lease_owner = '',
+    lease_expires_at = NULL, updated_at = ?
+WHERE run_id = ? AND status = 'leased' AND lease_expires_at <= ?
+`
+
+type RequeueExpiredEvaluationAssignmentsParams struct {
+	UpdatedAt      string
+	RunID          string
+	LeaseExpiresAt *string
+}
+
+func (q *Queries) RequeueExpiredEvaluationAssignments(ctx context.Context, arg RequeueExpiredEvaluationAssignmentsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueExpiredEvaluationAssignments, arg.UpdatedAt, arg.RunID, arg.LeaseExpiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const sealEvaluationDataset = `-- name: SealEvaluationDataset :execrows
 UPDATE evaluation_datasets
 SET identity_hash = ?, status = 'sealed', sealed_at = ?
@@ -606,6 +1524,66 @@ type SealEvaluationDatasetParams struct {
 
 func (q *Queries) SealEvaluationDataset(ctx context.Context, arg SealEvaluationDatasetParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, sealEvaluationDataset, arg.IdentityHash, arg.SealedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const submitEvaluationAssignment = `-- name: SubmitEvaluationAssignment :execrows
+UPDATE evaluation_assignments
+SET status = 'submitted', attempt_id = ?, terminal_status = ?,
+    terminal_reason = ?, submitted_at = ?, current_lease_id = NULL,
+    lease_owner = '', lease_expires_at = NULL, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased'
+`
+
+type SubmitEvaluationAssignmentParams struct {
+	AttemptID      *string
+	TerminalStatus string
+	TerminalReason string
+	SubmittedAt    *string
+	UpdatedAt      string
+	ID             string
+	CurrentLeaseID *string
+}
+
+func (q *Queries) SubmitEvaluationAssignment(ctx context.Context, arg SubmitEvaluationAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, submitEvaluationAssignment,
+		arg.AttemptID,
+		arg.TerminalStatus,
+		arg.TerminalReason,
+		arg.SubmittedAt,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.CurrentLeaseID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateEvaluationAssignmentLeaseExpiry = `-- name: UpdateEvaluationAssignmentLeaseExpiry :execrows
+UPDATE evaluation_assignments
+SET lease_expires_at = ?, updated_at = ?
+WHERE id = ? AND current_lease_id = ? AND status = 'leased'
+`
+
+type UpdateEvaluationAssignmentLeaseExpiryParams struct {
+	LeaseExpiresAt *string
+	UpdatedAt      string
+	ID             string
+	CurrentLeaseID *string
+}
+
+func (q *Queries) UpdateEvaluationAssignmentLeaseExpiry(ctx context.Context, arg UpdateEvaluationAssignmentLeaseExpiryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateEvaluationAssignmentLeaseExpiry,
+		arg.LeaseExpiresAt,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.CurrentLeaseID,
+	)
 	if err != nil {
 		return 0, err
 	}
