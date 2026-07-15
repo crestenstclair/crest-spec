@@ -411,7 +411,10 @@ func (s *Store) ClaimEvaluationAssignment(ctx context.Context, runID, owner, spl
 		return nil, fmt.Errorf("claim evaluation assignment: lease exceeds 24 hours")
 	}
 	run, err := s.queries.GetEvaluationRun(ctx, runID)
-	if err != nil || run.Status != "running" {
+	if err != nil {
+		return nil, fmt.Errorf("claim evaluation assignment: load run: %w", mapNotFound(err))
+	}
+	if run.Status != "running" {
 		return nil, fmt.Errorf("claim evaluation assignment: run is not active")
 	}
 	tx, err := s.sqlDB.BeginTx(ctx, nil)
@@ -425,12 +428,16 @@ func (s *Store) ClaimEvaluationAssignment(ctx context.Context, runID, owner, spl
 	}()
 	q := s.queries.WithTx(tx)
 	timestamp := now()
-	_, _ = q.ExpireEvaluationAssignmentLeases(ctx, db.ExpireEvaluationAssignmentLeasesParams{
+	if _, err = q.ExpireEvaluationAssignmentLeases(ctx, db.ExpireEvaluationAssignmentLeasesParams{
 		CompletedAt: &timestamp, ExpiresAt: timestamp, RunID: runID,
-	})
-	_, _ = q.RequeueExpiredEvaluationAssignments(ctx, db.RequeueExpiredEvaluationAssignmentsParams{
+	}); err != nil {
+		return nil, fmt.Errorf("claim evaluation assignment: expire leases: %w", err)
+	}
+	if _, err = q.RequeueExpiredEvaluationAssignments(ctx, db.RequeueExpiredEvaluationAssignmentsParams{
 		UpdatedAt: timestamp, RunID: runID, LeaseExpiresAt: &timestamp,
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("claim evaluation assignment: requeue expired assignments: %w", err)
+	}
 	assignment, err := q.GetNextEvaluationAssignment(ctx, db.GetNextEvaluationAssignmentParams{
 		RunID: runID, SplitFilter: split,
 	})

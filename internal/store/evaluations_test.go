@@ -291,6 +291,40 @@ func TestHistoricalEvaluationCaseRecordsIneligibility(t *testing.T) {
 	assert.Contains(t, assessment.Reason, "context manifest")
 }
 
+func TestHistoricalEvaluationCasePropagatesMalformedCanonicalContext(t *testing.T) {
+	st := newContextManifestStore(t, "resource.malformed")
+	ctx := context.Background()
+	manifest := testContextManifest("attempt-malformed", "manifest-malformed", "resource.malformed")
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest, Dispatch: true})
+	require.NoError(t, err)
+	_, err = st.sqlDB.ExecContext(ctx,
+		`UPDATE context_manifests SET template_hashes_json = '{' WHERE id = ?`,
+		manifest.ID,
+	)
+	require.NoError(t, err)
+
+	assessment, err := st.CreateHistoricalEvaluationCase(ctx, manifest.Attempt.ID, "synth")
+	require.ErrorContains(t, err, "load context manifest")
+	require.ErrorContains(t, err, "template hashes")
+	assert.Nil(t, assessment, "corrupt canonical state must not be recorded as ordinary ineligibility")
+}
+
+func TestHistoricalEvaluationCaseTreatsTypedMissingAttemptAsIneligible(t *testing.T) {
+	st := newContextManifestStore(t, "resource.missing-context")
+	ctx := context.Background()
+	manifest := testContextManifest("attempt-missing-context", "manifest-to-delete", "resource.missing-context")
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest, Dispatch: true})
+	require.NoError(t, err)
+	_, err = st.sqlDB.ExecContext(ctx, `DELETE FROM context_manifests WHERE id = ?`, manifest.ID)
+	require.NoError(t, err)
+
+	assessment, err := st.CreateHistoricalEvaluationCase(ctx, manifest.Attempt.ID, "synth")
+	require.NoError(t, err)
+	require.NotNil(t, assessment)
+	assert.False(t, assessment.Eligible)
+	assert.Contains(t, assessment.Reason, "context manifest")
+}
+
 func TestHistoricalEvaluationCaseReferencesCompleteAttemptChain(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")
 	ctx := context.Background()

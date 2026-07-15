@@ -144,6 +144,52 @@ func TestEvaluationRunClaimsHideHeldOutOutcomesAndLeaseSafely(t *testing.T) {
 	assert.Equal(t, "host cannot execute case", cancelled.TerminalReason)
 }
 
+func TestEvaluationClaimPropagatesLeaseExpiryFailure(t *testing.T) {
+	st := newContextManifestStore(t, "aggregate.Engine.Voice")
+	ctx := context.Background()
+	run, _, _ := evaluationRunFixture(t, st, false)
+	_, err := st.ClaimEvaluationAssignment(ctx, run.ID, "first-worker", "development", time.Nanosecond)
+	require.NoError(t, err)
+	time.Sleep(time.Millisecond)
+	_, err = st.sqlDB.ExecContext(ctx, `
+		CREATE TRIGGER reject_lease_expiry
+		BEFORE UPDATE ON evaluation_assignment_leases
+		WHEN OLD.status = 'active'
+		BEGIN
+			SELECT RAISE(ABORT, 'lease expiry unavailable');
+		END
+	`)
+	require.NoError(t, err)
+
+	claim, err := st.ClaimEvaluationAssignment(ctx, run.ID, "second-worker", "development", time.Minute)
+	require.ErrorContains(t, err, "expire leases")
+	require.ErrorContains(t, err, "lease expiry unavailable")
+	assert.Nil(t, claim)
+}
+
+func TestEvaluationClaimPropagatesExpiredAssignmentRequeueFailure(t *testing.T) {
+	st := newContextManifestStore(t, "aggregate.Engine.Voice")
+	ctx := context.Background()
+	run, _, _ := evaluationRunFixture(t, st, false)
+	_, err := st.ClaimEvaluationAssignment(ctx, run.ID, "first-worker", "development", time.Nanosecond)
+	require.NoError(t, err)
+	time.Sleep(time.Millisecond)
+	_, err = st.sqlDB.ExecContext(ctx, `
+		CREATE TRIGGER reject_assignment_requeue
+		BEFORE UPDATE ON evaluation_assignments
+		WHEN OLD.status = 'leased'
+		BEGIN
+			SELECT RAISE(ABORT, 'assignment requeue unavailable');
+		END
+	`)
+	require.NoError(t, err)
+
+	reclaimed, err := st.ClaimEvaluationAssignment(ctx, run.ID, "second-worker", "development", time.Minute)
+	require.ErrorContains(t, err, "requeue expired assignments")
+	require.ErrorContains(t, err, "assignment requeue unavailable")
+	assert.Nil(t, reclaimed)
+}
+
 func TestEvaluationSubmissionRequiresOrdinaryAttemptProvenance(t *testing.T) {
 	st := newContextManifestStore(t, "aggregate.Engine.Voice")
 	ctx := context.Background()

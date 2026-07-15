@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crestenstclair/crest-spec/internal/db"
+	cserrors "github.com/crestenstclair/crest-spec/internal/errors"
 	"github.com/crestenstclair/crest-spec/internal/execution"
 )
 
@@ -123,19 +124,40 @@ func (s *Store) CreateHistoricalEvaluationCase(ctx context.Context, attemptID, p
 		return nil, fmt.Errorf("create historical evaluation case: attempt and project are required")
 	}
 	manifest, err := s.GetContextManifestByAttempt(ctx, attemptID)
-	if err != nil || manifest.Blocked {
+	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("create historical evaluation case: load context manifest: %w", err)
+		}
+		return ineligible("attempt has no complete unblocked context manifest")
+	}
+	if manifest.Blocked {
 		return ineligible("attempt has no complete unblocked context manifest")
 	}
 	executionManifest, err := s.GetExecutionManifestByAttempt(ctx, attemptID)
-	if err != nil || !evaluationTerminalExecution(executionManifest.Status) {
+	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("create historical evaluation case: load execution manifest: %w", err)
+		}
+		return ineligible("attempt has no terminal execution manifest")
+	}
+	if !evaluationTerminalExecution(executionManifest.Status) {
 		return ineligible("attempt has no terminal execution manifest")
 	}
 	candidate, err := s.GetCandidateSetByAttempt(ctx, attemptID)
-	if err != nil || (candidate.Status != "accepted" && candidate.Status != "rejected") {
+	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("create historical evaluation case: load candidate: %w", err)
+		}
+		return ineligible("attempt has no terminal candidate snapshot")
+	}
+	if candidate.Status != "accepted" && candidate.Status != "rejected" {
 		return ineligible("attempt has no terminal candidate snapshot")
 	}
 	validationRuns, err := s.queries.ListEvaluationSourceValidationRuns(ctx, stringPtr(attemptID))
-	if err != nil || len(validationRuns) == 0 {
+	if err != nil {
+		return nil, fmt.Errorf("create historical evaluation case: load validation provenance: %w", err)
+	}
+	if len(validationRuns) == 0 {
 		return ineligible("attempt has no persisted validation provenance")
 	}
 	resourceDeclarationHash := ""
@@ -150,10 +172,16 @@ func (s *Store) CreateHistoricalEvaluationCase(ctx context.Context, attemptID, p
 	}
 	project, err := s.GetProjectIntent(ctx, projectName)
 	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("create historical evaluation case: load project intent: %w", err)
+		}
 		return ineligible("project intent is not available in SQLite")
 	}
 	apply, err := s.GetApply(manifest.Attempt.ApplyID)
 	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("create historical evaluation case: load source apply: %w", err)
+		}
 		return ineligible("source apply is not available")
 	}
 	repositoryHash := validationRuns[0].SourceTreeHash
