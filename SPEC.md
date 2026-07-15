@@ -6,11 +6,13 @@ crest-spec is a **declarative, domain-driven code generation system**. You descr
 
 The mental model is **Terraform for code generation**: you declare what your system *should* look like, the tool plans what needs to change, and then applies those changes — with dependency ordering, retry loops, and verification gates.
 
-**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent pulls a scoped prompt (mission + declaration + design contract + invariants-as-constraints + any prior failure and guidance) from `spec/context`, authors files, and submits them to `spec/commit`. Verification is never self-judged: mechanical validations gate the commit, independent behavioral checks (`spec/verify`, falsification-gated) gate the wave, and `spec/finish` refuses to finalize while any check is unresolved.
+**The split of responsibilities is the central design point.** The `crest-spec` binary is a **pure spec state engine**: it plans (CUE → registry → graph → waves), tracks state in SQLite, runs **mechanical** validations (compile / test / custom commands) at commit time, and records history. **It never calls an LLM and never spawns generation subprocesses.** Generation is driven by **Claude Code natively** — the orchestrator runs the `.claude/skills/spec-generate` skill and the `.claude/workflows/spec-generate.js` workflow, which spawn one sonnet sub-agent per resource per wave. Each generator agent receives immutable goal-directed context from `spec/context`; the host registers the exact execution through `spec/execution_start`; and the agent submits candidate files to `spec/commit` by attempt ID. Verification is never self-judged: mechanical validations gate the commit, independent behavioral checks (`spec/verify`, falsification-gated) gate the wave, and `spec/finish` refuses to finalize while any check is unresolved.
 
 > **Gate-hardening revision (2026-07-02).** Following the verification-theater audit ("1617 invariant checks, zero failures"), orchestrator-supplied invariant verdicts (`invariant_checks` on `spec/commit`) were **removed** — any older text in this document describing generator-judged invariants is superseded. In the same revision: `spec/context` now injects the resource's own `last_error` and resolve guidance on retries; a validation that cannot launch rejects the commit (fail closed); `spec/finish` blocks on unresolved behavioral checks (pending/failed/theater/malformed) unless explicitly forced; the effective hash covers only the **structural** declaration (guidance fields — prompts, descriptions, notes — no longer cascade regeneration to dependents); and `project.mission` plus project invariants and the bounded context's design contract are injected into generation prompts. The system guides architecture, design, and invariants — it does not police file contents: hand-edits to generated files are not tracked, and formatting is normalized by the gate (`cargo fmt` auto-fix), never a blocking check. Iteration over regeneration: a REJECTED commit records its attempted files, so the retry runs in UPDATE mode — the generator edits its previous attempt against the failure instead of rewriting the resource from scratch.
 
 > **Context-manifest revision (2026-07-14).** `spec/context` now creates a first-class generation attempt and deterministically selects goal, acceptance, task, resource/system contract, dependency, consumer, code, integration, failure, and convention sections under an explicit role-aware budget. Mandatory context overflow blocks dispatch instead of silently dropping intent. The exact bytes served, content hashes, included/truncated/omitted decisions, reasons, allocation, selector/template versions, and retry ancestry are committed through the existing SQLite repositories in the same transaction as dispatch. No manifest sidecars are written. Go, MCP, CLI, HTTP, and dashboard inspectors reconstruct and compare attempts from immutable SQLite snapshots; historical generation rows remain honest legacy records without invented manifests.
+
+> **Execution-governance revision (2026-07-14).** The generation boundary is now the versioned `crest-execution-v1` attempt protocol: `spec/context` prepares immutable intent, `spec/execution_start` binds the exact role/host/model/settings/tools/templates to it, and `spec/commit` accepts candidate files only by `attempt_id`. Candidates are snapshotted before validation, and acceptance/rejection, goal impact, usage, failures, and handoffs are persisted transactionally in SQLite. A closed role registry shapes context and permitted actions but never grants agents acceptance authority. Historical generation rows with no execution link are exposed as `legacy`; no provenance is invented. This governance layer does not replace DDD: DDD resources remain the implementation model, goals explain why those resources matter, and execution manifests record how a host attempted them.
 
 > **Architecture pivot (native-workflow).** Earlier versions of crest-spec shelled out to `claude` CLI subprocesses (an `internal/agent` wrapper + `internal/engine` dispatch layer) behind an async jobs system, and offered server-side orchestration (`spec/apply`, `spec/dispatch`, `spec/run_wave` and an in-server constraint loop). All of that was removed in the native-workflow pivot. The server no longer runs any LLM or subprocess; Claude Code is the orchestrator. Tombstones throughout this document mark the removed surfaces.
 
@@ -632,10 +634,11 @@ sql/queries/    sqlc query definitions (source for internal/db)
 
 ### 2.2 How the Layers Connect
 
-There is no server-internal generation path. The connection between the spec engine and the LLM is the **prompt-out / files-in** contract across the MCP tool boundary (see §4):
+There is no server-internal generation path. The connection between the spec engine and the LLM is the **context-out / execution-and-candidate-in** contract across the MCP tool boundary (see §4):
 
 - **Prompt out**: `spec/context` returns the system prompt (mission, style, architectural invariants), the scoped resource prompt (declaration, dependencies, design contract, prior failure + guidance on retries), and the project invariants (each `{text, rationale}`, as constraints for the generator). The orchestrator hands those to a sub-agent it spawns itself.
-- **Files in**: `spec/commit` accepts the generated files and the model label. The server writes the files and runs the resource's **mechanical** validations (compile / test / custom). Any failure — including a validation that cannot launch — rejects the commit and feeds the failure into the next `spec/context`. There are no self-judged verdicts; behavior is verified independently via `spec/verify`.
+- **Execution in**: `spec/execution_start` binds the prepared attempt to `crest-execution-v1`, its role, exact host/provider/model, redacted settings, tools/permissions, template hashes, system instructions, and context hash.
+- **Candidate in**: `spec/commit` accepts generated files by immutable `attempt_id`. The server snapshots the candidate, writes it, and runs the resource's **mechanical** validations (compile / test / custom). Any failure — including a validation that cannot launch — rejects the candidate and feeds classified evidence into the next `spec/context`. There are no self-judged verdicts; behavior is verified independently via `spec/verify`.
 - **Reflection out / learnings in**: `spec/evolve` (and `spec/finish`, per `CREST_SPEC_EVOLVE`) returns a reflection prompt built from the session's failure history; the orchestrator runs it and submits the raw output to `spec/record_learnings`.
 
 ### 2.3 Dependency Injection / Interfaces
@@ -667,7 +670,7 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 | Field | Env var | Type | Default | Purpose |
 |-------|---------|------|---------|---------|
 | `HTTPAddr` | `CREST_SPEC_HTTP_ADDR` | string | (none) | Listen address for the Streamable HTTP transport (e.g., `:8080`). If unset, only stdio is active. |
-| `GenerateModel` | `CREST_SPEC_GENERATE_MODEL` | string | `claude-sonnet-4-6` | Model **label** recorded in effective hashes / state rows and used as the default commit label when `spec/commit` omits `model`. The server does not invoke this model — it is provenance metadata. |
+| `GenerateModel` | `CREST_SPEC_GENERATE_MODEL` | string | `claude-sonnet-4-6` | Planning/model label folded into effective hashes and used as the execution default when a host does not report a model. The exact model belongs in `spec/execution_start`; the server never invokes it. |
 | `MaxRetries` | `CREST_SPEC_MAX_RETRIES` | int | `3` | Per-resource retry budget surfaced to the orchestrator (the workflow uses it to bound its commit/retry loop). |
 | `WaveMaxRetries` | `CREST_SPEC_WAVE_MAX_RETRIES` | int | `2` | Retry count for wave-level verification failures. |
 | `SpecDir` | `CREST_SPEC_SPEC_DIR` | string | `./spec` | Directory containing CUE spec files. |
@@ -675,6 +678,7 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 | `TestCommand` | `CREST_SPEC_TEST_CMD` | string | (none) | Test command (e.g., `cargo test`) used at the wave-verification gate. |
 | `Mode` | `CREST_SPEC_MODE` | string | `default` | Mode label folded into hashes — different modes regenerate. |
 | `Evolve` | `CREST_SPEC_EVOLVE` | string | `all` | Controls when reflection prompts are emitted. `finish`/`all` make `spec/finish` return a `reflection_prompt`. |
+| `ExecutionTimeout` | `CREST_SPEC_EXECUTION_TIMEOUT` | duration | `30m` | Startup recovery threshold for abandoned active host executions. Recovery records `host_failure`, never an inferred model failure. Set to `0` to disable. |
 
 `config.Help()` renders an aligned usage table to stderr using `tabwriter` + `envconfig.Usagef`.
 
@@ -686,19 +690,20 @@ All env vars use the `CREST_SPEC_` prefix via `envconfig.Process("CREST_SPEC", &
 
 > **Tombstone.** This section previously documented the `internal/agent` CLI wrapper and the `internal/engine` sub-agent dispatch layer (`Generate` / `Review` / `CodeReview` / `Bugbot`). Both packages were deleted in the native-workflow pivot. The server no longer generates code, runs reviews, or spawns processes. What follows is the contract that replaced them.
 
-The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **prompt-out / files-in**: the server emits prompts and validates results mechanically; nobody grades their own work.
+The server is a state engine; Claude Code is the orchestrator. The two communicate only through MCP tool calls, and the contract is **context-out / governed-execution-and-candidate-in**: the server emits immutable context and validates candidate results mechanically; nobody grades their own work.
 
 **The contract:**
 
-- **`spec/context` (prompt out)** — given `{session_id, resource_id}`, returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`, constraints for the generator). The system prompt carries the project mission, style, and architectural invariants. The resource prompt carries the declaration, dependency declarations, dependency notes, the bounded context's committed design contract, existing files (in UPDATE mode), and — on retries — the resource's own last failure (`## Previous Errors`) and any resolve guidance (`## Guidance`). The orchestrator hands these to a sub-agent it spawns itself.
-- **`spec/commit` (files in)** — given `{session_id, resource_id, files:[{path,content}], notes, model}`, the server writes the changed files (per-file SHA256 skip) and runs the resource's **mechanical** validations (`compiles` / `test` / `integration` / `custom`) plus any amendment validations. **Any failing validation rejects the commit** (`Committed:false`, state → rejected) — and a validation that cannot launch is a failed validation, not a skipped gate. The server records a `Generation` row labelled with `model` (or the configured `GenerateModel` if omitted). Semantic/behavioral verification is not part of the commit: it belongs to the behavioral pipeline (`spec/design_commit` → `spec/tasks_commit` → `spec/verify` → `spec/graduate`), whose falsification gate (real witness passes AND stub baseline fails) is enforced server-side, and whose unresolved checks block `spec/finish`.
+- **`spec/context` (context out)** — given `{session_id, resource_id, role?}`, creates an immutable attempt and returns goal-directed, budgeted context plus its IDs, hashes, selection decisions, role, system prompt, and task prompt.
+- **`spec/execution_start` (execution in)** — given the attempt and exact host execution configuration, validates role/context/template identity and creates the sole governed execution owner. MCP initialize advertises the protocol and role-policy versions.
+- **`spec/commit` (candidate in)** — given `{attempt_id, files, notes, usage metadata?}`, snapshots the candidate, writes changed files, and runs the resource's **mechanical** validations (`compiles` / `test` / `integration` / `custom`) plus amendment validations. **Any failing validation rejects the candidate** — and a validation that cannot launch is a failed validation, not a skipped gate. The terminal disposition and goal progress are recorded atomically. Semantic/behavioral verification remains in the independent behavioral pipeline.
 - **`spec/evolve` (reflection out)** — given `{session_id}`, returns `{reflection_prompt}` built from the session's failure history (empty when there is nothing to learn). The orchestrator runs the prompt with a sub-agent.
 - **`spec/record_learnings` (learnings in)** — given `{session_id, output}` (the raw reflection output), persists the distilled learnings and returns `{learnings_added}`.
 - **`spec/finish`** — finalizes the session and, when `CREST_SPEC_EVOLVE` is `finish`/`all`, also returns a `reflection_prompt` so reflection can run without a separate `spec/evolve` call.
 
 The orchestrator implementation lives in this repo under `.claude/`:
 
-- **`.claude/workflows/spec-generate.js`** — the per-wave engine. It calls `spec/next` for a wave, spawns one sub-agent per resource via `parallel(...)`, and each sub-agent runs the `spec/context` → author → judge invariants → `spec/commit` → retry-on-rejection loop (bounded by `maxRetries`). Persistent failures are triaged (`spec/resolve` or `spec/skip`); a stall guard force-skips resources stuck after repeated wave passes (see §8).
+- **`.claude/workflows/spec-generate.js`** — the per-wave engine. It calls `spec/next` for a wave, spawns one sub-agent per resource via `parallel(...)`, and each sub-agent runs the `spec/context` → `spec/execution_start` → author → `spec/commit` → classified retry/handoff loop (bounded by `maxRetries`). Persistent failures are surfaced for triage rather than silently accepted.
 - **`.claude/skills/spec-generate/SKILL.md`** — the operator-facing entrypoint that drives `spec/plan` → `spec/begin` → `spec/confirm_destroys` → the workflow → `spec/finish` (+ reflection).
 
 The core validation loop — the thing that makes generation reliable — survives entirely at the `spec/commit` boundary. The server is still the quality gate; only the dispatch machinery moved out.
@@ -757,7 +762,7 @@ The apply phase is driven by Claude Code through the spec-generate skill/workflo
 
 1. **`spec/begin`** runs the planner, acquires the SQLite session lock, computes dependency waves, and returns `{session_id, plan, waves, PendingDestroys}`.
 2. **`spec/confirm_destroys`** (when `PendingDestroys` is non-empty) deletes files and state for removed resources — only for the resource IDs the operator confirms.
-3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → author files → `spec/commit`. The server writes files (per-file SHA256 skip — files whose content already matches on disk are not rewritten), runs the resource's mechanical validations (fail-closed: a validation that cannot launch is a failure), and records everything in SQLite. On rejection the sub-agent re-pulls `spec/context` (now carrying the failure and any guidance) and retries, up to `MaxRetries`.
+3. For each wave, the workflow calls **`spec/next`**, then spawns one sub-agent per resource. Each sub-agent runs `spec/context` → `spec/execution_start` → author files → `spec/commit(attempt_id)`. The server snapshots candidates, writes files (per-file SHA256 skip), runs the resource's mechanical validations fail-closed, and records the complete disposition in SQLite. On rejection the host follows the classified route/handoff and prepares a child attempt, up to `MaxRetries`.
 4. Persistent failures are triaged with `spec/resolve` or `spec/skip`; the wave advances when every resource is committed, skipped, or terminally rejected.
 5. **`spec/finish`** releases the lock and returns the session summary (and a `reflection_prompt` when `EVOLVE` is `finish`/`all`).
 
@@ -867,12 +872,23 @@ The **`jobs` table is retained in the migrated schema** (so no migration churn w
 
 **`apply_actions` table:** What action was taken per resource per apply. The action column is free-text (the CHECK constraint limiting it to `create/modify/destroy` was removed in migration 006). Current values used in practice include `create`, `modify`, and `destroy`. (Historical rows may contain `drift` from before content-drift detection was removed.)
 
-**`generations` table:** Full audit of every LLM invocation:
+**`generations` table:** Compatibility history projection for resource attempts:
 - Complete prompt text and output text
 - Model ID, prompt hash
 - Retry count and outcome (accepted/rejected)
 - Rejection reason (if failed)
 - Duration, token usage, cost
+- Nullable execution link; rows without one are returned as `legacy`
+
+**Execution governance tables:** Canonical provenance for new attempts:
+- `execution_manifests`, `execution_tools`, and `execution_events` bind the
+  attempt to its role, exact redacted host/model/configuration, context,
+  templates, lifecycle, usage, disposition, goal impact, and host commit ref.
+- `candidate_sets` and `candidate_files` retain accepted and rejected candidate
+  bytes through content-addressed SQLite blobs.
+- `failure_classifications`, failure-goal links, and `attempt_handoffs` retain
+  evidence, deterministic corrective routing, append-only overrides,
+  resolution, retry ancestry, and specialized-role transitions.
 
 **`invariant_checks` table:** Records every invariant check result per apply.
 
@@ -939,10 +955,10 @@ Single `Store` struct exposes all operations:
 +-------------------------------------------------------------+
 |         Orchestrator (per wave, resources in parallel)      |
 |  For each resource in the wave -> one sub-agent:            |
-|    1. spec/context  -> SystemPrompt + Prompt + Invariants   |
-|       (mission, design contract, prior failure + guidance)  |
-|    2. author files (sub-agent, full file contents)         |
-|    3. spec/commit  -> files + model                         |
+|    1. spec/context -> immutable attempt + selected context  |
+|    2. spec/execution_start -> role/host/model/tools/config  |
+|    3. author files (sub-agent, full file contents)          |
+|    4. spec/commit -> attempt_id + candidate files + usage   |
 +-------------+-----------------------------------------------+
               | spec/commit (server side)
               v
@@ -952,11 +968,10 @@ Single `Store` struct exposes all operations:
 |    run resource validations:                               |
 |      compiles / test / integration / custom                |
 |    run amendment validations                               |
-|    enforce supplied invariant_checks verdicts              |
 |        |                                                    |
-|        +-- all pass -> Committed=true, record Generation    |
+|        +-- all pass -> accept candidate + execution         |
 |        +-- any fail  -> Committed=false (rejected),         |
-|                         failure stored for next context     |
+|                         classify + route retry/handoff      |
 +-------------+-----------------------------------------------+
               | on rejection
               v
@@ -1391,9 +1406,15 @@ Every tool is a **spec tool** and every tool is **synchronous** — the server d
 | `spec/confirm_destroys` | Confirm and execute pending resource destroys for the given `resource_ids`. |
 | `spec/next` | Get the next wave of uncommitted resources. Returns `done: true` when complete. |
 | `spec/context` | Get the scoped generation prompt for a resource. Returns `SystemPrompt`, `Prompt`, and `Invariants` (each `{text, rationale}`), including any prior commit failure. |
+| `spec/execution_start` | Start a governed `crest-execution-v1` attempt by binding the prepared role/context to exact host, model, settings, tools, permissions, instructions, and templates. Required before `spec/commit`. |
+| `spec/execution_report` | Complete an advisory role or record cancellation, host failure, or timeout when no candidate is submitted. |
 | `spec/validate-resource` | Run invariant checks and optional type check/tests against files on disk for a specific resource. |
 | `spec/note` | Save a design decision note for a resource. Notes are injected into downstream prompts. |
-| `spec/commit` | Commit a resource: writes `files`, then runs the resource's mechanical validations + amendment validations. Any failure — including a validation that cannot launch — rejects the commit. No self-judged verdicts. Records a `Generation` labelled with `model`. See §4, §8.2. |
+| `spec/commit` | Submit an immutable candidate by `attempt_id`; snapshots files, runs mechanical and amendment validations, and transactionally accepts/rejects with usage and goal progress. See §4, §8.2. |
+| `spec/execution_roles` | List the closed role registry, context policies, output kinds, permitted actions, and handoffs. |
+| `spec/executions`, `spec/execution_inspect` | List and reconstruct execution provenance, candidates, metrics, goal impact, and state events. |
+| `spec/failures`, `spec/failure_classify`, `spec/failure_resolve` | Inspect or append evidence-backed failure decisions and record explicit resolutions. Human overrides append instead of rewriting history. |
+| `spec/handoffs` | Inspect retry-role handoffs and their source failures. |
 | `spec/resolve` | Provide guidance for a failed resource; resets it to `pending` so the next wave pass regenerates with the guidance injected. See §8.6. |
 | `spec/amend` | Signal that the CUE spec has been updated for a resource. Re-loads spec, re-computes hashes, updates the plan, resets for regeneration. See §8.6. |
 | `spec/skip` | Skip a failed resource. Transitions to `skipped` (terminal); wave proceeds without it. See §8.6. |
@@ -1444,7 +1465,7 @@ Tool calls are handled synchronously in `handleToolCall`: dispatch to the tool's
 The protocol the orchestrator follows is delivered three ways, all consistent: the `initialize` response `instructions`, the `about` tool, and the `orchestrator_instructions` MCP prompt. In summary:
 
 - **You are the orchestrator, not the server.** The server runs no LLM; you spawn the sub-agents.
-- For each resource: call `spec/context` to get `SystemPrompt` + `Prompt` + `Invariants` (constraints, not a grading sheet), generate with a sub-agent (sonnet, never haiku), and call `spec/commit` with `files` + `model`.
+- For each resource: call `spec/context`, register the returned role/context through `spec/execution_start`, generate with a sub-agent, and call `spec/commit` with `attempt_id` plus candidate files and available usage metadata.
 - On `Committed=false`, call `spec/context` again (it now carries the failure under `## Previous Errors` and any triage guidance under `## Guidance`) and retry up to `MaxRetries`, then `spec/resolve` or `spec/skip` (skip only for a provably contradictory spec).
 - Resources within a wave run in parallel (the spec-generate workflow's `parallel(...)`); waves are sequential.
 - Never write generated-resource code in the orchestrator's own context — every file comes from a sub-agent via `spec/commit`.
@@ -1652,12 +1673,12 @@ There is one flow — the orchestrator drives it (the spec-generate skill automa
 2. `spec/begin` -> `session_id`, plan, waves, `PendingDestroys`.
 3. If `PendingDestroys` is non-empty, `spec/confirm_destroys` for the confirmed IDs.
 4. Run the spec-generate workflow. Per wave (`spec/next`), one sub-agent per resource runs in parallel:
-   - `spec/context` -> `SystemPrompt` + `Prompt` + `Invariants`
+   - `spec/context` -> immutable attempt, role, hashes, selected system/task context
+   - `spec/execution_start` with `crest-execution-v1` and the exact host execution metadata
    - generate the files with the sub-agent (sonnet)
-   - judge each invariant -> `{invariant, passed, summary}`
-   - `spec/commit` with `files` + `model` + `invariant_checks` (the server validates and records)
-   - on `Committed=false`, re-pull `spec/context` (failure injected) and retry up to `MaxRetries`
-5. Persistent failures are triaged: `spec/resolve` (guidance, → pending) or `spec/skip`; the stall guard force-skips anything still stuck.
+   - `spec/commit` with `attempt_id`, candidate files, and available usage/commit metadata
+   - on `Committed=false`, inspect classified failure/handoff, create a child context, and retry up to `MaxRetries`
+5. Persistent or retry-blocking failures are surfaced for specification, validation, architecture, infrastructure, or human repair; they are not blindly regenerated.
 6. `spec/finish` -> finalize; if `reflection_prompt` is non-empty, run it with a sub-agent and submit via `spec/record_learnings`.
 
 The orchestrator has full control — it can inspect prompts (`spec/inspect`/`spec/prompt`), edit the CUE spec to fix root causes (`spec/amend` / amendments), and decide how to triage. The `spec/amend` path is particularly powerful: a generation failure becomes a signal to improve the spec, not just retry harder.
@@ -1688,7 +1709,7 @@ Code is verified at commit time (mechanical validations + orchestrator-judged in
 Every generation, every prompt, every commit outcome, every retry, every failure reason is recorded in SQLite. You can replay, debug, and understand every decision the system made.
 
 ### The Server Validates, the Orchestrator Generates
-The server never calls an LLM and never spawns a subprocess. It hands out scoped prompts (`spec/context`) and ingests generated files plus invariant verdicts (`spec/commit`), where it runs mechanical validations and enforces the verdicts. Generation — and all the LLM judgement that goes with it — happens in the orchestrator's sub-agents. This keeps the trusted core small, deterministic, and testable without a model.
+The server never calls an LLM and never spawns a generation subprocess. It hands out immutable scoped context (`spec/context`), records exact host execution configuration (`spec/execution_start`), and ingests candidate files (`spec/commit`), where it runs mechanical validations. Generation—and all LLM judgment—happens in the orchestrator's sub-agents. This keeps the trusted core small, deterministic, and testable without a model.
 
 ### State Survives, Sessions Resume
 All state lives in one SQLite database; a session holds an exclusive lock and is the unit of progress. If a workflow dies mid-run, `spec/status`/`spec/wave_status` show where it stopped and re-invoking the workflow resumes — `spec/next` re-serves non-terminal resources. There is no async job state to reconcile because there are no background jobs.

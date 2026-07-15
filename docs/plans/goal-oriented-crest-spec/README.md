@@ -1,6 +1,7 @@
 # Goal-Oriented crest-spec Improvement Program
 
-Status: **Draft for workstream-by-workstream review**  
+Status: **Stages 1–5 implemented; Stages 6–8 planned**
+
 Source brief: [`gpt_improvements.md`](../../../gpt_improvements.md)  
 Last updated: 2026-07-14
 
@@ -210,11 +211,11 @@ Review the documents in implementation order. Record workstream approval in this
 
 | Workstream | Status | Reviewer notes |
 |---|---|---|
-| WS1 Goal language | Draft | |
-| WS2 Resource traceability | Draft | |
-| WS3 Goal-directed reconciliation | Draft | |
-| WS4 Context manifests | Draft | |
-| WS5 Execution, roles, failures | Draft | |
+| WS1 Goal language | Implemented | Merged |
+| WS2 Resource traceability | Implemented | Merged |
+| WS3 Goal-directed reconciliation | Implemented | Merged |
+| WS4 Context manifests | Implemented | Merged |
+| WS5 Execution, roles, failures | Implemented | Ready for review |
 | WS6 Validation and evidence | Draft | |
 | WS7 Evaluations | Draft | |
 | WS8 Dashboard and developer interfaces | Draft | |

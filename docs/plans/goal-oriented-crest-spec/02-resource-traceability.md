@@ -1,6 +1,7 @@
 # Workstream 2: DDD Traceability and Boundary/Artifact Profiles
 
-Status: **Draft**  
+Status: **Implemented**
+
 Depends on: WS1  
 Enables: WS3–WS8  
 Original scope: Workstreams 2 and 10

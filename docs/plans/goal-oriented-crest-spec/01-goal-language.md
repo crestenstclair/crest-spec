@@ -1,6 +1,7 @@
 # Workstream 1: Goal Language and Completion State
 
-Status: **Draft**  
+Status: **Implemented**
+
 Depends on: none  
 Enables: WS2–WS8  
 Original scope: Workstream 1
@@ -219,4 +220,3 @@ The current project cannot enter a generation session until its CUE spec passes 
 - Completion is deterministic and explainable.
 - Every tracked fixture and public example is migrated.
 - Project and goal state are visible through MCP/API/CLI/dashboard.
-

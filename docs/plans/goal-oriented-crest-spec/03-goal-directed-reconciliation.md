@@ -1,6 +1,7 @@
 # Workstream 3: Goal-Directed Planning and Change Reconciliation
 
-Status: **Draft**  
+Status: **Implemented**
+
 Depends on: WS1, WS2  
 Enables: WS4–WS8  
 Original scope: Workstreams 3 and 11
@@ -151,4 +152,3 @@ Existing resource operations remain available in public results during a transit
 - Change-impact paths and stale evidence are SQLite-backed.
 - Completed goals regress and re-verify correctly.
 - Existing reconciliation and deletion safeguards continue to pass.
-

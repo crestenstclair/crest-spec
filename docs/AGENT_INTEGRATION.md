@@ -60,7 +60,8 @@ commands from the spec, not agents, not LLM calls.
 |---|---|---|
 | Parse/validate the CUE spec | ✅ | |
 | Compute plan, dependency waves, hashes | ✅ | |
-| Serve per-resource generation context (prompt, deps, invariants, prior attempt + errors) | ✅ | |
+| Serve and persist goal-directed per-resource context | ✅ | |
+| Validate the execution protocol, roles, candidates, and failure routes | ✅ | |
 | Run validation commands and accept/reject commits | ✅ | |
 | Track behavioral checks (verify/graduate ledger) | ✅ | |
 | Persist sessions across crashes/restarts | ✅ | |
@@ -106,6 +107,9 @@ Config that matters:
 - `CREST_SPEC_GENERATE_MODEL` — a **label** recorded with commits and mixed
   into effective hashes. It does not make the engine call any model. Changing
   it re-plans everything, so keep it stable per project.
+- `CREST_SPEC_EXECUTION_TIMEOUT` — startup recovery threshold for active
+  executions abandoned by a crashed host (default `30m`; `0` disables).
+  Recovery records an engine-observed host failure, not a model failure.
 - One server per project directory. The SQLite db lives in `.crest-spec/`.
 
 There is also a small human CLI (`crest-spec adopt`, `crest-spec dashboard`)
@@ -142,7 +146,9 @@ spawned for one resource/check.
 | Tool | Purpose |
 |---|---|
 | `spec/context` | Creates an immutable attempt and returns its `AttemptID`/`ContextManifestID`, budget allocation, ordered selection decisions, system prompt, and task prompt. Context is goal-directed: acceptance, task, resource contract, dependencies, consumers, relevant code, invariants, and retry evidence. In UPDATE mode it includes previous files, `## Previous Errors`, and `## Guidance`. Optional `role`, `budget_tokens`, and `parent_attempt_id` inputs shape the attempt without coupling crest-spec to a provider. |
-| `spec/commit` | Submit candidate files. The engine runs the spec's validation commands; returns `Committed` plus per-validation results on rejection. The sub-agent reads the failures and retries (the engine records attempt files so the next `spec/context` is UPDATE mode). |
+| `spec/execution_start` | Required before agent work. Registers `crest-execution-v1`, the exact prepared role/context hash, host/provider/model, redacted settings, tools and permissions, template hashes, system instructions, and host session. Reusing an idempotency key with changed governed inputs fails closed. |
+| `spec/commit` | Submit immutable candidate files by `attempt_id`, with optional duration/token/cost and host commit-reference metadata. Session, resource, model, plan operation, goals, and capabilities are derived from persisted state rather than trusted caller fields. The engine snapshots the candidate, runs declared validations, and atomically accepts or rejects it. |
+| `spec/execution_report` | Finish an advisory role or explicitly record a cancelled, failed, or timed-out attempt that has no candidate. |
 | `spec/note` | Attach a free-form note to the session/resource (shows up in later context). |
 
 ### Context inspection (orchestrator and humans)
@@ -154,6 +160,33 @@ spawned for one resource/check.
 | `spec/context_compare` | Compare two manifests by source, decision, content hash, allocation, selector, budget, and template changes. |
 
 Context creation and the resource's dispatch transition are one SQLite transaction. If mandatory goal, acceptance, task, system, and resource-contract material exceeds the bounded budget, the attempt is recorded as `context_blocked` and the resource remains pending. Runtime context manifests are never written into the project tree.
+
+### Execution, role, and failure inspection
+
+| Tool | Purpose |
+|---|---|
+| `spec/execution_roles` | Read the closed role registry, versioned context policy, expected output, permitted lifecycle actions, and handoffs. |
+| `spec/executions`, `spec/execution_inspect` | List or reconstruct host/model/settings/tools, goals/capabilities, candidate, metrics, state events, goal progress, and disposition from SQLite. |
+| `spec/failures` | List classified failures, evidence, deterministic corrective route, retry block, resolution, and affected goals. |
+| `spec/failure_classify` | Append an evidence-backed classification. Host submissions require a `failure_triage` execution; human overrides cite `override_of` and preserve the original. |
+| `spec/failure_resolve` | Record an explicit human resolution. An accepted retry automatically resolves unresolved failures in its ancestor chain. |
+| `spec/handoffs` | Inspect pending or historical role handoffs and their source failure. |
+
+The MCP `initialize` result advertises `capabilities.experimental.crestExecution`
+with the execution protocol version, role-policy version, and legacy-commit
+availability. Hosts should negotiate this before beginning a session. Secrets
+must not be sent; crest-spec also recursively redacts credential-shaped keys
+and bearer values before persistence.
+
+### How this relates to DDD
+
+Execution roles are responsibilities for an attempt, not new architectural
+resource types. A `resource_implementer` may implement an aggregate, port,
+adapter, or profiled asset; an `integration_implementer` may connect several
+of those resources. The CUE DDD declaration remains the implementation
+contract and dependency graph. Goals/capabilities supply project intent and
+acceptance traceability. Context and execution manifests are runtime
+governance records stored only in SQLite.
 
 ### Behavioral verification (called BY your verifier sub-agents)
 | Tool | Purpose |
@@ -187,10 +220,19 @@ loop:
   if wave.done: break
   for resource in wave.resources (PARALLEL, one sub-agent each):
       sub-agent:
-        ctx = spec/context(sessionId, resource)     # full prompt, deps, errors, guidance
+        ctx = spec/context(sessionId, resource, role) # immutable attempt + full context
+        run = spec/execution_start(
+          attempt_id=ctx.AttemptID,
+          protocol_version="crest-execution-v1",
+          role=ctx.Role,
+          context_hash=ctx.ContextHash,
+          host/model/settings/tools/templates=actual values)
         files = <your LLM writes/edits code from ctx>
-        res = spec/commit(sessionId, resource, files, model_label)
-        if not res.Committed: read res.Validations, fix, retry (bounded)
+        res = spec/commit(attempt_id=ctx.AttemptID, files=files, usage=actual values)
+        if not res.Committed:
+          read res.Validations and spec/failures
+          request a child context with parent_attempt_id=ctx.AttemptID
+          and the persisted handoff role, then retry (bounded)
   # wave gate: whole-tree validation
   if wave gate failed:
       triage (a sub-agent reads the errors, attributes them)
@@ -221,9 +263,9 @@ check for witness/stub + `spec/verify` (+ `spec/graduate` on pass).
    `confirm_destroys` executes them.
 5. **Sub-agents return data, not vibes.** The engine's tables are the truth:
    reconcile outcomes with `spec/sql`, never with a sub-agent's self-report.
-6. **Keep the model label stable** (`CREST_SPEC_GENERATE_MODEL` / the `model`
-   argument to commit) — it feeds effective hashes; changing it re-plans the
-   world.
+6. **Report the actual execution identity.** `CREST_SPEC_GENERATE_MODEL`
+   remains the plan/hash default, while the exact host/provider/model belongs
+   in `spec/execution_start`; `spec/commit` cannot replace that identity.
 
 ## Porting to a non-Claude host (e.g. OpenCode)
 
