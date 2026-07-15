@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -12,7 +13,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -204,71 +204,126 @@ func (d *dashboard) writeQueryError(w http.ResponseWriter, err error) {
 	d.writeAPIError(w, http.StatusInternalServerError, "query_failed", err.Error(), nil)
 }
 
-func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
-	resources, _ := d.store.ListResources()
-	lock, _ := d.store.GetLock()
-	session, _ := d.store.GetActiveSession()
-	applies, _ := d.store.ListApplies(1)
+type resourceStateCounts struct {
+	Pending    int `json:"pending"`
+	Dispatched int `json:"dispatched"`
+	Committed  int `json:"committed"`
+	Rejected   int `json:"rejected"`
+	Skipped    int `json:"skipped"`
+	Errored    int `json:"errored"`
+	Blocked    int `json:"blocked"`
+	Total      int `json:"total"`
+}
 
-	type resourceStateCounts struct {
-		Pending    int `json:"pending"`
-		Dispatched int `json:"dispatched"`
-		Committed  int `json:"committed"`
-		Rejected   int `json:"rejected"`
-		Skipped    int `json:"skipped"`
-		Errored    int `json:"errored"`
-		Blocked    int `json:"blocked"`
-		Total      int `json:"total"`
+type liveStatusSnapshot struct {
+	Session          *store.Session           `json:"session"`
+	LatestApply      *store.Apply             `json:"latest_apply,omitempty"`
+	SessionResources *[]store.SessionResource `json:"session_resources,omitempty"`
+}
+
+type statusResponse struct {
+	Resources      int                  `json:"resources"`
+	Lock           *store.Lock          `json:"lock"`
+	Session        *store.Session       `json:"session"`
+	LatestApply    *store.Apply         `json:"latest_apply"`
+	SessionActions []store.ApplyAction  `json:"session_actions,omitempty"`
+	ResourceStates *resourceStateCounts `json:"resource_states,omitempty"`
+}
+
+func (d *dashboard) loadLiveStatusSnapshot() (liveStatusSnapshot, error) {
+	var snapshot liveStatusSnapshot
+
+	session, err := d.store.GetActiveSession()
+	if err != nil && !errors.Is(err, cserrors.ErrNotFound) {
+		return snapshot, fmt.Errorf("get active session: %w", err)
 	}
+	snapshot.Session = session
 
-	type statusResp struct {
-		Resources      int                  `json:"resources"`
-		Lock           *store.Lock          `json:"lock"`
-		Session        *store.Session       `json:"session"`
-		LatestApply    *store.Apply         `json:"latest_apply"`
-		SessionActions []store.ApplyAction  `json:"session_actions,omitempty"`
-		ResourceStates *resourceStateCounts `json:"resource_states,omitempty"`
-	}
-
-	resp := statusResp{
-		Resources: len(resources),
-		Lock:      lock,
-		Session:   session,
+	applies, err := d.store.ListApplies(1)
+	if err != nil {
+		return snapshot, fmt.Errorf("list applies: %w", err)
 	}
 	if len(applies) > 0 {
-		resp.LatestApply = &applies[0]
-	}
-	if session != nil && session.ApplyID != "" {
-		actions, _ := d.store.ListApplyActions(session.ApplyID)
-		resp.SessionActions = actions
-	}
-	if session != nil {
-		sessResources, _ := d.store.ListSessionResources(session.ID)
-		if len(sessResources) > 0 {
-			counts := &resourceStateCounts{Total: len(sessResources)}
-			for _, sr := range sessResources {
-				switch sr.State {
-				case "pending":
-					counts.Pending++
-				case "dispatched":
-					counts.Dispatched++
-				case "committed":
-					counts.Committed++
-				case "rejected":
-					counts.Rejected++
-				case "skipped":
-					counts.Skipped++
-				case "errored":
-					counts.Errored++
-				case "blocked":
-					counts.Blocked++
-				}
-			}
-			resp.ResourceStates = counts
-		}
+		snapshot.LatestApply = &applies[0]
 	}
 
-	d.writeJSON(w, resp)
+	if session != nil {
+		resources, err := d.store.ListSessionResources(session.ID)
+		if err != nil {
+			return snapshot, fmt.Errorf("list resources for session %q: %w", session.ID, err)
+		}
+		snapshot.SessionResources = &resources
+	}
+
+	return snapshot, nil
+}
+
+func (d *dashboard) loadStatusResponse() (statusResponse, error) {
+	live, err := d.loadLiveStatusSnapshot()
+	if err != nil {
+		return statusResponse{}, err
+	}
+
+	resources, err := d.store.ListResources()
+	if err != nil {
+		return statusResponse{}, fmt.Errorf("list resources: %w", err)
+	}
+	lock, err := d.store.GetLock()
+	if err != nil && !errors.Is(err, cserrors.ErrNotFound) {
+		return statusResponse{}, fmt.Errorf("get apply lock: %w", err)
+	}
+
+	response := statusResponse{
+		Resources:   len(resources),
+		Lock:        lock,
+		Session:     live.Session,
+		LatestApply: live.LatestApply,
+	}
+	if live.Session != nil && live.Session.ApplyID != "" {
+		actions, err := d.store.ListApplyActions(live.Session.ApplyID)
+		if err != nil {
+			return statusResponse{}, fmt.Errorf("list actions for apply %q: %w", live.Session.ApplyID, err)
+		}
+		response.SessionActions = actions
+	}
+	if live.SessionResources != nil && len(*live.SessionResources) > 0 {
+		response.ResourceStates = countResourceStates(*live.SessionResources)
+	}
+
+	return response, nil
+}
+
+func countResourceStates(resources []store.SessionResource) *resourceStateCounts {
+	counts := &resourceStateCounts{Total: len(resources)}
+	for _, resource := range resources {
+		switch resource.State {
+		case "pending":
+			counts.Pending++
+		case "dispatched":
+			counts.Dispatched++
+		case "committed":
+			counts.Committed++
+		case "rejected":
+			counts.Rejected++
+		case "skipped":
+			counts.Skipped++
+		case "errored":
+			counts.Errored++
+		case "blocked":
+			counts.Blocked++
+		}
+	}
+	return counts
+}
+
+func (d *dashboard) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	response, err := d.loadStatusResponse()
+	if err != nil {
+		d.log.Error().Err(err).Str("endpoint", "/api/status").Msg("dashboard status query failed")
+		d.writeError(w, http.StatusInternalServerError, "could not load dashboard status")
+		return
+	}
+	d.writeJSON(w, response)
 }
 
 func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request) {
@@ -1009,62 +1064,66 @@ func (d *dashboard) handleLearnings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *dashboard) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		d.writeError(w, 500, "streaming not supported")
 		return
 	}
 
-	ctx := r.Context()
-	var mu sync.Mutex
-	var lastHash string
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	sendUpdate := func() {
-		session, _ := d.store.GetActiveSession()
-		applies, _ := d.store.ListApplies(1)
-
-		payload := map[string]interface{}{
-			"session": session,
-		}
-		if len(applies) > 0 {
-			payload["latest_apply"] = applies[0]
-		}
-		if session != nil {
-			sr, _ := d.store.ListSessionResources(session.ID)
-			payload["session_resources"] = sr
-		}
-
-		data, _ := json.Marshal(payload)
-		hash := fmt.Sprintf("%x", len(data))
-
-		mu.Lock()
-		defer mu.Unlock()
-		if hash == lastHash {
-			return
-		}
-		lastHash = hash
-
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+	initial, err := d.loadLiveStatusSnapshot()
+	if err != nil {
+		d.log.Error().Err(err).Str("endpoint", "/api/live-status").Msg("dashboard live status query failed")
+		d.writeError(w, http.StatusInternalServerError, "could not load dashboard status")
+		return
 	}
 
-	sendUpdate()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	if err := d.streamLiveStatus(w, r, ticker.C, initial); err != nil {
+		d.log.Warn().Err(err).Str("endpoint", "/api/live-status").Msg("dashboard live status stream ended")
+	}
+}
+
+func (d *dashboard) streamLiveStatus(w http.ResponseWriter, r *http.Request, ticks <-chan time.Time, initial liveStatusSnapshot) error {
+	var lastPayload []byte
+	if _, err := writeLiveStatusUpdate(w, initial, &lastPayload); err != nil {
+		return fmt.Errorf("write initial live status: %w", err)
+	}
 
 	for {
 		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sendUpdate()
+		case <-r.Context().Done():
+			return nil
+		case <-ticks:
+			snapshot, err := d.loadLiveStatusSnapshot()
+			if err != nil {
+				return err
+			}
+			if _, err := writeLiveStatusUpdate(w, snapshot, &lastPayload); err != nil {
+				return err
+			}
 		}
 	}
+}
+
+func writeLiveStatusUpdate(w http.ResponseWriter, snapshot liveStatusSnapshot, lastPayload *[]byte) (bool, error) {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return false, fmt.Errorf("encode live status: %w", err)
+	}
+	if bytes.Equal(payload, *lastPayload) {
+		return false, nil
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+		return false, fmt.Errorf("write live status: %w", err)
+	}
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return false, fmt.Errorf("flush live status: %w", err)
+	}
+	*lastPayload = append((*lastPayload)[:0], payload...)
+	return true, nil
 }
 
 func fatal(err error) {
