@@ -75,6 +75,9 @@ func NewRegistry(project *Project) (*Registry, error) {
 	reg.registerContexts(project)
 	reg.registerAdapters(project)
 	reg.registerProjectAssets(project)
+	if err := reg.normalizeValidationDefinitions(); err != nil {
+		return nil, err
+	}
 
 	if err := reg.validateDependencies(); err != nil {
 		return nil, err
@@ -84,6 +87,48 @@ func NewRegistry(project *Project) (*Registry, error) {
 	}
 
 	return reg, nil
+}
+
+func (reg *Registry) normalizeValidationDefinitions() error {
+	validResources := make(map[string]bool, len(reg.Resources))
+	for resourceID := range reg.Resources {
+		validResources[resourceID] = true
+	}
+	var errs []string
+	for _, resourceID := range sortedResourceIDs(reg.Resources) {
+		resource := reg.Resources[resourceID]
+		for index := range resource.Validations {
+			definition := &resource.Validations[index]
+			path := fmt.Sprintf("%s.validations[%d]", resourceID, index)
+			if definition.ID == "" {
+				definition.ID = legacyValidationID(resourceID, index, *definition)
+				definition.Named = false
+			}
+			if definition.Scope == "" {
+				definition.Scope = "resource"
+			}
+			if definition.Scope != "resource" {
+				errs = append(errs, path+".scope must be resource; declare multi-resource scopes under project.validations")
+			}
+			if len(definition.Resources) == 0 {
+				definition.Resources = []string{resourceID}
+			}
+			validateValidationDefinition(&errs, path, *definition, validResources)
+		}
+		resource.Validations = append([]Validation(nil), resource.Validations...)
+		reg.Resources[resourceID] = resource
+	}
+	for index, definition := range reg.Project.Validations {
+		validateValidationDefinition(&errs, fmt.Sprintf("project.validations[%d]", index), definition, validResources)
+	}
+	for name, witness := range reg.Project.Witnesses {
+		validateRefs(&errs, "project.witnesses."+name+".resources", witness.Resources, validResources)
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	sort.Strings(errs)
+	return fmt.Errorf("invalid verification definitions:\n  %s", strings.Join(errs, "\n  "))
 }
 
 func (reg *Registry) registerProject(project *Project) {

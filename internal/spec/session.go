@@ -634,7 +634,7 @@ func (s *Spec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) 
 	s.runVerificationCommand(ctx, s.cfg.TestCommand, "test", resources, result)
 
 	if plan, err := s.Plan(ctx); err == nil && plan != nil {
-		s.runProjectValidations(ctx, plan.Registry.Project.Validations, resources, result)
+		s.runProjectValidations(ctx, []cuepkg.Validation(plan.Registry.Project.Validations), resources, result)
 	}
 
 	return result

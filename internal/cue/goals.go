@@ -109,6 +109,7 @@ func ValidateProjectIntent(p *Project) error {
 	}
 
 	validateRefs(&errs, "project.completion.requiredGoals", p.Completion.RequiredGoals, goalIDs)
+	normalizeAndValidateVerificationDefinitions(p, &errs)
 	validateGoalCapabilitySymmetry(&errs, p)
 	validateGoalCycles(&errs, p.Goals)
 
