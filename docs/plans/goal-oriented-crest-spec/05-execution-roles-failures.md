@@ -1,6 +1,7 @@
 # Workstream 5: Execution Provenance, Specialized Roles, and Failure Triage
 
-Status: **Draft**  
+Status: **Implemented — ready for review**
+
 Depends on: WS4; uses WS1–WS3  
 Enables: WS6, WS7, WS8  
 Original scope: Workstreams 8, 12, and 13
@@ -10,6 +11,39 @@ Original scope: Workstreams 8, 12, and 13
 Record how an external host executed every generation attempt, shape work for specialized responsibilities, and route failures according to their actual cause instead of treating all rejection as a prompt/model retry.
 
 crest-spec remains provider- and host-independent. Hosts execute agents; crest-spec defines, validates, persists, and exposes the attempt contract.
+
+This workstream adds governance around an implementation attempt. It does not
+replace or duplicate the DDD resource schemas: aggregates, value objects,
+services, ports, adapters, and assets still define what is implemented;
+goals explain why it matters, while execution manifests record who attempted
+it, with which context and tools, and whether crest-spec accepted the result.
+
+## Implementation record
+
+- WS5-01: `internal/execution` defines `crest-execution-v1`, the closed role
+  registry, legal state transitions, failure routes, canonical hashing, and
+  recursive secret redaction. Configured startup recovery times out abandoned
+  host executions without inferring model failure. MCP initialize advertises
+  protocol and role policy versions and reports that legacy commit is disabled.
+- WS5-02: migrations 021–023 and generated SQL persist execution manifests,
+  tools, events, candidate snapshots, direct goal/capability impact, goal
+  progress, host commit references, failure classifications, and handoffs.
+  Candidate disposition and accepted resource ownership are one transaction.
+- WS5-03: `spec/execution_start`, `spec/execution_report`, and attempt-only
+  `spec/commit` enforce the immutable context/execution/candidate chain. New
+  commits without a matching prepared execution fail closed.
+- WS5-04: plans recommend roles, attempts bind the selected role and policy,
+  context is role-shaped, and persisted handoffs constrain retry roles.
+- WS5-05: deterministic engine failures and evidence-backed triage records use
+  the closed taxonomy. Human overrides append new records; accepted descendant
+  attempts resolve ancestor failures without erasing them.
+- WS5-06: Claude Code and OpenCode adapters implement the protocol. MCP and the
+  dashboard inspect and compare executions, candidates, roles, retries,
+  failures, handoffs, goal impact, and host/model/configuration differences.
+
+Validation run normalization and executable witness provenance remain owned by
+WS6. Cross-view deep-link and release hardening remain owned by WS8; Phase 5
+provides their canonical execution and candidate records.
 
 ## Requirements
 
@@ -209,4 +243,3 @@ During development only, a feature flag may permit the old commit signature for 
 - Specialized roles and explicit handoffs are operational through reference hosts.
 - Failures route to appropriate corrective actions and block invalid retries.
 - Execution and failure comparisons are inspectable without provider coupling.
-

@@ -141,21 +141,22 @@ func (q *Queries) CreateContextSection(ctx context.Context, arg CreateContextSec
 const createGenerationAttempt = `-- name: CreateGenerationAttempt :exec
 INSERT INTO generation_attempts (
     id, session_id, apply_id, resource_id, plan_operation_id,
-    parent_attempt_id, retry_number, role, status, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    parent_attempt_id, retry_number, role, status, created_at, role_policy_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateGenerationAttemptParams struct {
-	ID              string
-	SessionID       string
-	ApplyID         string
-	ResourceID      string
-	PlanOperationID string
-	ParentAttemptID *string
-	RetryNumber     int64
-	Role            string
-	Status          string
-	CreatedAt       string
+	ID                string
+	SessionID         string
+	ApplyID           string
+	ResourceID        string
+	PlanOperationID   string
+	ParentAttemptID   *string
+	RetryNumber       int64
+	Role              string
+	Status            string
+	CreatedAt         string
+	RolePolicyVersion string
 }
 
 func (q *Queries) CreateGenerationAttempt(ctx context.Context, arg CreateGenerationAttemptParams) error {
@@ -170,6 +171,7 @@ func (q *Queries) CreateGenerationAttempt(ctx context.Context, arg CreateGenerat
 		arg.Role,
 		arg.Status,
 		arg.CreatedAt,
+		arg.RolePolicyVersion,
 	)
 	return err
 }
@@ -247,7 +249,7 @@ func (q *Queries) GetContextManifestByAttempt(ctx context.Context, attemptID str
 }
 
 const getGenerationAttempt = `-- name: GetGenerationAttempt :one
-SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at FROM generation_attempts WHERE id = ?
+SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at, role_policy_version FROM generation_attempts WHERE id = ?
 `
 
 func (q *Queries) GetGenerationAttempt(ctx context.Context, id string) (GenerationAttempt, error) {
@@ -264,12 +266,13 @@ func (q *Queries) GetGenerationAttempt(ctx context.Context, id string) (Generati
 		&i.Role,
 		&i.Status,
 		&i.CreatedAt,
+		&i.RolePolicyVersion,
 	)
 	return i, err
 }
 
 const getLatestGenerationAttempt = `-- name: GetLatestGenerationAttempt :one
-SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at FROM generation_attempts
+SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at, role_policy_version FROM generation_attempts
 WHERE session_id = ? AND resource_id = ?
 ORDER BY retry_number DESC LIMIT 1
 `
@@ -293,6 +296,7 @@ func (q *Queries) GetLatestGenerationAttempt(ctx context.Context, arg GetLatestG
 		&i.Role,
 		&i.Status,
 		&i.CreatedAt,
+		&i.RolePolicyVersion,
 	)
 	return i, err
 }
@@ -304,7 +308,7 @@ SELECT
     cm.original_bytes, cm.selected_bytes, cm.context_hash, cm.blocked,
     cm.blocked_reason, cm.created_at,
     ga.session_id, ga.apply_id, ga.resource_id, ga.plan_operation_id,
-    ga.parent_attempt_id, ga.retry_number, ga.role, ga.status
+    ga.parent_attempt_id, ga.retry_number, ga.role, ga.role_policy_version, ga.status
 FROM context_manifests cm
 JOIN generation_attempts ga ON ga.id = cm.attempt_id
 ORDER BY cm.created_at DESC, cm.id DESC
@@ -332,6 +336,7 @@ type ListContextManifestSummariesRow struct {
 	ParentAttemptID   *string
 	RetryNumber       int64
 	Role              string
+	RolePolicyVersion string
 	Status            string
 }
 
@@ -365,6 +370,7 @@ func (q *Queries) ListContextManifestSummaries(ctx context.Context, limit int64)
 			&i.ParentAttemptID,
 			&i.RetryNumber,
 			&i.Role,
+			&i.RolePolicyVersion,
 			&i.Status,
 		); err != nil {
 			return nil, err
@@ -426,7 +432,7 @@ func (q *Queries) ListContextSections(ctx context.Context, manifestID string) ([
 }
 
 const listGenerationAttemptsByResource = `-- name: ListGenerationAttemptsByResource :many
-SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at FROM generation_attempts
+SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at, role_policy_version FROM generation_attempts
 WHERE resource_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
 `
 
@@ -455,6 +461,7 @@ func (q *Queries) ListGenerationAttemptsByResource(ctx context.Context, arg List
 			&i.Role,
 			&i.Status,
 			&i.CreatedAt,
+			&i.RolePolicyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -470,7 +477,7 @@ func (q *Queries) ListGenerationAttemptsByResource(ctx context.Context, arg List
 }
 
 const listGenerationAttemptsBySession = `-- name: ListGenerationAttemptsBySession :many
-SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at FROM generation_attempts
+SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at, role_policy_version FROM generation_attempts
 WHERE session_id = ? ORDER BY created_at, id
 `
 
@@ -494,6 +501,7 @@ func (q *Queries) ListGenerationAttemptsBySession(ctx context.Context, sessionID
 			&i.Role,
 			&i.Status,
 			&i.CreatedAt,
+			&i.RolePolicyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -553,7 +561,7 @@ func (q *Queries) ListRecentContextManifests(ctx context.Context, limit int64) (
 }
 
 const listRecentGenerationAttempts = `-- name: ListRecentGenerationAttempts :many
-SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at FROM generation_attempts
+SELECT id, session_id, apply_id, resource_id, plan_operation_id, parent_attempt_id, retry_number, role, status, created_at, role_policy_version FROM generation_attempts
 ORDER BY created_at DESC, id DESC LIMIT ?
 `
 
@@ -577,6 +585,7 @@ func (q *Queries) ListRecentGenerationAttempts(ctx context.Context, limit int64)
 			&i.Role,
 			&i.Status,
 			&i.CreatedAt,
+			&i.RolePolicyVersion,
 		); err != nil {
 			return nil, err
 		}

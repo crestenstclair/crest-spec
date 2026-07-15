@@ -14,6 +14,7 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/config"
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
+	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -32,6 +33,7 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 			Attempt: store.GenerationAttempt{
 				ID: "attempt-dashboard", SessionID: "session-dashboard", ApplyID: "apply-dashboard",
 				ResourceID: "resource.dashboard", PlanOperationID: "operation-dashboard", Role: "resource_implementer",
+				RolePolicyVersion: "role-policy-v1",
 			},
 			SelectorVersion: contextmanifest.SelectorVersion, EstimatorVersion: contextmanifest.EstimatorVersion,
 			SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: 4096, EstimatedTokens: 4,
@@ -45,6 +47,21 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 			}},
 		},
 	})
+	require.NoError(t, err)
+	executionManifest, err := st.StartExecution(context.Background(), store.ExecutionManifest{
+		AttemptID: "attempt-dashboard", ContextManifestID: "manifest-dashboard",
+		ProtocolVersion: executionpkg.ProtocolVersion, IdempotencyKey: "dashboard-request",
+		PlanOperationID: "operation-dashboard", Role: "resource_implementer",
+		RolePolicyVersion: executionpkg.RolePolicyVersion, ContextPolicy: "resource-implementation-v1",
+		HostName: "dashboard-host", Provider: "test", Model: "test-model",
+		TemplateHashes:     map[string]string{"system": "template-hash"},
+		SystemInstructions: "system snapshot", ContextHash: manifest.ContextHash,
+		Tools: []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+	})
+	require.NoError(t, err)
+	_, err = st.SubmitCandidate(context.Background(), executionManifest.ID, []store.CandidateFile{{
+		Path: "src/dashboard.go", Content: "package dashboard\n", WriteIntent: "create",
+	}})
 	require.NoError(t, err)
 
 	d := &dashboard{store: st, spec: specmod.New(st, specmod.OSFileSystem{}, &config.Config{}), cfg: &config.Config{}, log: zerolog.Nop()}
@@ -68,6 +85,19 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 	d.handleContextComparison(compareRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/context-comparison?left=manifest-dashboard&right=manifest-dashboard", nil))
 	require.Equal(t, http.StatusOK, compareRecorder.Code)
 	require.Contains(t, compareRecorder.Body.String(), `"SameContext":true`)
+
+	executionListRecorder := httptest.NewRecorder()
+	d.handleExecutions(executionListRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/executions", nil))
+	require.Equal(t, http.StatusOK, executionListRecorder.Code)
+	require.Contains(t, executionListRecorder.Body.String(), "dashboard-host")
+
+	executionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/executions/"+executionManifest.ID, nil)
+	executionRequest.SetPathValue("id", executionManifest.ID)
+	executionRecorder := httptest.NewRecorder()
+	d.handleExecutionTrace(executionRecorder, executionRequest)
+	require.Equal(t, http.StatusOK, executionRecorder.Code)
+	require.Contains(t, executionRecorder.Body.String(), "src/dashboard.go")
+	require.Contains(t, executionRecorder.Body.String(), "prompt snapshot")
 }
 
 func TestDashboardIncludesContextInspectorInterface(t *testing.T) {
@@ -77,4 +107,10 @@ func TestDashboardIncludesContextInspectorInterface(t *testing.T) {
 	require.True(t, strings.Contains(html, `data-tab="contexts"`))
 	require.Contains(t, html, "Selection decisions")
 	require.Contains(t, html, "compareSelectedContexts")
+	require.Contains(t, html, `data-tab="executions"`)
+	require.Contains(t, html, "Execution Inspector")
+	require.Contains(t, html, "compareSelectedExecutions")
+	require.Contains(t, html, "/api/v1/executions")
+	require.Contains(t, html, "goal_progress")
+	require.Contains(t, html, "host_commit_ref")
 }

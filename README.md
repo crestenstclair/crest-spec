@@ -147,6 +147,13 @@ end
 
 crest-spec runs as an **MCP server that is a pure spec state engine**. It plans, tracks resource state in SQLite, runs mechanical validations (compile / test / custom / integration) at commit time, and records history. It never calls an LLM, never spawns sub-agents, and never interprets a natural-language task.
 
+Project goals do not replace the DDD schemas. Goals and capabilities describe
+the user-visible outcome and its acceptance evidence; aggregates, entities,
+value objects, services, ports, adapters, and profiled assets remain the
+implementation architecture. Each DDD resource declares what capability it
+contributes to, and SQLite-backed context/execution manifests record how an
+agent attempted that resource without adding runtime metadata to the CUE spec.
+
 **Your agent host is the orchestrator.** Claude Code is the reference host (via the bundled `spec-generate` skill/workflow); OpenCode is supported via `crest-spec init`; any agentic CLI with an MCP client and native sub-agent dispatch can drive it — see [docs/AGENT_INTEGRATION.md](docs/AGENT_INTEGRATION.md) for the contract. The host spawns one sub-agent per resource per wave; each fetches its scoped prompt, writes code, and commits through the server's validation gate. The server is the quality gate; the host does the writing — and never grades its own work: mechanical validations gate the commit, independent falsification-gated behavioral checks gate the wave, and `spec/finish` refuses to seal a session while any check is unresolved.
 
 ## Proven on real projects
@@ -229,8 +236,8 @@ A plan/apply lifecycle: the **server** plans and checks; the **host** fills.
 
 1. **Declare** — Write your domain as CUE in the spec directory: contexts, aggregates, value objects, domain/application services, repositories, ports, adapters, and assets. Each is a *resource*.
 2. **Coordinate** (`spec/plan`, `spec/begin`) — The server diffs the CUE spec against SQLite state by declaration hash, computes a dependency graph, and returns an execution plan ordered into waves, plus any pending destroys for removed resources. Destroys never auto-execute — `spec/confirm_destroys` is human-gated.
-3. **Fill** (`spec/next` → `spec/context` → `spec/commit`) — For each resource in a wave, `spec/context` creates an immutable attempt and selects a budgeted, goal-directed prompt: target goals and acceptance, the task and resource contract, dependencies, consumers, relevant code, design constraints, and retry evidence. Included, truncated, and omitted sources—and the exact bytes served—are stored in SQLite before dispatch. The sub-agent authors the files and commits.
-4. **Check** — On `spec/commit` the server writes the files and runs the resource's declared validations, fail-closed (a validation that cannot launch is a failure). Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`, below). Any failure rejects/regenerates with the detail folded into the next `spec/context`, up to `CREST_SPEC_MAX_RETRIES`. Persistent failures are triaged with `spec/resolve`, or `spec/skip` when the spec itself is provably contradictory.
+3. **Fill** (`spec/next` → `spec/context` → `spec/execution_start` → `spec/commit`) — For each resource in a wave, `spec/context` creates an immutable attempt and selects a budgeted, goal-directed prompt: target goals and acceptance, the task and resource contract, dependencies, consumers, relevant code, design constraints, and retry evidence. Included, truncated, and omitted sources—and the exact bytes served—are stored in SQLite before dispatch. The host then registers its exact role, model, settings, tools, permissions, templates, and context hash before the sub-agent authors candidate files.
+4. **Check** — `spec/commit` accepts candidate files by immutable attempt ID, snapshots them in SQLite, writes them, and runs the resource's declared validations fail-closed (a validation that cannot launch is a failure). Acceptance or rejection, usage, goal progress, failures, and retry handoffs are recorded atomically. Independent verifier agents then prove behavior via falsification-gated checks (`spec/verify`, below).
 5. **Finish** (`spec/finish`) — Waves run until none remain. Finish refuses while behavioral checks are unresolved (`force` is an explicit human decision). Optionally a reflection pass distils cross-session learnings via `spec/record_learnings` — real examples from crest-ci include "schedule manifest assets before whole-tree gates" (auto-applied 32×) and "verify the file ledger before integration gates."
 
 Settled resources whose declaration hash is unchanged are skipped — regeneration is driven by spec changes, not wall-clock. Structural changes (types, contracts, invariants) cascade to dependents; guidance changes (prompts, descriptions) regenerate only the edited resource. Retries and modifications run in **UPDATE mode**: the existing files are served back with the failure, and the generator makes the minimal edit — a blank-slate rewrite happens only for brand-new resources. Generated files can be **co-owned** by multiple resources (a shared module survives when one of its owners is destroyed), and destroying a resource cascades its behavioral tasks and checks with it.
@@ -273,6 +280,8 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | `spec/plan` | Diff spec vs state → create/modify/destroy actions + waves |
 | `spec/inspect` | One resource's full declaration (interface, invariants, prompts) |
 | `spec/context_attempts`, `spec/context_inspect`, `spec/context_compare` | List, reconstruct, and structurally compare immutable generation contexts |
+| `spec/executions`, `spec/execution_inspect`, `spec/execution_roles` | Inspect execution provenance, lifecycle, candidate linkage, and closed role policies |
+| `spec/failures`, `spec/handoffs` | Inspect classified failures, corrective routes, resolutions, and role handoffs |
 | `spec/graph`, `spec/state`, `spec/status`, `spec/diff`, `spec/history`, `spec/log` | Read-only views of the graph/session/db |
 | `spec/sql` | Read-only SQL over the whole state db — the escape hatch |
 
@@ -294,7 +303,10 @@ Grouped by who calls what — "orchestrator" is the host's top-level loop; "sub-
 | Tool | Purpose |
 |------|---------|
 | `spec/context` | Create an immutable attempt and return budgeted goal/acceptance/task/contracts/code context plus selection decisions and rendered prompts |
-| `spec/commit` | Submit candidate files; the engine runs the declared validations and accepts or rejects |
+| `spec/execution_start` | Register the exact role, context hash, host/model/configuration/tools/templates before execution; required for commit |
+| `spec/commit` | Submit candidate files by `attempt_id`; the engine snapshots, validates, and atomically accepts or rejects |
+| `spec/execution_report` | Complete an advisory role or record cancellation, host failure, or timeout without a candidate |
+| `spec/failure_classify`, `spec/failure_resolve` | Append evidence-backed triage/human override records and explicit resolutions |
 | `spec/note` | Attach a note to the session/resource (surfaces in later context) |
 
 **Behavioral verification** (called by design/task/verifier sub-agents)
@@ -341,6 +353,7 @@ All configuration is via environment variables prefixed with `CREST_SPEC_`, set 
 | `CREST_SPEC_GENERATE_MODEL` | `claude-sonnet-5` | Model **label** recorded in state and mixed into effective hashes (the server never invokes it) — keep it stable per project; changing it re-plans everything |
 | `CREST_SPEC_MAX_RETRIES` | `3` | Per-resource retry budget for the commit/retry loop |
 | `CREST_SPEC_WAVE_MAX_RETRIES` | `2` | Max retries for wave-level verification |
+| `CREST_SPEC_EXECUTION_TIMEOUT` | `30m` | On server startup, mark older active host executions timed out with infrastructure-failure evidence |
 | `CREST_SPEC_TYPE_CHECK_CMD` | *(none)* | Custom type-check command (e.g. `cargo check`) |
 | `CREST_SPEC_TEST_CMD` | *(none)* | Custom test command (e.g. `go test ./...`) |
 | `CREST_SPEC_MODE` | `default` | Mode label folded into hashes (different modes regenerate) |

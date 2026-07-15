@@ -12,20 +12,16 @@ import (
 
 	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	promptpkg "github.com/crestenstclair/crest-spec/internal/prompt"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
-const defaultContextRole = "resource_implementer"
-
 // PrepareContext creates an immutable generation attempt and context manifest.
 // Selection, persistence, and the dispatched transition are one logical
 // operation: a blocked budget is recorded but never dispatches the resource.
 func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*ContextResult, error) {
-	if opts.Role == "" {
-		opts.Role = defaultContextRole
-	}
 	if opts.SessionID == "" || opts.ResourceID == "" {
 		return nil, fmt.Errorf("session_id and resource_id are required")
 	}
@@ -42,6 +38,22 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	if !ok {
 		return nil, fmt.Errorf("resource %s is not an operation in session %s", opts.ResourceID, opts.SessionID)
 	}
+	handoff, err := s.pendingContextHandoff(ctx, opts.SessionID, opts.ResourceID)
+	if err != nil {
+		return nil, err
+	}
+	if handoff != nil {
+		if opts.Role != "" && opts.Role != handoff.TargetRole {
+			return nil, fmt.Errorf("pending handoff requires role %s, got %s", handoff.TargetRole, opts.Role)
+		}
+		opts.Role = handoff.TargetRole
+	} else if opts.Role == "" {
+		opts.Role = action.RecommendedRole
+	}
+	rolePolicy, err := execution.LookupRole(opts.Role)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := s.store.GetSessionResource(opts.SessionID, opts.ResourceID); err != nil {
 		return nil, fmt.Errorf("resource %s is not dispatchable in session %s: %w", opts.ResourceID, opts.SessionID, err)
 	}
@@ -57,6 +69,12 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 
 	sessionResource, _ := s.store.GetSessionResource(opts.SessionID, opts.ResourceID)
 	runtimeContext, runtimeErr := s.buildRuntimeContext(resource, planResult.Registry, sess.ApplyID)
+	if rejectedCandidate, candidateErr := s.store.GetLatestRejectedCandidate(ctx, opts.SessionID, opts.ResourceID); candidateErr == nil {
+		runtimeContext.ExistingFiles = make(map[string]string, len(rejectedCandidate.Files))
+		for _, file := range rejectedCandidate.Files {
+			runtimeContext.ExistingFiles[file.Path] = file.Content
+		}
+	}
 	if sessionResource != nil && sessionResource.LastError != "" {
 		runtimeContext.WaveErrors = sessionResource.LastError
 	}
@@ -67,7 +85,11 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	systemPrompt := promptpkg.BuildSystemPrompt(planResult.Registry.Project)
 	resourcePrompt := promptpkg.BuildResourcePrompt(resource, planResult.Registry)
 	candidates := s.contextCandidates(ctx, action, resource, planResult.Registry, runtimeContext, runtimeErr, systemPrompt, resourcePrompt)
-	selection := contextmanifest.Select(candidates, contextmanifest.BudgetForRole(opts.Role, opts.BudgetTokens))
+	budgetTokens := opts.BudgetTokens
+	if budgetTokens == 0 {
+		budgetTokens = rolePolicy.DefaultBudgetTokens
+	}
+	selection := contextmanifest.Select(candidates, budgetTokens)
 	templateHashes := map[string]string{
 		promptpkg.SystemTemplateVersion:   contextmanifest.Hash(systemPrompt),
 		promptpkg.ResourceTemplateVersion: contextmanifest.Hash(resourcePrompt),
@@ -91,6 +113,7 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 			ID: uuid.NewString(), SessionID: opts.SessionID, ApplyID: sess.ApplyID,
 			ResourceID: opts.ResourceID, PlanOperationID: action.OperationID,
 			ParentAttemptID: opts.ParentAttemptID, Role: opts.Role,
+			RolePolicyVersion: rolePolicy.Version,
 		},
 		SelectorVersion: selection.SelectorVersion, EstimatorVersion: selection.EstimatorVersion,
 		SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: selection.BudgetTokens,
@@ -107,7 +130,13 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 			SelectedBytes: section.SelectedBytes, EstimatedTokens: section.EstimatedTokens, Content: section.Content,
 		})
 	}
-	persisted, err := s.store.CreateContextManifest(ctx, store.ContextManifestWrite{Manifest: manifest, Dispatch: !selection.Blocked})
+	handoffID := ""
+	if handoff != nil && !selection.Blocked {
+		handoffID = handoff.ID
+	}
+	persisted, err := s.store.CreateContextManifest(ctx, store.ContextManifestWrite{
+		Manifest: manifest, Dispatch: !selection.Blocked, HandoffID: handoffID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("persist context attempt: %w", err)
 	}
@@ -122,12 +151,37 @@ func (s *Spec) PrepareContext(ctx context.Context, opts ContextOptions) (*Contex
 	}
 	return &ContextResult{
 		AttemptID: persisted.Attempt.ID, ContextManifestID: persisted.ID, ContextHash: persisted.ContextHash,
+		Role: opts.Role, RecommendedRole: action.RecommendedRole, RolePolicyVersion: rolePolicy.Version,
+		ContextPolicy: rolePolicy.ContextPolicy, HandoffID: handoffID,
 		SelectorVersion: persisted.SelectorVersion, EstimatorVersion: persisted.EstimatorVersion,
 		TemplateHashes: persisted.TemplateHashes, BudgetTokens: persisted.BudgetTokens,
 		EstimatedTokens: persisted.EstimatedTokens, Blocked: persisted.Blocked, BlockedReason: persisted.BlockedReason,
 		Sections: selection.Sections, SystemPrompt: persisted.SystemPrompt, Prompt: persisted.RenderedPrompt,
 		Instructions: instructions, Invariants: invariants,
 	}, nil
+}
+
+func (s *Spec) pendingContextHandoff(ctx context.Context, sessionID, resourceID string) (*store.AttemptHandoff, error) {
+	attempts, err := s.store.ListGenerationAttemptsBySession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list generation attempts for handoff: %w", err)
+	}
+	for index := len(attempts) - 1; index >= 0; index-- {
+		attempt := attempts[index]
+		if attempt.ResourceID != resourceID {
+			continue
+		}
+		handoffs, listErr := s.store.ListAttemptHandoffsBySource(ctx, attempt.ID)
+		if listErr != nil {
+			return nil, fmt.Errorf("list role handoffs: %w", listErr)
+		}
+		for handoffIndex := len(handoffs) - 1; handoffIndex >= 0; handoffIndex-- {
+			if handoffs[handoffIndex].Status == "pending" {
+				return &handoffs[handoffIndex], nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func contextPlanAction(plan []planpkg.PlannedAction, resourceID string) (planpkg.PlannedAction, bool) {

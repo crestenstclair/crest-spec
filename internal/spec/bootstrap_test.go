@@ -88,6 +88,7 @@ func (fi fakeFileInfo) Sys() any           { return nil }
 // ---------------------------------------------------------------------------
 
 type stubStore struct {
+	specStore
 	listResourcesErr error
 }
 

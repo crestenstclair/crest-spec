@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	impactpkg "github.com/crestenstclair/crest-spec/internal/impact"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
@@ -83,7 +84,17 @@ type specHandler interface {
 	InspectContext(ctx context.Context, manifestID, attemptID string) (*storemod.ContextManifest, error)
 	ListContextAttempts(ctx context.Context, limit int) ([]storemod.ContextManifestSummary, error)
 	CompareContexts(ctx context.Context, leftManifestID, rightManifestID string) (*specmod.ContextManifestComparison, error)
-	Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error)
+	StartExecution(ctx context.Context, opts specmod.ExecutionStartOptions) (*storemod.ExecutionManifest, error)
+	ReportExecution(ctx context.Context, opts specmod.ExecutionReportOptions) (*storemod.ExecutionManifest, error)
+	ExecutionRoles() []executionpkg.RolePolicy
+	InspectExecution(ctx context.Context, id, attemptID string) (*storemod.ExecutionManifest, error)
+	ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error)
+	RecoverExecutions(ctx context.Context, before time.Time) (int, error)
+	ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error)
+	ClassifyFailure(ctx context.Context, opts specmod.FailureClassifyOptions) (*storemod.FailureClassification, error)
+	ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error
+	ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error)
+	CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string, metadata specmod.CommitMetadata) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
 	Note(ctx context.Context, sessionID, resourceID, content string) error
@@ -169,6 +180,16 @@ func New(
 
 // Run starts the stdio transport. It blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
+	if s.spec != nil && s.cfg != nil && s.cfg.ExecutionTimeout > 0 {
+		before := time.Now().UTC().Add(-s.cfg.ExecutionTimeout)
+		recovered, err := s.spec.RecoverExecutions(ctx, before)
+		if err != nil {
+			return fmt.Errorf("recover abandoned executions: %w", err)
+		}
+		if recovered > 0 {
+			s.log.Info().Int("count", recovered).Msg("recovered abandoned executions")
+		}
+	}
 	scanner := bufio.NewScanner(s.stdin)
 	scanner.Buffer(make([]byte, 0, 10<<20), 10<<20)
 

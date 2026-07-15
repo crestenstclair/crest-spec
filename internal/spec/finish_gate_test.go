@@ -48,7 +48,7 @@ func TestFinishBlocksOnUnresolvedChecks(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 	ctx := context.Background()
 
-	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
@@ -78,7 +78,7 @@ func TestFinishForceOverridesGate(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 	ctx := context.Background()
 
-	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
@@ -93,7 +93,7 @@ func TestFinishProceedsWhenChecksResolved(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 	ctx := context.Background()
 
-	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
@@ -111,7 +111,7 @@ func TestDestroyRemovesBehavioralState(t *testing.T) {
 	s, st := newTestSpecWithSession(t)
 	ctx := context.Background()
 
-	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: t.TempDir() + "/a.go", Content: "package out\n"}}, "", "claude-sonnet-5")
 	require.NoError(t, err)
 	seedChecks(t, s, st.resourceID, []string{"passed"})

@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,13 +83,15 @@ project: contexts: Audio: valueObjects: Tone: {
 
 	outDir := t.TempDir()
 	attempt := "package out\n\nfunc Tone() float64 { return 44O.0 } // typo: letter O\n"
-	res, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	res, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: outDir + "/tone.go", Content: attempt}}, "", "claude-sonnet-5")
 	require.NoError(t, err)
 	require.False(t, res.Committed, "the validation must reject this commit")
 
 	ctxRes, err := s.Context(ctx, st.sessionID, st.resourceID)
 	require.NoError(t, err)
+	require.Equal(t, "minimal_diff_repair", ctxRes.Role)
+	require.NotEmpty(t, ctxRes.HandoffID)
 
 	require.Contains(t, ctxRes.Prompt, "UPDATE MODE",
 		"a retry after rejection must run in UPDATE mode — iterate on the attempt, not regenerate")
@@ -107,7 +110,7 @@ func TestNoFileCommitPreservesFileTracking(t *testing.T) {
 	ctx := context.Background()
 
 	path := t.TempDir() + "/tone.go"
-	_, err := s.Commit(ctx, st.sessionID, st.resourceID,
+	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: path, Content: "package out\n"}}, "", "claude-sonnet-5")
 	require.NoError(t, err)
 
@@ -117,13 +120,15 @@ func TestNoFileCommitPreservesFileTracking(t *testing.T) {
 
 	// Re-settle with no files (the adopt path).
 	require.NoError(t, s.Resolve(ctx, st.sessionID, st.resourceID, "re-settle", ""))
-	_, err = s.Commit(ctx, st.sessionID, st.resourceID, nil, "adopted", "claude-sonnet-5")
+	_, err = commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID, nil, "adopted", "claude-sonnet-5")
 	require.NoError(t, err)
 
 	files, err = s.store.GetGeneratedFiles(st.resourceID)
 	require.NoError(t, err)
 	require.Len(t, files, 1, "a no-file commit must not sever the resource from its files")
-	require.Equal(t, path, files[0].Path)
+	relativePath, err := filepath.Rel(filepath.Dir(s.cfg.SpecDir), path)
+	require.NoError(t, err)
+	require.Equal(t, filepath.ToSlash(relativePath), files[0].Path)
 }
 
 func TestContextWithoutFailureHasNoErrorSection(t *testing.T) {

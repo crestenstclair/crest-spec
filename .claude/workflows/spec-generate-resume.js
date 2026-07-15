@@ -117,34 +117,56 @@ function generatorPrompt(resourceId, waveIndex) {
   return `You are a crest-spec generation sub-agent for resource "${resourceId}" (session ${sessionId}, wave ${waveIndex}).
 
 Load the crest-spec MCP tools first:
-ToolSearch "select:mcp__crest-spec__spec_context,mcp__crest-spec__spec_commit"
+ToolSearch "select:mcp__crest-spec__spec_context,mcp__crest-spec__spec_execution_start,mcp__crest-spec__spec_commit"
 
 Then run this loop (at most ${maxRetries + 1} attempts):
 1. Call spec_context with {session_id: "${sessionId}", resource_id: "${resourceId}"}.
-   It returns SystemPrompt, Prompt, and Invariants (each invariant is
+   It returns AttemptID, ContextHash, Role, RolePolicyVersion, ContextPolicy,
+   TemplateHashes, SystemPrompt, Prompt, and Invariants (each invariant is
    {text, rationale}). Treat SystemPrompt as your role and follow Prompt
    exactly — it contains the mission, the resource declaration, dependencies,
    the bounded context's design contract, existing files (UPDATE mode), and —
    on retries — the sections "## Previous Errors" and "## Guidance".
-2. On a retry the context serves your PREVIOUS ATTEMPT'S files in UPDATE
+2. BEFORE generating, call spec_execution_start exactly once with:
+   {
+     attempt_id: Context.AttemptID,
+     protocol_version: "crest-execution-v1",
+     idempotency_key: "claude-code:" + Context.AttemptID,
+     context_hash: Context.ContextHash,
+     role: Context.Role,
+     host_name: "claude-code",
+     host_version: "workflow-resume-v1",
+     provider: "anthropic",
+     model: "${model}",
+     inference_config: {model_alias: "${model}"},
+     agent_config: {role: Context.Role, role_policy_version: Context.RolePolicyVersion,
+                    context_policy: Context.ContextPolicy, workflow: "spec-generate-resume"},
+     tools: [{name: "crest-spec-mcp", permission: "context,execution_start,commit"}],
+     template_hashes: Context.TemplateHashes,
+     system_instructions: Context.SystemPrompt,
+     host_session_id: "${sessionId}"
+   }.
+   Do not generate or commit if registration fails. Work as Context.Role; a
+   retry may hand the resource to minimal_diff_repair or another specialist.
+3. On a retry the context serves your PREVIOUS ATTEMPT'S files in UPDATE
    mode alongside "## Previous Errors". ITERATE: keep the working code and
    make the minimal edit that fixes that specific failure — never rewrite
    the resource from scratch over a minor bug.
-3. Author the files the prompt asks for (full file contents, correct paths
+4. Author the files the prompt asks for (full file contents, correct paths
    relative to the project root). Honor every invariant as a hard constraint —
    verification is independent (behavioral checks), so a violation WILL be
    caught after commit and cost a full regeneration. Follow the prompt's
    folder structure and style rules. Do NOT create files the prompt doesn't
    call for. Don't sweat formatting — the wave gate normalizes it
    automatically; your job is the design, not the whitespace.
-4. Call spec_commit with {session_id, resource_id, files: [{path, content}],
-   model: "${model}", notes: <one-line design note>}. Commit through
+5. Call spec_commit with {attempt_id: Context.AttemptID,
+   files: [{path, content}], notes: <one-line design note>}. Commit through
    spec_commit rather than writing into the project tree with your own file
    tools — that keeps the loop's state and feedback coherent.
-5. If the result has Committed=true → stop, report outcome "committed".
+6. If the result has Committed=true → stop, report outcome "committed".
    If Committed=false → read result.Validations for the failure, go back to
    step 1 (the new context carries the failure) and fix the actual problem.
-6. If still rejected after ${maxRetries + 1} attempts, report outcome
+7. If still rejected after ${maxRetries + 1} attempts, report outcome
    "rejected" with the final error message. Do not call spec_skip yourself.
 
 Your final message is parsed as data: report resource_id, outcome, attempts,

@@ -158,7 +158,7 @@ func testContextManifest(attemptID, manifestID, resourceID string) ContextManife
 		ID: manifestID,
 		Attempt: GenerationAttempt{
 			ID: attemptID, SessionID: "session-1", ApplyID: "apply-1", ResourceID: resourceID,
-			PlanOperationID: "operation-1", Role: "resource_implementer",
+			PlanOperationID: "operation-1", Role: "resource_implementer", RolePolicyVersion: "role-policy-v1",
 		},
 		SelectorVersion: contextmanifest.SelectorVersion, EstimatorVersion: contextmanifest.EstimatorVersion,
 		SelectionStrategy: "goal-directed-priority", BudgetTokens: 4096,

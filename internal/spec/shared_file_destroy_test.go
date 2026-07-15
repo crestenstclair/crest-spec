@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
@@ -36,13 +37,13 @@ func TestDestroySparesFilesWithOtherOwners(t *testing.T) {
 	own := dir + "/plugin_only.rs"
 
 	// resource A commits the shared file first...
-	_, err = s.Commit(ctx, st.sessionID, resA,
+	_, err = commitTestAttempt(t, s, ctx, st.sessionID, resA,
 		[]CommitFile{{Path: shared, Content: "pub mod a;\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
 
 	// ...then resource B commits BOTH the shared file (becoming its latest
 	// committer) and its own private file.
-	_, err = s.Commit(ctx, st.sessionID, resB,
+	_, err = commitTestAttempt(t, s, ctx, st.sessionID, resB,
 		[]CommitFile{{Path: shared, Content: "pub mod a;\npub mod b;\n"}, {Path: own, Content: "pub struct B;\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
 	otherID := resB
@@ -63,5 +64,7 @@ func TestDestroySparesFilesWithOtherOwners(t *testing.T) {
 	for _, f := range files {
 		paths[f.Path] = true
 	}
-	require.True(t, paths[shared], "surviving owner keeps its row for the shared file")
+	relativeShared, err := filepath.Rel(filepath.Dir(s.cfg.SpecDir), shared)
+	require.NoError(t, err)
+	require.True(t, paths[filepath.ToSlash(relativeShared)], "surviving owner keeps its row for the shared file")
 }

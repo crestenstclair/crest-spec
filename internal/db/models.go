@@ -92,6 +92,49 @@ type ApplyAction struct {
 	DoneAt     *string
 }
 
+type AttemptHandoff struct {
+	ID              string
+	SourceAttemptID string
+	TargetAttemptID *string
+	SourceRole      string
+	TargetRole      string
+	Reason          string
+	ExpectedOutcome string
+	FailureID       *string
+	Status          string
+	CreatedAt       string
+	AcceptedAt      *string
+}
+
+type CandidateFile struct {
+	ID          string
+	CandidateID string
+	Path        string
+	ContentBlob string
+	ContentHash string
+	ByteSize    int64
+	WriteIntent string
+	Ordinal     int64
+}
+
+type CandidateFileAcceptance struct {
+	CandidateFileID string
+	ResourceID      string
+	Path            string
+	AcceptedAt      string
+}
+
+type CandidateSet struct {
+	ID                string
+	ExecutionID       string
+	AttemptID         string
+	CandidateHash     string
+	Status            string
+	DispositionReason string
+	CreatedAt         string
+	DisposedAt        *string
+}
+
 type CapabilityGoal struct {
 	CapabilityID string
 	GoalID       string
@@ -192,6 +235,100 @@ type EvidenceRequirement struct {
 	UpdatedAt   string
 }
 
+type ExecutionCapability struct {
+	ExecutionID  string
+	CapabilityID string
+}
+
+type ExecutionEvent struct {
+	ID          string
+	ExecutionID string
+	FromStatus  string
+	ToStatus    string
+	EventKind   string
+	DetailsJson string
+	DetailsHash string
+	CreatedAt   string
+}
+
+type ExecutionGoal struct {
+	ExecutionID string
+	GoalID      string
+}
+
+type ExecutionManifest struct {
+	ID                     string
+	AttemptID              string
+	ContextManifestID      string
+	ProtocolVersion        string
+	IdempotencyKey         string
+	PlanOperationID        string
+	Role                   string
+	RolePolicyVersion      string
+	ContextPolicy          string
+	HostName               string
+	HostVersion            string
+	Provider               string
+	Model                  string
+	InferenceConfigJson    string
+	InferenceConfigHash    string
+	AgentConfigJson        string
+	AgentConfigHash        string
+	ToolPermissionsJson    string
+	ToolPermissionsHash    string
+	TemplateHashesJson     string
+	TemplateHashesHash     string
+	SystemInstructionsBlob string
+	ContextHash            string
+	HostSessionID          string
+	Status                 string
+	DispositionReason      string
+	StartedAt              string
+	CompletedAt            *string
+	DurationMs             int64
+	InputTokens            int64
+	OutputTokens           int64
+	CostUsd                float64
+	CreatedAt              string
+	UpdatedAt              string
+	HostCommitRef          string
+	GoalProgressJson       string
+	GoalProgressHash       string
+}
+
+type ExecutionTool struct {
+	ExecutionID string
+	Name        string
+	Permission  string
+	Ordinal     int64
+}
+
+type FailureClassification struct {
+	ID                string
+	AttemptID         string
+	ExecutionID       *string
+	ResourceID        string
+	Category          string
+	Origin            string
+	Confidence        float64
+	EvidenceSource    string
+	EvidenceReference string
+	EvidenceBlob      *string
+	CorrectiveAction  string
+	NextRole          string
+	BlocksRetry       int64
+	OverrideOf        *string
+	Resolution        string
+	ResolvedByAttempt *string
+	CreatedAt         string
+	ResolvedAt        *string
+}
+
+type FailureGoal struct {
+	FailureID string
+	GoalID    string
+}
+
 type GeneratedFile struct {
 	Path        string
 	ResourceID  string
@@ -217,19 +354,21 @@ type Generation struct {
 	OutputTokens    *int64
 	CostUsd         *float64
 	CreatedAt       string
+	ExecutionID     *string
 }
 
 type GenerationAttempt struct {
-	ID              string
-	SessionID       string
-	ApplyID         string
-	ResourceID      string
-	PlanOperationID string
-	ParentAttemptID *string
-	RetryNumber     int64
-	Role            string
-	Status          string
-	CreatedAt       string
+	ID                string
+	SessionID         string
+	ApplyID           string
+	ResourceID        string
+	PlanOperationID   string
+	ParentAttemptID   *string
+	RetryNumber       int64
+	Role              string
+	Status            string
+	CreatedAt         string
+	RolePolicyVersion string
 }
 
 type GoalActor struct {

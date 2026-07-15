@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	executionpkg "github.com/crestenstclair/crest-spec/internal/execution"
 	impactpkg "github.com/crestenstclair/crest-spec/internal/impact"
 	specmod "github.com/crestenstclair/crest-spec/internal/spec"
 	storemod "github.com/crestenstclair/crest-spec/internal/store"
@@ -29,12 +30,14 @@ import (
 // tools. Methods return zero values unless a test needs otherwise; the Commit
 // method captures its arguments so tests can assert forwarding.
 type fakeSpec struct {
-	lastFiles         []specmod.CommitFile
-	lastNotes         string
-	lastModel         string
-	lastVerifySession string
-	lastVerifyWave    int
-	lastContext       specmod.ContextOptions
+	lastFiles          []specmod.CommitFile
+	lastNotes          string
+	lastModel          string
+	lastAttempt        string
+	lastExecutionStart specmod.ExecutionStartOptions
+	lastVerifySession  string
+	lastVerifyWave     int
+	lastContext        specmod.ContextOptions
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -64,6 +67,41 @@ func (f *fakeSpec) ListContextAttempts(ctx context.Context, limit int) ([]storem
 }
 func (f *fakeSpec) CompareContexts(ctx context.Context, leftManifestID, rightManifestID string) (*specmod.ContextManifestComparison, error) {
 	return &specmod.ContextManifestComparison{LeftManifestID: leftManifestID, RightManifestID: rightManifestID}, nil
+}
+func (f *fakeSpec) StartExecution(ctx context.Context, opts specmod.ExecutionStartOptions) (*storemod.ExecutionManifest, error) {
+	f.lastExecutionStart = opts
+	return &storemod.ExecutionManifest{ID: "execution-test", AttemptID: opts.AttemptID}, nil
+}
+func (f *fakeSpec) ReportExecution(ctx context.Context, opts specmod.ExecutionReportOptions) (*storemod.ExecutionManifest, error) {
+	return &storemod.ExecutionManifest{AttemptID: opts.AttemptID, Status: opts.Status}, nil
+}
+func (f *fakeSpec) ExecutionRoles() []executionpkg.RolePolicy { return executionpkg.Roles() }
+func (f *fakeSpec) InspectExecution(ctx context.Context, id, attemptID string) (*storemod.ExecutionManifest, error) {
+	return &storemod.ExecutionManifest{ID: id, AttemptID: attemptID}, nil
+}
+func (f *fakeSpec) ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error) {
+	return nil, nil
+}
+func (f *fakeSpec) RecoverExecutions(ctx context.Context, before time.Time) (int, error) {
+	return 0, nil
+}
+func (f *fakeSpec) ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error) {
+	return nil, nil
+}
+func (f *fakeSpec) ClassifyFailure(ctx context.Context, opts specmod.FailureClassifyOptions) (*storemod.FailureClassification, error) {
+	return &storemod.FailureClassification{AttemptID: opts.AttemptID, Category: opts.Category, Origin: opts.Origin}, nil
+}
+func (f *fakeSpec) ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error {
+	return nil
+}
+func (f *fakeSpec) ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error) {
+	return nil, nil
+}
+func (f *fakeSpec) CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string, metadata specmod.CommitMetadata) (*specmod.CommitResult, error) {
+	f.lastAttempt = attemptID
+	f.lastFiles = files
+	f.lastNotes = notes
+	return &specmod.CommitResult{AttemptID: attemptID}, nil
 }
 func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error) {
 	f.lastFiles = files
@@ -228,6 +266,13 @@ func TestInitialize(t *testing.T) {
 	assert.Contains(t, caps, "tools")
 	assert.Contains(t, caps, "resources")
 	assert.Contains(t, caps, "prompts")
+	experimental, ok := caps["experimental"].(map[string]any)
+	require.True(t, ok)
+	protocol, ok := experimental["crestExecution"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, executionpkg.ProtocolVersion, protocol["protocolVersion"])
+	assert.Equal(t, executionpkg.RolePolicyVersion, protocol["rolePolicyVersion"])
+	assert.Equal(t, false, protocol["legacyCommit"])
 }
 
 func toolNameSet(t *testing.T, srv *Server) map[string]bool {
@@ -269,6 +314,14 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/context_attempts"])
 	assert.True(t, names["spec/context_inspect"])
 	assert.True(t, names["spec/context_compare"])
+	assert.True(t, names["spec/execution_start"])
+	assert.True(t, names["spec/execution_report"])
+	assert.True(t, names["spec/execution_roles"])
+	assert.True(t, names["spec/execution_inspect"])
+	assert.True(t, names["spec/failures"])
+	assert.True(t, names["spec/failure_classify"])
+	assert.True(t, names["spec/failure_resolve"])
+	assert.True(t, names["spec/handoffs"])
 
 	// Spot-check kept spec tools.
 	for _, kept := range []string{
@@ -286,11 +339,33 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 func TestCommitToolForwardsArgs(t *testing.T) {
 	fake := &fakeSpec{}
 	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
-	args := json.RawMessage(`{"session_id":"s","resource_id":"r","files":[{"path":"a.go","content":"x"}],"model":"claude-sonnet-4-6"}`)
+	args := json.RawMessage(`{"attempt_id":"attempt-1","files":[{"path":"a.go","content":"x"}],"notes":"kept small"}`)
 	srv.toolFns["spec/commit"](context.Background(), args)
-	assert.Equal(t, "claude-sonnet-4-6", fake.lastModel)
+	assert.Equal(t, "attempt-1", fake.lastAttempt)
+	assert.Equal(t, "kept small", fake.lastNotes)
 	require.Len(t, fake.lastFiles, 1)
 	assert.Equal(t, "a.go", fake.lastFiles[0].Path)
+}
+
+func TestExecutionStartToolForwardsGovernedInputs(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"attempt_id":"attempt-1","protocol_version":"crest-execution-v1","idempotency_key":"request-1","context_hash":"context-hash","role":"resource_implementer","host_name":"claude-code","model":"claude-sonnet","template_hashes":{"system":"template-hash"},"tools":[{"name":"filesystem","permission":"project"}]}`)
+	result := srv.toolFns["spec/execution_start"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Equal(t, "attempt-1", fake.lastExecutionStart.AttemptID)
+	require.Equal(t, "crest-execution-v1", fake.lastExecutionStart.ProtocolVersion)
+	require.Equal(t, "resource_implementer", fake.lastExecutionStart.Role)
+	require.Equal(t, "filesystem", fake.lastExecutionStart.Tools[0].Name)
+}
+
+func TestFailureClassifyToolReturnsAppendOnlyClassification(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"attempt_id":"attempt-1","category":"missing_context","origin":"host","confidence":0.8,"evidence_source":"triage"}`)
+	result := srv.toolFns["spec/failure_classify"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Contains(t, result.Content[0].Text, `"Category":"missing_context"`)
 }
 
 func TestContextToolCreatesAttemptWithSelectionOptions(t *testing.T) {

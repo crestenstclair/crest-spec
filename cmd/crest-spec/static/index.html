@@ -221,9 +221,25 @@ tr.clickable:hover td { background: rgba(88, 166, 255, 0.08); }
       <div class="tab active" data-tab="session">Session</div>
       <div class="tab" data-tab="generations">Generations</div>
       <div class="tab" data-tab="contexts">Contexts</div>
+      <div class="tab" data-tab="executions">Executions</div>
       <div class="tab" data-tab="resources">Resources</div>
       <div class="tab" data-tab="invariants">Invariants</div>
       <div class="tab" data-tab="learnings">Learnings</div>
+    </div>
+
+    <!-- Tab: Execution Inspector -->
+    <div class="tab-content" id="tab-executions">
+      <div class="card" style="overflow-x:auto">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+          <strong style="font-size:13px">Compare executions</strong>
+          <select id="execution-compare-left" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:5px"></select>
+          <span style="color:var(--text-muted)">→</span>
+          <select id="execution-compare-right" style="background:var(--bg);color:var(--text);border:1px solid var(--border);padding:5px"></select>
+          <button onclick="compareSelectedExecutions()" style="background:var(--accent);color:var(--bg);border:0;border-radius:4px;padding:6px 10px;cursor:pointer">Compare</button>
+        </div>
+        <div id="execution-comparison"></div>
+        <div id="executions-table" class="empty">Loading...</div>
+      </div>
     </div>
 
     <!-- Tab: Session (Wave Progress) -->
@@ -292,6 +308,7 @@ let cachedStatus = null;
 let cachedSessionResources = null;
 let cachedProject = null;
 let cachedContexts = [];
+let cachedExecutions = [];
 
 // ─── Tab navigation ────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -313,10 +330,11 @@ function badge(text, color) {
 function statusBadge(status) {
   const map = {
     'running': 'yellow', 'active': 'yellow', 'pending': 'muted',
-    'completed': 'green', 'committed': 'green', 'passed': 'green',
+    'completed': 'green', 'committed': 'green', 'passed': 'green', 'accepted': 'green',
     'failed': 'red', 'errored': 'red', 'rejected': 'red',
     'cancelled': 'orange', 'skipped': 'orange', 'timed_out': 'orange',
-    'blocked': 'purple', 'dispatched': 'blue',
+    'blocked': 'purple', 'dispatched': 'blue', 'executing': 'blue',
+    'candidate_submitted': 'yellow', 'validating': 'yellow',
     'create': 'green', 'modify': 'yellow', 'destroy': 'red', 'drift': 'orange',
   };
   return badge(status || '--', map[status] || 'muted');
@@ -613,6 +631,7 @@ async function loadTabData(tab) {
     case 'session': await loadSessionTab(); break;
     case 'generations': await loadGenerationsTab(); break;
     case 'contexts': await loadContextsTab(); break;
+    case 'executions': await loadExecutionsTab(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'learnings': await loadLearningsTab(); break;
@@ -1126,6 +1145,150 @@ async function compareSelectedContexts() {
   }
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ─── Tab: Execution Inspector ─────────────────────────────────────
+async function loadExecutionsTab() {
+  const el = document.getElementById('executions-table');
+  const executions = await fetchJSON('/api/v1/executions?limit=100');
+  if (!executions) {
+    el.innerHTML = '<div class="error-msg">Error loading execution manifests</div>';
+    return;
+  }
+  cachedExecutions = executions;
+  populateExecutionCompare(executions);
+  if (executions.length === 0) {
+    el.innerHTML = '<div class="empty">No execution manifests yet. A host must call spec/execution_start after spec/context.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Resource</th><th>Retry</th><th>Role</th><th>Host / Model</th><th>Status</th><th>Duration</th><th>Execution</th><th>Time</th></tr></thead><tbody>';
+  executions.forEach((manifest, index) => {
+    const id = manifest.ID || manifest.id || '';
+    const resource = manifest.ResourceID || manifest.resource_id || '';
+    const retry = manifest.RetryNumber || manifest.retry_number || 1;
+    const role = manifest.Role || manifest.role || '';
+    const host = manifest.HostName || manifest.host_name || '';
+    const model = manifest.Model || manifest.model || '';
+    const status = manifest.Status || manifest.status || '';
+    const duration = manifest.DurationMS || manifest.duration_ms || 0;
+    const created = manifest.CreatedAt || manifest.created_at || '';
+    html += '<tr class="clickable" onclick="toggleExecutionDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+      '<td class="resource-id">' + esc(resource) + '</td>' +
+      '<td class="mono">#' + retry + '</td>' +
+      '<td>' + esc(role) + '</td>' +
+      '<td><strong>' + esc(host) + '</strong><br><span style="font-size:11px;color:var(--text-muted)">' + esc(model) + '</span></td>' +
+      '<td>' + statusBadge(status) + '</td>' +
+      '<td class="mono">' + formatDuration(duration) + '</td>' +
+      '<td class="mono" title="' + esc(id) + '">' + esc(shortID(id)) + '</td>' +
+      '<td style="color:var(--text-muted);font-size:12px">' + timeAgo(created) + '</td>' +
+    '</tr><tr id="execution-drilldown-' + index + '" style="display:none"><td colspan="8"></td></tr>';
+  });
+  el.innerHTML = html + '</tbody></table>';
+}
+
+function populateExecutionCompare(executions) {
+  const left = document.getElementById('execution-compare-left');
+  const right = document.getElementById('execution-compare-right');
+  const options = executions.map(manifest => {
+    const id = manifest.ID || manifest.id || '';
+    const label = (manifest.ResourceID || manifest.resource_id || '') + ' #' +
+      (manifest.RetryNumber || manifest.retry_number || 1) + ' · ' +
+      (manifest.HostName || manifest.host_name || '') + '/' + (manifest.Model || manifest.model || '');
+    return '<option value="' + esc(id) + '">' + esc(label) + '</option>';
+  }).join('');
+  left.innerHTML = options;
+  right.innerHTML = options;
+  if (executions.length > 1) { left.selectedIndex = 1; right.selectedIndex = 0; }
+}
+
+async function toggleExecutionDrilldown(executionID, index) {
+  const row = document.getElementById('execution-drilldown-' + index);
+  if (!row) return;
+  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  row.style.display = '';
+  const td = row.querySelector('td');
+  td.innerHTML = '<div class="drilldown"><div class="empty">Loading execution chain...</div></div>';
+  const trace = await fetchJSON('/api/v1/executions/' + encodeURIComponent(executionID));
+  if (!trace) {
+    td.innerHTML = '<div class="drilldown"><div class="error-msg">Could not load execution trace</div></div>';
+    return;
+  }
+  const manifest = trace.execution || trace.Execution || {};
+  const context = trace.context || trace.Context || {};
+  const candidate = trace.candidate || trace.Candidate;
+  const failures = trace.failures || trace.Failures || [];
+  const handoffs = trace.handoffs || trace.Handoffs || [];
+  const generation = trace.generation || trace.Generation;
+  const tools = manifest.Tools || manifest.tools || [];
+  const events = manifest.Events || manifest.events || [];
+  const contextID = manifest.ContextManifestID || manifest.context_manifest_id || '';
+  const attemptID = manifest.AttemptID || manifest.attempt_id || '';
+  let html = '<div class="drilldown">' +
+    '<div class="stat-row" style="margin-bottom:14px">' +
+      '<div><div class="stat-label">Attempt</div><div class="mono">' + esc(attemptID) + '</div></div>' +
+      '<div><div class="stat-label">Context</div><div class="mono">' + esc(contextID) + '</div></div>' +
+      '<div><div class="stat-label">Protocol / policy</div><div class="mono">' + esc((manifest.ProtocolVersion || '') + ' · ' + (manifest.RolePolicyVersion || '')) + '</div></div>' +
+    '</div>' +
+    '<h3>Host configuration</h3><pre>' + esc(JSON.stringify({
+      host: manifest.HostName, host_version: manifest.HostVersion, provider: manifest.Provider,
+      model: manifest.Model, host_session_id: manifest.HostSessionID,
+      inference: manifest.InferenceConfig, agent: manifest.AgentConfig,
+      template_hashes: manifest.TemplateHashes, context_hash: manifest.ContextHash,
+      goals: manifest.GoalIDs, capabilities: manifest.CapabilityIDs,
+      goal_progress: manifest.GoalProgress, host_commit_ref: manifest.HostCommitRef
+    }, null, 2)) + '</pre>' +
+    '<h3 style="margin-top:12px">Tools and permissions</h3><pre>' + esc(JSON.stringify(tools, null, 2)) + '</pre>' +
+    '<h3 style="margin-top:12px">System instructions snapshot</h3><pre>' + esc(manifest.SystemInstructions || '') + '</pre>';
+  if (candidate) {
+    const files = candidate.Files || candidate.files || [];
+    html += '<h3 style="margin-top:12px">Candidate · ' + esc(candidate.Status || candidate.status || '') + '</h3>' +
+      '<div class="mono" style="font-size:11px;color:var(--text-muted)">' + esc(candidate.CandidateHash || candidate.candidate_hash || '') + '</div>' +
+      '<table><thead><tr><th>Path</th><th>Intent</th><th>Bytes</th><th>Hash</th></tr></thead><tbody>' +
+      files.map(file => '<tr><td class="resource-id">' + esc(file.Path || file.path || '') + '</td><td>' +
+        esc(file.WriteIntent || file.write_intent || '') + '</td><td class="mono">' + (file.ByteSize || file.byte_size || 0) +
+        '</td><td class="mono">' + esc(shortID(file.ContentHash || file.content_hash || '')) + '</td></tr>').join('') +
+      '</tbody></table>';
+  }
+  if (failures.length) {
+    html += '<h3 style="margin-top:12px">Failure classification</h3>' + failures.map(failure =>
+      '<div class="error-msg"><strong>' + esc(failure.Category || failure.category || '') + '</strong> · ' +
+      esc(failure.CorrectiveAction || failure.corrective_action || '') +
+      ((failure.NextRole || failure.next_role) ? ' → ' + esc(failure.NextRole || failure.next_role) : '') +
+      '<pre>' + esc(failure.Evidence || failure.evidence || '') + '</pre></div>').join('');
+  }
+  if (handoffs.length) {
+    html += '<h3 style="margin-top:12px">Role handoffs</h3><pre>' + esc(JSON.stringify(handoffs, null, 2)) + '</pre>';
+  }
+  html += '<h3 style="margin-top:12px">State events</h3><pre>' + esc(JSON.stringify(events, null, 2)) + '</pre>';
+  if (generation) {
+    html += '<h3 style="margin-top:12px">Legacy generation projection</h3><pre>' + esc(JSON.stringify(generation, null, 2)) + '</pre>';
+  }
+  html += '<div style="margin-top:12px;font-size:11px;color:var(--text-muted)">Chain: goals ' +
+    esc((manifest.GoalIDs || []).join(', ') || '—') + ' → plan operation ' + esc(manifest.PlanOperationID || '') +
+    ' → resource ' + esc(manifest.ResourceID || '') + ' → attempt ' +
+    esc(attemptID) + ' → context ' + esc(contextID) + ' → execution ' + esc(executionID) +
+    (candidate ? ' → candidate ' + esc(candidate.ID || candidate.id || '') : '') + '</div></div>';
+  td.innerHTML = html;
+}
+
+async function compareSelectedExecutions() {
+  const left = document.getElementById('execution-compare-left').value;
+  const right = document.getElementById('execution-compare-right').value;
+  const el = document.getElementById('execution-comparison');
+  if (!left || !right || left === right) {
+    el.innerHTML = '<div class="error-msg">Select two different executions.</div>';
+    return;
+  }
+  const comparison = await fetchJSON('/api/v1/execution-comparison?left=' + encodeURIComponent(left) + '&right=' + encodeURIComponent(right));
+  if (!comparison) {
+    el.innerHTML = '<div class="error-msg">Could not compare executions</div>';
+    return;
+  }
+  const changes = comparison.changes || comparison.Changes || {};
+  const changed = Object.keys(changes).filter(key => changes[key]);
+  el.innerHTML = '<div class="drilldown" style="margin:0 0 16px 0"><h3>Execution comparison</h3>' +
+    (changed.length ? changed.map(key => badge(key + ' changed', 'yellow')).join(' ') : badge('governed inputs and outcome match', 'green')) +
+    '</div>';
 }
 
 // ─── Tab: Resources ────────────────────────────────────────────────

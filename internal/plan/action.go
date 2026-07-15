@@ -16,6 +16,7 @@ type PlannedAction struct {
 	Files                []string
 	OperationID          string            `json:"operation_id"`
 	Category             string            `json:"category"`
+	RecommendedRole      string            `json:"recommended_role"`
 	Capabilities         []string          `json:"capabilities,omitempty"`
 	Goals                []string          `json:"goals,omitempty"`
 	Contributions        map[string]string `json:"contributions,omitempty"`

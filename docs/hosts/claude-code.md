@@ -68,7 +68,8 @@ Reference HTTP-transport drivers live outside this repository in crest-synth und
 ## Adapter invariants
 
 - Claude Code workflows spawn the sub-agents; crest-spec never does.
-- Sub-agents call `spec/context` and `spec/commit` directly.
+- Sub-agents call `spec/context`, register the exact host attempt through
+  `spec/execution_start`, and call `spec/commit` by attempt ID directly.
 - Retries must use UPDATE-mode context.
 - Verification must be recorded through `spec/verify` and reconciled against engine state.
 - `spec/skip` and `spec/finish force` are human-level decisions.
