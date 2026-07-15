@@ -1214,6 +1214,18 @@ func (s *Store) ListFailureClassifications(ctx context.Context, limit int) ([]Fa
 	return s.hydrateFailures(ctx, rows)
 }
 
+func (s *Store) GetFailureClassification(ctx context.Context, id string) (*FailureClassification, error) {
+	row, err := s.queries.GetFailureClassification(ctx, id)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	rows, err := s.hydrateFailures(ctx, []db.FailureClassification{row})
+	if err != nil {
+		return nil, err
+	}
+	return &rows[0], nil
+}
+
 func (s *Store) hydrateFailures(ctx context.Context, rows []db.FailureClassification) ([]FailureClassification, error) {
 	result := make([]FailureClassification, 0, len(rows))
 	for _, row := range rows {

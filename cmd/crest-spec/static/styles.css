@@ -173,3 +173,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .nested-card p { margin: 6px 0; }
 .notice { color: var(--text-muted); font-size: 12px; }
 .loading-state { color: var(--text-muted); padding: 24px; text-align: center; }
+.filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; font-size: 12px; }
+.filter-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 5px; }
+.slice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.comparison-value { max-width: 260px; overflow-wrap: anywhere; }

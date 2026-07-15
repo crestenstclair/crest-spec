@@ -81,3 +81,43 @@ func TestDashboardV1ErrorEnvelopeAndPaginationBounds(t *testing.T) {
 	require.NoError(t, json.Unmarshal(missingRecorder.Body.Bytes(), &envelope))
 	assert.Equal(t, "not_found", envelope.Error.Code)
 }
+
+func TestDashboardV1PlanAndImpactContracts(t *testing.T) {
+	d := goalOrientedDashboard(t)
+	planRecorder := httptest.NewRecorder()
+	d.handleV1Plan(planRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+	require.Equal(t, http.StatusOK, planRecorder.Code, planRecorder.Body.String())
+	var plan observability.PlanView
+	require.NoError(t, json.Unmarshal(planRecorder.Body.Bytes(), &plan))
+	assert.Equal(t, observability.APIVersion, plan.Version)
+	assert.Equal(t, "crest-synth", plan.ProjectName)
+	require.NotEmpty(t, plan.Operations)
+	require.NotEmpty(t, plan.Slices)
+	assert.NotEmpty(t, plan.Operations[0].Reason)
+	assert.NotEmpty(t, plan.Operations[0].Links)
+	hasBehavioralOperation := false
+	for _, operation := range plan.Operations {
+		if len(operation.ExpectedBehavior) > 0 && len(operation.ExpectedEvidence) > 0 {
+			hasBehavioralOperation = true
+			break
+		}
+	}
+	assert.True(t, hasBehavioralOperation)
+
+	operationRequest := httptest.NewRequest(http.MethodGet, "/api/v1/plan/operations/"+plan.Operations[0].ID, nil)
+	operationRequest.SetPathValue("id", plan.Operations[0].ID)
+	operationRecorder := httptest.NewRecorder()
+	d.handleV1PlanOperation(operationRecorder, operationRequest)
+	require.Equal(t, http.StatusOK, operationRecorder.Code, operationRecorder.Body.String())
+	assert.Contains(t, operationRecorder.Body.String(), plan.Operations[0].ResourceID)
+
+	impactRequest := httptest.NewRequest(http.MethodGet, "/api/v1/resources/"+plan.Operations[0].ResourceID+"/impact", nil)
+	impactRequest.SetPathValue("id", plan.Operations[0].ResourceID)
+	impactRecorder := httptest.NewRecorder()
+	d.handleResourceImpact(impactRecorder, impactRequest)
+	require.Equal(t, http.StatusOK, impactRecorder.Code, impactRecorder.Body.String())
+	var impact observability.ImpactView
+	require.NoError(t, json.Unmarshal(impactRecorder.Body.Bytes(), &impact))
+	assert.Equal(t, plan.Operations[0].ResourceID, impact.SourceResource)
+	assert.Contains(t, impact.AffectedResources, plan.Operations[0].ResourceID)
+}

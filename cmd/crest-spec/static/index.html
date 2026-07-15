@@ -73,16 +73,35 @@
   <main class="main" id="dashboard-main">
     <nav class="tab-bar" role="tablist" aria-label="Operational views">
       <button type="button" class="tab" id="nav-project" role="tab" aria-controls="tab-project" data-tab="project">Project</button>
+      <button type="button" class="tab" id="nav-plan" role="tab" aria-controls="tab-plan" data-tab="plan">Plan</button>
       <button type="button" class="tab active" id="nav-session" role="tab" aria-controls="tab-session" aria-selected="true" data-tab="session">Session</button>
       <button type="button" class="tab" id="nav-generations" role="tab" aria-controls="tab-generations" data-tab="generations">Generations</button>
       <button type="button" class="tab" id="nav-contexts" role="tab" aria-controls="tab-contexts" data-tab="contexts">Contexts</button>
       <button type="button" class="tab" id="nav-executions" role="tab" aria-controls="tab-executions" data-tab="executions">Executions</button>
       <button type="button" class="tab" id="nav-verifications" role="tab" aria-controls="tab-verifications" data-tab="verifications">Validation &amp; Evidence</button>
       <button type="button" class="tab" id="nav-evaluations" role="tab" aria-controls="tab-evaluations" data-tab="evaluations">Evaluations</button>
+      <button type="button" class="tab" id="nav-failures" role="tab" aria-controls="tab-failures" data-tab="failures">Failures</button>
       <button type="button" class="tab" id="nav-resources" role="tab" aria-controls="tab-resources" data-tab="resources">Resources</button>
       <button type="button" class="tab" id="nav-invariants" role="tab" aria-controls="tab-invariants" data-tab="invariants">Invariants</button>
       <button type="button" class="tab" id="nav-learnings" role="tab" aria-controls="tab-learnings" data-tab="learnings">Learnings</button>
     </nav>
+
+    <section class="tab-content" id="tab-plan" role="tabpanel" aria-labelledby="nav-plan" hidden>
+      <div id="plan-view" class="card empty">Loading goal-directed plan…</div>
+    </section>
+
+    <section class="tab-content" id="tab-failures" role="tabpanel" aria-labelledby="nav-failures" hidden>
+      <div class="card">
+        <div class="filter-bar">
+          <label for="failure-status">Resolution</label>
+          <select id="failure-status"><option value="">All</option><option value="unresolved">Unresolved</option><option value="resolved">Resolved</option></select>
+          <label for="failure-category">Category</label>
+          <select id="failure-category"><option value="">All categories</option></select>
+          <button type="button" id="filter-failures" class="primary-button">Apply filters</button>
+        </div>
+        <div id="failure-view" class="empty">Loading failure classifications…</div>
+      </div>
+    </section>
 
     <!-- Tab: Validation and Evidence Explorer -->
     <section class="tab-content" id="tab-verifications" role="tabpanel" aria-labelledby="nav-verifications" hidden>
@@ -103,6 +122,16 @@
 
     <!-- Tab: Execution Inspector -->
     <section class="tab-content" id="tab-executions" role="tabpanel" aria-labelledby="nav-executions" hidden>
+      <div class="card" id="attempt-comparison-card">
+        <h2>Compare complete attempts</h2>
+        <div class="filter-bar">
+          <label for="attempt-compare-left">First attempt</label><select id="attempt-compare-left"></select>
+          <span aria-hidden="true">→</span>
+          <label for="attempt-compare-right">Second attempt</label><select id="attempt-compare-right"></select>
+          <button type="button" id="compare-attempts" class="primary-button">Compare attempts</button>
+        </div>
+        <div id="attempt-comparison"></div>
+      </div>
       <div class="card" style="overflow-x:auto">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
           <strong style="font-size:13px">Compare executions</strong>

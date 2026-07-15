@@ -12,6 +12,7 @@ func TestDashboardEmbedsModularAccessibleApplication(t *testing.T) {
 		"static/index.html", "static/styles.css", "static/js/app.js", "static/js/api.js",
 		"static/js/components.js", "static/js/router.js",
 		"static/js/features/project.js", "static/js/features/resources.js",
+		"static/js/features/plan.js", "static/js/features/failures.js", "static/js/features/attempts.js",
 	} {
 		content, err := fs.ReadFile(staticFiles, path)
 		require.NoError(t, err, path)

@@ -6,6 +6,9 @@ import {
 import { initializeRouter, updateRouteParameters } from './router.js';
 import { loadProjectFeature, renderProjectDetail, renderProjectSummary } from './features/project.js';
 import { loadResourcesFeature } from './features/resources.js';
+import { loadPlanFeature } from './features/plan.js';
+import { initializeFailureFilters, loadFailuresFeature } from './features/failures.js';
+import { loadAttemptComparison } from './features/attempts.js';
 
 let currentTab = 'session';
 let sseConnected = false;
@@ -247,12 +250,14 @@ function renderDonut(counts, total) {
 async function loadTabData(tab) {
   switch (tab) {
     case 'project': await loadProjectTab(); break;
+	case 'plan': await loadPlanFeature(); break;
     case 'session': await loadSessionTab(); break;
     case 'generations': await loadGenerationsTab(); break;
     case 'contexts': await loadContextsTab(); break;
     case 'executions': await loadExecutionsTab(); break;
     case 'verifications': await loadVerificationsTab(); break;
     case 'evaluations': await loadEvaluationsTab(); break;
+	case 'failures': await loadFailuresFeature(); break;
     case 'resources': await loadResourcesTab(); break;
     case 'invariants': await loadInvariantsTab(); break;
     case 'learnings': await loadLearningsTab(); break;
@@ -896,6 +901,7 @@ async function compareSelectedContexts() {
 
 // ─── Tab: Execution Inspector ─────────────────────────────────────
 async function loadExecutionsTab() {
+	await loadAttemptComparison();
   const el = document.getElementById('executions-table');
   const executions = await fetchJSON('/api/v1/executions?limit=100');
   if (!executions) {
@@ -1218,6 +1224,7 @@ async function init() {
 	});
 	document.getElementById('compare-contexts').addEventListener('click', compareSelectedContexts);
 	document.getElementById('compare-executions').addEventListener('click', compareSelectedExecutions);
+	initializeFailureFilters();
   // Initial full load
   await pollRefresh();
 
