@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,6 +11,61 @@ import (
 func TestDashboardURLHandlesPortOnlyAndExplicitHosts(t *testing.T) {
 	require.Equal(t, "http://localhost:8080", dashboardURL(":8080"))
 	require.Equal(t, "http://127.0.0.1:8080", dashboardURL("127.0.0.1:8080"))
+}
+
+func TestDashboardUsesEscapedDataAttributesAndDelegatedHandlers(t *testing.T) {
+	appBytes, err := fs.ReadFile(staticFiles, "static/js/app.js")
+	require.NoError(t, err)
+	app := string(appBytes)
+	componentsBytes, err := fs.ReadFile(staticFiles, "static/js/components.js")
+	require.NoError(t, err)
+	components := string(componentsBytes)
+
+	err = fs.WalkDir(staticFiles, "static", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".js") && !strings.HasSuffix(path, ".html") {
+			return walkErr
+		}
+		content, readErr := fs.ReadFile(staticFiles, path)
+		if readErr != nil {
+			return readErr
+		}
+		for _, inlineHandler := range []string{"onclick=", "onchange=", "oninput=", "onsubmit="} {
+			require.NotContains(t, strings.ToLower(string(content)), inlineHandler, path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotContains(t, app, "Object.assign(window")
+	require.Contains(t, app, "document.addEventListener('click', handleDashboardAction)")
+	for _, action := range []string{
+		"toggle-evaluation-run", "show-evaluation-case", "toggle-evaluation-case",
+		"inspect-evaluation-record", "toggle-evaluation-promotion", "toggle-wave",
+		"toggle-collapsible", "toggle-generation", "toggle-context",
+		"toggle-context-content", "toggle-execution", "toggle-verification",
+	} {
+		require.Contains(t, app, `data-action="`+action+`"`)
+	}
+
+	// Identifiers can originate in specifications and persisted records. These
+	// substitutions keep apostrophes, quotes, and markup inside data attributes
+	// instead of allowing them to create elements or executable attributes.
+	hostileIdentifier := `goal'"><img src=x onerror="alert(1)">`
+	require.Contains(t, hostileIdentifier, "'")
+	require.Contains(t, hostileIdentifier, `"`)
+	require.Contains(t, hostileIdentifier, "<img")
+	for _, substitution := range []string{
+		`'&': '&amp;'`, `'<': '&lt;'`, `'>': '&gt;'`, `'"': '&quot;'`, `"'": '&#39;'`,
+	} {
+		require.Contains(t, components, substitution)
+	}
+	require.Contains(t, components, `replace(/[&<>"']/g`)
+	for _, dynamicAttribute := range []string{
+		`data-record-id="' + esc(`,
+		`data-resource-id="' + esc(`,
+		`data-record-url="' + esc(`,
+	} {
+		require.Contains(t, app, dynamicAttribute)
+	}
 }
 
 func TestDashboardEmbedsModularAccessibleApplication(t *testing.T) {

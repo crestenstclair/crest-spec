@@ -310,7 +310,7 @@ function renderEvaluationRuns(runs) {
     const variants = run.variants || [];
     const assignments = run.assignments || [];
     const terminal = assignments.filter(a => a.status === 'submitted' || a.status === 'cancelled').length;
-    html += '<tr class="clickable" onclick="toggleEvaluationRun(\'' + esc(run.id) + '\',' + index + ')">' +
+    html += '<tr class="clickable" data-action="toggle-evaluation-run" data-record-id="' + esc(run.id) + '" data-index="' + index + '">' +
       '<td><div class="resource-id">' + esc(run.name || run.id) + '</div><div class="mono">' + esc(shortID(run.id)) + '</div></td>' +
       '<td class="mono">' + esc(shortID(run.dataset_id || '')) + '</td><td>' + statusBadge(run.status || '') + '</td>' +
       '<td>' + statusBadge(run.conclusion || 'pending') + (run.winning_variant ? '<div class="mono">' + esc(run.winning_variant) + '</div>' : '') + '</td>' +
@@ -347,7 +347,7 @@ async function toggleEvaluationRun(runID, index, restoring = false) {
   });
   html += '</tbody></table><h3 style="margin-top:14px">Assignment provenance</h3><table><thead><tr><th>Case</th><th>Variant</th><th>Split</th><th>Status</th><th>Attempt</th></tr></thead><tbody>';
   assignments.forEach(a => {
-    html += '<tr><td><button class="collapsible-toggle" onclick="event.stopPropagation();showEvaluationCase(\'' + esc(a.case_id) + '\',this)">' + esc(shortID(a.case_id)) + '</button></td>' +
+    html += '<tr><td><button type="button" class="collapsible-toggle" data-action="show-evaluation-case" data-record-id="' + esc(a.case_id) + '">' + esc(shortID(a.case_id)) + '</button></td>' +
       '<td class="mono">' + esc(a.variant_name || '') + '</td><td>' + badge(a.split || '', 'muted') + '</td><td>' + statusBadge(a.status || '') + '</td>' +
       '<td class="mono">' + esc(a.attempt_id ? shortID(a.attempt_id) : 'not linked') + '</td></tr>';
   });
@@ -383,7 +383,7 @@ function renderEvaluationCases(cases) {
   if (!cases.length) { el.innerHTML = '<div class="empty">No reproducible cases captured yet.</div>'; return; }
   let html = '<table><thead><tr><th>Case</th><th>Provenance</th><th>Goal / capability</th><th>Resource</th><th>Repository</th><th>Created</th></tr></thead><tbody>';
   cases.forEach((c, index) => {
-    html += '<tr class="clickable" onclick="toggleEvaluationCase(\'' + esc(c.id) + '\',' + index + ')"><td class="mono">' + esc(shortID(c.id)) + '</td><td>' + badge(c.provenance || '', 'purple') + '</td>' +
+    html += '<tr class="clickable" data-action="toggle-evaluation-case" data-record-id="' + esc(c.id) + '" data-index="' + index + '"><td class="mono">' + esc(shortID(c.id)) + '</td><td>' + badge(c.provenance || '', 'purple') + '</td>' +
       '<td><div class="resource-id">' + esc(c.goal_id || 'project') + '</div><div class="mono">' + esc(c.capability_id || '') + '</div></td><td class="resource-id">' + esc(c.resource_id || '') + '</td>' +
       '<td class="mono">' + esc(shortID(c.repository_hash || '')) + '</td><td style="font-size:12px;color:var(--text-muted)">' + timeAgo(c.created_at) + '</td></tr>' +
       '<tr id="evaluation-case-' + index + '" style="display:none"><td colspan="6"></td></tr>';
@@ -408,8 +408,8 @@ async function renderEvaluationCaseInto(caseID, container) {
   const c = await fetchJSON('/api/v1/evaluations/cases/' + encodeURIComponent(caseID));
   if (!c) { container.innerHTML = '<div class="error-msg">Could not load case</div>'; return; }
   const links = [];
-  if (c.context_manifest_id) links.push('<button class="collapsible-toggle" onclick="inspectEvaluationRecord(\'/api/v1/contexts/' + encodeURIComponent(c.context_manifest_id) + '\',this)">Context ' + esc(shortID(c.context_manifest_id)) + '</button>');
-  if (c.execution_id) links.push('<button class="collapsible-toggle" onclick="inspectEvaluationRecord(\'/api/v1/executions/' + encodeURIComponent(c.execution_id) + '\',this)">Execution ' + esc(shortID(c.execution_id)) + '</button>');
+  if (c.context_manifest_id) links.push('<button type="button" class="collapsible-toggle" data-action="inspect-evaluation-record" data-record-url="' + esc('/api/v1/contexts/' + encodeURIComponent(c.context_manifest_id)) + '">Context ' + esc(shortID(c.context_manifest_id)) + '</button>');
+  if (c.execution_id) links.push('<button type="button" class="collapsible-toggle" data-action="inspect-evaluation-record" data-record-url="' + esc('/api/v1/executions/' + encodeURIComponent(c.execution_id)) + '">Execution ' + esc(shortID(c.execution_id)) + '</button>');
   container.innerHTML = '<div class="drilldown"><div class="state-counts">' + links.join(' ') + '</div>' +
     '<h3>Case payload</h3><pre>' + esc(JSON.stringify(c.payload || {}, null, 2)) + '</pre>' +
     '<h3 style="margin-top:12px">Expected outcome</h3><pre>' + esc(JSON.stringify(c.expected_outcome || {}, null, 2)) + '</pre><div class="related-record-detail"></div></div>';
@@ -426,7 +426,7 @@ function renderEvaluationPromotions(promotions) {
   if (!promotions.length) { el.innerHTML = '<div class="empty">No reusable improvement has been proposed.</div>'; return; }
   let html = '<table><thead><tr><th>Change</th><th>Configuration</th><th>Run / variant</th><th>Status</th><th>Eligibility</th><th>Rollback</th><th>Decisions</th></tr></thead><tbody>';
   promotions.forEach((p, index) => {
-    html += '<tr class="clickable" onclick="toggleEvaluationPromotion(\'' + esc(p.id) + '\',' + index + ')"><td>' + badge(p.change_kind || '', 'purple') + '<div class="mono">' + esc(p.target_identity || '') + '</div></td>' +
+    html += '<tr class="clickable" data-action="toggle-evaluation-promotion" data-record-id="' + esc(p.id) + '" data-index="' + index + '"><td>' + badge(p.change_kind || '', 'purple') + '<div class="mono">' + esc(p.target_identity || '') + '</div></td>' +
       '<td>' + esc(p.configuration_name || '') + '<div class="mono">' + esc(shortID(p.configuration_identity_hash || '')) + '</div></td>' +
       '<td class="mono">' + esc(shortID(p.run_id || '')) + ' / ' + esc(p.variant_name || '') + '</td><td>' + statusBadge(p.status || '') + '</td>' +
       '<td style="font-size:12px">' + esc(p.eligibility_reason || '') + '</td><td class="mono">' + esc(shortID(p.rollback_identity || '')) + '</td><td>' + (p.decisions || []).length + '</td></tr>' +
@@ -561,7 +561,7 @@ function renderSessionWaves(resources, sess) {
 
     const waveID = 'wave-' + w;
     html += '<div class="card wave-card">' +
-      '<div class="wave-card-header" onclick="toggleWave(\'' + waveID + '\')">' +
+      '<div class="wave-card-header" data-action="toggle-wave" data-target-id="' + esc(waveID) + '">' +
         '<div>' +
           '<span style="font-weight:600;color:var(--accent)">Wave ' + (parseInt(w) + 1) + '</span>' +
           (isCurrent ? ' ' + badge('current', 'yellow') : '') +
@@ -595,7 +595,7 @@ function renderSessionWaves(resources, sess) {
       const errDisplay = lastErr
         ? '<span class="collapsible" style="max-height:40px;display:block;font-size:11px;color:var(--text-muted)">' +
             esc(lastErr) + '</span>' +
-          (lastErr.length > 80 ? '<span class="collapsible-toggle" onclick="event.stopPropagation();toggleCollapsible(this)">Show more</span>' : '')
+          (lastErr.length > 80 ? '<span class="collapsible-toggle" data-action="toggle-collapsible">Show more</span>' : '')
         : '<span style="color:var(--text-muted)">--</span>';
 
       html += '<tr>' +
@@ -661,7 +661,7 @@ function renderGenerationsTable(gens) {
     const ts = g.created_at || g.CreatedAt || '';
     const gID = g.id || g.ID || i;
 
-    html += '<tr class="clickable" onclick="toggleGenDrilldown(\'' + esc(String(gID)) + '\', \'' + encodeURIComponent(rid) + '\', ' + i + ')">' +
+    html += '<tr class="clickable" data-action="toggle-generation" data-record-id="' + esc(String(gID)) + '" data-resource-id="' + esc(rid) + '" data-index="' + i + '">' +
       '<td class="resource-id">' + esc(rid) + '</td>' +
       '<td class="mono">#' + (attempt + 1) + '</td>' +
       '<td style="font-size:12px;color:var(--text-muted)">' + esc(model) + '</td>' +
@@ -678,7 +678,7 @@ function renderGenerationsTable(gens) {
   el.innerHTML = html;
 }
 
-async function toggleGenDrilldown(genID, encodedResourceID, idx) {
+async function toggleGenDrilldown(genID, resourceID, idx) {
   const row = document.getElementById('gen-drilldown-' + idx);
   if (!row) return;
 
@@ -687,7 +687,6 @@ async function toggleGenDrilldown(genID, encodedResourceID, idx) {
     return;
   }
 
-  const resourceID = decodeURIComponent(encodedResourceID);
   const td = row.querySelector('td');
   td.innerHTML = '<div class="drilldown"><div class="empty">Loading...</div></div>';
   row.style.display = '';
@@ -718,7 +717,7 @@ async function toggleGenDrilldown(genID, encodedResourceID, idx) {
       '<div class="collapsible" id="' + promptID + '" style="max-height:100px">' +
         '<pre>' + esc(prompt) + '</pre>' +
       '</div>' +
-      '<span class="collapsible-toggle" onclick="toggleCollapsible(this)">Show more</span>';
+      '<span class="collapsible-toggle" data-action="toggle-collapsible">Show more</span>';
   }
 
   // Output
@@ -729,7 +728,7 @@ async function toggleGenDrilldown(genID, encodedResourceID, idx) {
       '<div class="collapsible" id="' + outputID + '" style="max-height:100px">' +
         '<pre>' + esc(output) + '</pre>' +
       '</div>' +
-      '<span class="collapsible-toggle" onclick="toggleCollapsible(this)">Show more</span>';
+      '<span class="collapsible-toggle" data-action="toggle-collapsible">Show more</span>';
   }
 
   // Meta
@@ -773,7 +772,7 @@ async function loadContextsTab() {
     const status = blocked ? 'context_blocked' : (attempt.Status || attempt.status || 'context_prepared');
     const hash = manifest.ContextHash || manifest.context_hash || '';
     const created = manifest.CreatedAt || manifest.created_at || '';
-    html += '<tr class="clickable" onclick="toggleContextDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+    html += '<tr class="clickable" data-action="toggle-context" data-record-id="' + esc(id) + '" data-index="' + index + '">' +
       '<td class="resource-id">' + esc(resource) + '</td>' +
       '<td class="mono">#' + retry + '</td>' +
       '<td style="font-size:12px">' + esc(role) + '</td>' +
@@ -847,7 +846,7 @@ async function toggleContextDrilldown(manifestID, index, restoring = false) {
     const reason = section.Reason || section.reason || '';
     const content = section.Content || section.content || '';
     const contentID = 'context-content-' + index + '-' + sectionIndex;
-    html += '<tr><td><strong>' + esc(title) + '</strong>' + (content ? '<br><span class="collapsible-toggle" onclick="toggleContextContent(\'' + contentID + '\')">show snapshot</span>' : '') + '</td>' +
+    html += '<tr><td><strong>' + esc(title) + '</strong>' + (content ? '<br><span class="collapsible-toggle" data-action="toggle-context-content" data-target-id="' + esc(contentID) + '">show snapshot</span>' : '') + '</td>' +
       '<td class="mono">' + esc(source) + '</td><td>' + statusBadge(decision) + '</td><td class="mono">' + tokens + '</td><td style="font-size:12px;color:var(--text-muted)">' + esc(reason) + '</td></tr>';
     if (content) {
       html += '<tr id="' + contentID + '" style="display:none"><td colspan="5"><pre>' + esc(content) + '</pre></td></tr>';
@@ -939,7 +938,7 @@ async function loadExecutionsTab() {
     const status = manifest.Status || manifest.status || '';
     const duration = manifest.DurationMS || manifest.duration_ms || 0;
     const created = manifest.CreatedAt || manifest.created_at || '';
-    html += '<tr class="clickable" onclick="toggleExecutionDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+    html += '<tr class="clickable" data-action="toggle-execution" data-record-id="' + esc(id) + '" data-index="' + index + '">' +
       '<td class="resource-id">' + esc(resource) + '</td>' +
       '<td class="mono">#' + retry + '</td>' +
       '<td>' + esc(role) + '</td>' +
@@ -1108,7 +1107,7 @@ async function loadVerificationsTab() {
     const classification = run.classification || run.Classification || '';
     const targets = run.targets || run.Targets || [];
     const tree = run.source_tree_hash || run.SourceTreeHash || '';
-    html += '<tr class="clickable" onclick="toggleVerificationDrilldown(\'' + esc(id) + '\',' + index + ')">' +
+    html += '<tr class="clickable" data-action="toggle-verification" data-record-id="' + esc(id) + '" data-index="' + index + '">' +
       '<td class="resource-id">' + esc(definitionID) + '</td><td>' + badge(scope, 'blue') + '</td>' +
       '<td>' + statusBadge(classification) + '</td><td><div class="files-list">' + targets.map(target =>
         '<span>' + esc((target.Kind || target.kind || '') + ':' + (target.ID || target.id || '')) + '</span>').join('') + '</div></td>' +
@@ -1230,7 +1229,7 @@ function renderApplyInfo(apply) {
   el.innerHTML =
     '<div class="stat">' +
       '<div class="stat-label">ID</div>' +
-      '<div class="mono">' + shortID(apply.ID || apply.id) + '</div>' +
+      '<div class="mono">' + esc(shortID(apply.ID || apply.id)) + '</div>' +
     '</div>' +
     '<div class="stat">' +
       '<div class="stat-label">Status</div>' +
@@ -1240,6 +1239,53 @@ function renderApplyInfo(apply) {
       '<div class="stat-label">Started</div>' +
       '<div style="font-size:12px;color:var(--text-muted)">' + timeAgo(apply.StartedAt || apply.started_at) + '</div>' +
     '</div>';
+}
+
+async function handleDashboardAction(event) {
+  const trigger = event.target.closest?.('[data-action]');
+  if (!trigger) return;
+
+  const index = Number.parseInt(trigger.dataset.index || '', 10);
+  event.preventDefault();
+
+  switch (trigger.dataset.action) {
+    case 'toggle-evaluation-run':
+      await toggleEvaluationRun(trigger.dataset.recordId, index);
+      break;
+    case 'show-evaluation-case':
+      await showEvaluationCase(trigger.dataset.recordId, trigger);
+      break;
+    case 'toggle-evaluation-case':
+      await toggleEvaluationCase(trigger.dataset.recordId, index);
+      break;
+    case 'inspect-evaluation-record':
+      await inspectEvaluationRecord(trigger.dataset.recordUrl, trigger);
+      break;
+    case 'toggle-evaluation-promotion':
+      await toggleEvaluationPromotion(trigger.dataset.recordId, index);
+      break;
+    case 'toggle-wave':
+      toggleWave(trigger.dataset.targetId);
+      break;
+    case 'toggle-collapsible':
+      toggleCollapsible(trigger);
+      break;
+    case 'toggle-generation':
+      await toggleGenDrilldown(trigger.dataset.recordId, trigger.dataset.resourceId, index);
+      break;
+    case 'toggle-context':
+      await toggleContextDrilldown(trigger.dataset.recordId, index);
+      break;
+    case 'toggle-context-content':
+      toggleContextContent(trigger.dataset.targetId);
+      break;
+    case 'toggle-execution':
+      await toggleExecutionDrilldown(trigger.dataset.recordId, index);
+      break;
+    case 'toggle-verification':
+      await toggleVerificationDrilldown(trigger.dataset.recordId, index);
+      break;
+  }
 }
 
 // ─── Initialize ────────────────────────────────────────────────────
@@ -1253,6 +1299,7 @@ async function init() {
 	});
 	document.getElementById('compare-contexts').addEventListener('click', compareSelectedContexts);
 	document.getElementById('compare-executions').addEventListener('click', compareSelectedExecutions);
+	document.addEventListener('click', handleDashboardAction);
 	initializeFailureFilters();
   // Initial full load
   await pollRefresh();
@@ -1265,12 +1312,5 @@ async function init() {
     if (!sseConnected) pollRefresh();
   }, 3000);
 }
-
-Object.assign(window, {
-	inspectEvaluationRecord, showEvaluationCase, toggleCollapsible, toggleContextContent,
-	toggleContextDrilldown, toggleEvaluationCase, toggleEvaluationPromotion, toggleEvaluationRun,
-	toggleExecutionDrilldown, toggleGenDrilldown,
-	toggleVerificationDrilldown, toggleWave,
-});
 
 init();
