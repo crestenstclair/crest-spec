@@ -29,6 +29,11 @@ SELECT * FROM evaluation_cases WHERE identity_hash = ?;
 -- name: ListEvaluationCases :many
 SELECT * FROM evaluation_cases ORDER BY created_at DESC, id DESC LIMIT ?;
 
+-- name: ListEvaluationSourceValidationRuns :many
+SELECT * FROM validation_runs
+WHERE attempt_id = ?
+ORDER BY created_at DESC, id DESC;
+
 -- name: PutEvaluationDataset :exec
 INSERT INTO evaluation_datasets (
     id, name, description, identity_hash, status, created_at, sealed_at

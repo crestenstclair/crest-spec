@@ -379,6 +379,49 @@ func (q *Queries) ListEvaluationDatasets(ctx context.Context, limit int64) ([]Ev
 	return items, nil
 }
 
+const listEvaluationSourceValidationRuns = `-- name: ListEvaluationSourceValidationRuns :many
+SELECT id, definition_snapshot_id, definition_id, session_id, attempt_id, execution_id, source_tree_hash, classification, reason, started_at, completed_at, duration_ms, created_at FROM validation_runs
+WHERE attempt_id = ?
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListEvaluationSourceValidationRuns(ctx context.Context, attemptID *string) ([]ValidationRun, error) {
+	rows, err := q.db.QueryContext(ctx, listEvaluationSourceValidationRuns, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ValidationRun
+	for rows.Next() {
+		var i ValidationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.DefinitionSnapshotID,
+			&i.DefinitionID,
+			&i.SessionID,
+			&i.AttemptID,
+			&i.ExecutionID,
+			&i.SourceTreeHash,
+			&i.Classification,
+			&i.Reason,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.DurationMs,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const putEvaluationCase = `-- name: PutEvaluationCase :exec
 INSERT INTO evaluation_cases (
     id, identity_hash, provenance, source_attempt_id, project_name, goal_id,
