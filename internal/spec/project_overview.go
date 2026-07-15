@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
 type ProjectOverviewResult struct {
-	Project        *store.ProjectIntentState           `json:"project"`
-	Blockers       []store.CompletionBlocker           `json:"blockers"`
-	ProjectHistory []store.StatusTransition            `json:"project_history"`
-	GoalHistory    map[string][]store.StatusTransition `json:"goal_history"`
-	Contributions  []store.PersistedContribution       `json:"contributions"`
+	Project            *store.ProjectIntentState           `json:"project"`
+	CompletionEnforced bool                                `json:"completion_enforced"`
+	Blockers           []store.CompletionBlocker           `json:"blockers"`
+	ProjectHistory     []store.StatusTransition            `json:"project_history"`
+	GoalHistory        map[string][]store.StatusTransition `json:"goal_history"`
+	Contributions      []store.PersistedContribution       `json:"contributions"`
 }
 
 // ProjectOverview reconciles current declarations, then reads the canonical
@@ -55,7 +57,10 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 	if err != nil {
 		return nil, err
 	}
-	result := &ProjectOverviewResult{Project: intent, Blockers: blockers, ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition), Contributions: contributions}
+	result := &ProjectOverviewResult{
+		Project: intent, CompletionEnforced: projectUsesEvidenceCompletion(project), Blockers: blockers,
+		ProjectHistory: projectHistory, GoalHistory: make(map[string][]store.StatusTransition), Contributions: contributions,
+	}
 	for _, goal := range intent.Goals {
 		history, err := s.store.ListGoalStatusHistory(ctx, goal.ID)
 		if err != nil {
@@ -64,4 +69,19 @@ func (s *Spec) ProjectOverview(ctx context.Context) (*ProjectOverviewResult, err
 		result.GoalHistory[goal.ID] = history
 	}
 	return result, nil
+}
+
+func projectUsesEvidenceCompletion(project *cuepkg.Project) bool {
+	if project == nil {
+		return false
+	}
+	if len(project.Witnesses) > 0 {
+		return true
+	}
+	for _, validation := range project.Validations {
+		if validation.Named {
+			return true
+		}
+	}
+	return false
 }

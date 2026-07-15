@@ -141,3 +141,26 @@ func TestVerifyRejectsCallerSuppliedObservations(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "caller-supplied observations are disabled")
 }
+
+func TestFinishRequiresDeclaredEvidenceCompletion(t *testing.T) {
+	s, st := newExecutableWitnessSpec(t, "printf '%s\\n' 'CREST_OBSERVATION {\"peak\":0,\"clipped\":false}'")
+	ctx := context.Background()
+	require.NoError(t, st.CreateApply("apply-witness", "spec-hash"))
+	require.NoError(t, st.CreateSession(store.Session{
+		ID: "session-witness", ApplyID: "apply-witness", PlanJSON: "[]", WavesJSON: "[]", HashesJSON: "{}",
+	}))
+
+	blocked, err := s.Finish(ctx, "session-witness", false)
+	require.NoError(t, err)
+	assert.True(t, blocked.Blocked)
+	assert.NotEqual(t, "complete", blocked.ProjectCompletion)
+	assert.Contains(t, blocked.IncompleteGoals, "goal.audible")
+
+	verified, err := s.VerifyWitness(ctx, "witness.signal", "", "session-witness")
+	require.NoError(t, err)
+	require.True(t, verified.Passed)
+	finished, err := s.Finish(ctx, "session-witness", false)
+	require.NoError(t, err)
+	assert.False(t, finished.Blocked)
+	assert.Equal(t, "complete", finished.ProjectCompletion)
+}

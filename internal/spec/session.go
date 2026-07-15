@@ -99,9 +99,12 @@ type CommitResult struct {
 }
 
 type FinishResult struct {
-	Committed int
-	Skipped   int
-	Errored   int
+	Committed         int      `json:"committed"`
+	Skipped           int      `json:"skipped"`
+	Errored           int      `json:"errored"`
+	ProjectCompletion string   `json:"project_completion,omitempty"`
+	CompletionReason  string   `json:"completion_reason,omitempty"`
+	IncompleteGoals   []string `json:"incomplete_goals,omitempty"`
 	// Blocked is set when the session cannot finalize because behavioral
 	// checks are unresolved. The session stays open; BlockingChecks lists
 	// what must be resolved. force=true is the only override, and it is an
@@ -505,6 +508,20 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 			errored++
 		}
 	}
+	overview, err := s.ProjectOverview(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("finish gate: project completion: %w", err)
+	}
+	completionFields := func(result *FinishResult) *FinishResult {
+		result.ProjectCompletion = overview.Project.CompletionStatus
+		result.CompletionReason = overview.Project.CompletionReason
+		for _, goal := range overview.Project.Goals {
+			if goal.Status != "complete" {
+				result.IncompleteGoals = append(result.IncompleteGoals, goal.ID)
+			}
+		}
+		return result
+	}
 
 	// Behavioral gate: the session does not finalize while any of its
 	// resources carry unresolved checks. Everything that is not proven
@@ -516,13 +533,18 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 			return nil, fmt.Errorf("finish gate: %w", err)
 		}
 		if len(blocking) > 0 {
-			return &FinishResult{
+			return completionFields(&FinishResult{
 				Committed:      committed,
 				Skipped:        skipped,
 				Errored:        errored,
 				Blocked:        true,
 				BlockingChecks: blocking,
-			}, nil
+			}), nil
+		}
+		if overview.CompletionEnforced && overview.Project.CompletionStatus != "complete" {
+			return completionFields(&FinishResult{
+				Committed: committed, Skipped: skipped, Errored: errored, Blocked: true,
+			}), nil
 		}
 	}
 
@@ -544,12 +566,12 @@ func (s *Spec) Finish(ctx context.Context, sessionID string, force bool) (*Finis
 	s.store.CompleteApply(sess.ApplyID)
 	s.store.ReleaseLock()
 
-	return &FinishResult{
+	return completionFields(&FinishResult{
 		Committed:        committed,
 		Skipped:          skipped,
 		Errored:          errored,
 		ReflectionPrompt: reflectionPrompt,
-	}, nil
+	}), nil
 }
 
 // unresolvedChecks returns every behavioral check attached to the given
