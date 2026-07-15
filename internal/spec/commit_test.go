@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/execution"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
 
@@ -127,6 +130,125 @@ func TestCommitRecordsGenerationOutcome(t *testing.T) {
 	// (outcome IN ('accepted','rejected')) — store errors are swallowed by
 	// convention, so a bad value silently leaves outcome NULL.
 	require.Equal(t, "accepted", gens[0].Outcome, "committed generation must record outcome 'accepted'")
+}
+
+func TestConcurrentCommitReplayConvergesOnOneCandidate(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
+	require.NoError(t, err)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+	files := []CommitFile{{Path: "generated/concurrent.go", Content: "package generated\n"}}
+
+	start := make(chan struct{})
+	results := make(chan *CommitResult, 2)
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, commitErr := s.CommitAttempt(ctx, prepared.AttemptID, files, "", CommitMetadata{})
+			results <- result
+			errs <- commitErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for commitErr := range errs {
+		require.NoError(t, commitErr)
+	}
+
+	var candidateID string
+	for result := range results {
+		require.NotNil(t, result)
+		require.True(t, result.Committed)
+		if candidateID == "" {
+			candidateID = result.CandidateID
+		}
+		require.Equal(t, candidateID, result.CandidateID)
+	}
+}
+
+type commitSessionOverrideStore struct {
+	specStore
+	mutate func(*store.Session)
+}
+
+func (s *commitSessionOverrideStore) GetSession(id string) (*store.Session, error) {
+	session, err := s.specStore.GetSession(id)
+	if err != nil {
+		return nil, err
+	}
+	copy := *session
+	s.mutate(&copy)
+	return &copy, nil
+}
+
+func TestCommitFailsClosedOnInvalidCanonicalSessionState(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*store.Session)
+		wantErr string
+	}{
+		{
+			name: "planned action is missing",
+			mutate: func(session *store.Session) {
+				session.PlanJSON = "[]"
+			},
+			wantErr: "persisted plan operation is unavailable",
+		},
+		{
+			name: "effective hashes are malformed",
+			mutate: func(session *store.Session) {
+				session.HashesJSON = "{"
+			},
+			wantErr: "decode session hashes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, state := newTestSpecWithSession(t)
+			ctx := context.Background()
+			prepared, err := s.PrepareContext(ctx, ContextOptions{
+				SessionID: state.sessionID, ResourceID: state.resourceID,
+			})
+			require.NoError(t, err)
+			_, err = s.StartExecution(ctx, ExecutionStartOptions{
+				AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+				IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+				HostName: "spec-test", Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+				SystemInstructions: prepared.SystemPrompt,
+			})
+			require.NoError(t, err)
+
+			canonical := s.store
+			s.store = &commitSessionOverrideStore{specStore: canonical, mutate: tt.mutate}
+			result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{{
+				Path: "generated/canonical.go", Content: "package generated\n",
+			}}, "", CommitMetadata{})
+			require.ErrorContains(t, err, tt.wantErr)
+			require.Nil(t, result)
+
+			manifest, err := canonical.GetExecutionManifestByAttempt(ctx, prepared.AttemptID)
+			require.NoError(t, err)
+			require.Equal(t, string(execution.StatusFailed), manifest.Status)
+			candidate, err := canonical.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+			require.NoError(t, err)
+			require.Equal(t, "rejected", candidate.Status,
+				"invalid canonical session state must reject the staged candidate")
+		})
+	}
 }
 
 func TestCommitRejectedGenerationOutcomeRoundTrips(t *testing.T) {

@@ -1,8 +1,9 @@
 export function escapeHTML(value) {
   if (value === undefined || value === null || value === '') return '';
-  const node = document.createElement('div');
-  node.textContent = String(value);
-  return node.innerHTML;
+  const entities = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  };
+  return String(value).replace(/[&<>"']/g, character => entities[character]);
 }
 
 export function badge(text, color) {

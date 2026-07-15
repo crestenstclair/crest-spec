@@ -170,8 +170,10 @@ func (s *stubStore) GetGeneration(id string) (*store.Generation, error) { return
 func (s *stubStore) ListInvariantChecks(applyID string) ([]store.InvariantCheck, error) {
 	return nil, nil
 }
-func (s *stubStore) Vacuum(before time.Time) (int, error)                         { return 0, nil }
-func (s *stubStore) ReadOnlyQuery(query string) ([]map[string]interface{}, error) { return nil, nil }
+func (s *stubStore) Vacuum(before time.Time) (int, error) { return 0, nil }
+func (s *stubStore) ReadOnlyQueryContext(context.Context, string) ([]map[string]interface{}, error) {
+	return nil, nil
+}
 func (s *stubStore) UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error {
 	return nil
 }

@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -202,73 +201,6 @@ func (d *dashboard) writeQueryError(w http.ResponseWriter, err error) {
 		return
 	}
 	d.writeAPIError(w, http.StatusInternalServerError, "query_failed", err.Error(), nil)
-}
-
-func (d *dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
-	resources, _ := d.store.ListResources()
-	lock, _ := d.store.GetLock()
-	session, _ := d.store.GetActiveSession()
-	applies, _ := d.store.ListApplies(1)
-
-	type resourceStateCounts struct {
-		Pending    int `json:"pending"`
-		Dispatched int `json:"dispatched"`
-		Committed  int `json:"committed"`
-		Rejected   int `json:"rejected"`
-		Skipped    int `json:"skipped"`
-		Errored    int `json:"errored"`
-		Blocked    int `json:"blocked"`
-		Total      int `json:"total"`
-	}
-
-	type statusResp struct {
-		Resources      int                  `json:"resources"`
-		Lock           *store.Lock          `json:"lock"`
-		Session        *store.Session       `json:"session"`
-		LatestApply    *store.Apply         `json:"latest_apply"`
-		SessionActions []store.ApplyAction  `json:"session_actions,omitempty"`
-		ResourceStates *resourceStateCounts `json:"resource_states,omitempty"`
-	}
-
-	resp := statusResp{
-		Resources: len(resources),
-		Lock:      lock,
-		Session:   session,
-	}
-	if len(applies) > 0 {
-		resp.LatestApply = &applies[0]
-	}
-	if session != nil && session.ApplyID != "" {
-		actions, _ := d.store.ListApplyActions(session.ApplyID)
-		resp.SessionActions = actions
-	}
-	if session != nil {
-		sessResources, _ := d.store.ListSessionResources(session.ID)
-		if len(sessResources) > 0 {
-			counts := &resourceStateCounts{Total: len(sessResources)}
-			for _, sr := range sessResources {
-				switch sr.State {
-				case "pending":
-					counts.Pending++
-				case "dispatched":
-					counts.Dispatched++
-				case "committed":
-					counts.Committed++
-				case "rejected":
-					counts.Rejected++
-				case "skipped":
-					counts.Skipped++
-				case "errored":
-					counts.Errored++
-				case "blocked":
-					counts.Blocked++
-				}
-			}
-			resp.ResourceStates = counts
-		}
-	}
-
-	d.writeJSON(w, resp)
 }
 
 func (d *dashboard) handleProjectOverview(w http.ResponseWriter, r *http.Request) {
@@ -1006,65 +938,6 @@ func (d *dashboard) handleLearnings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.writeJSON(w, resp)
-}
-
-func (d *dashboard) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		d.writeError(w, 500, "streaming not supported")
-		return
-	}
-
-	ctx := r.Context()
-	var mu sync.Mutex
-	var lastHash string
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	sendUpdate := func() {
-		session, _ := d.store.GetActiveSession()
-		applies, _ := d.store.ListApplies(1)
-
-		payload := map[string]interface{}{
-			"session": session,
-		}
-		if len(applies) > 0 {
-			payload["latest_apply"] = applies[0]
-		}
-		if session != nil {
-			sr, _ := d.store.ListSessionResources(session.ID)
-			payload["session_resources"] = sr
-		}
-
-		data, _ := json.Marshal(payload)
-		hash := fmt.Sprintf("%x", len(data))
-
-		mu.Lock()
-		defer mu.Unlock()
-		if hash == lastHash {
-			return
-		}
-		lastHash = hash
-
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	sendUpdate()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sendUpdate()
-		}
-	}
 }
 
 func fatal(err error) {

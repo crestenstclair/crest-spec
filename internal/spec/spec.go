@@ -16,6 +16,7 @@ import (
 	graphpkg "github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/crestenstclair/crest-spec/internal/store"
+	projectworkspace "github.com/crestenstclair/crest-spec/internal/workspace"
 )
 
 type specStore interface {
@@ -99,7 +100,7 @@ type specStore interface {
 	GetGeneration(id string) (*store.Generation, error)
 	ListInvariantChecks(applyID string) ([]store.InvariantCheck, error)
 	Vacuum(before time.Time) (int, error)
-	ReadOnlyQuery(query string) ([]map[string]interface{}, error)
+	ReadOnlyQueryContext(ctx context.Context, query string) ([]map[string]interface{}, error)
 	ListActiveLearnings(lang, kind string, limit int) ([]store.Learning, error)
 	IncrementLearningApplied(id string) error
 	ListLearnings(status string) ([]store.Learning, error)
@@ -160,6 +161,8 @@ type Spec struct {
 	store     specStore
 	fs        fileSystem
 	cfg       *config.Config
+	project   projectworkspace.Project
+	commits   *projectworkspace.Coordinator
 	reflector *evolve.Reflector
 }
 
@@ -168,8 +171,27 @@ func New(st specStore, fs fileSystem, cfg *config.Config) *Spec {
 		store:     st,
 		fs:        fs,
 		cfg:       cfg,
+		project:   projectworkspace.FromSpecDir(cfg.SpecDir),
+		commits:   projectworkspace.NewCoordinator(),
 		reflector: evolve.New(&storeReflectorAdapter{st: st}),
 	}
+}
+
+func (s *Spec) projectWorkspace() projectworkspace.Project {
+	if s.project.Root() != "" {
+		return s.project
+	}
+	if s.cfg == nil {
+		return projectworkspace.FromRoot(".")
+	}
+	return projectworkspace.FromSpecDir(s.cfg.SpecDir)
+}
+
+func (s *Spec) commitCoordinator() *projectworkspace.Coordinator {
+	if s.commits != nil {
+		return s.commits
+	}
+	return projectworkspace.NewCoordinator()
 }
 
 // storeReflectorAdapter exposes only the read+write methods evolve.Store needs,
@@ -480,7 +502,7 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 	}
 	hashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model, mode)
 
-	planner := planpkg.New(s.store, s.fs)
+	planner := planpkg.NewInWorkspace(s.store, s.fs, s.projectWorkspace())
 	actions, err := planner.Plan(ctx, registry, g, model, mode)
 	if err != nil {
 		return nil, err

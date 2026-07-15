@@ -601,20 +601,14 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 	}
 
 	if input.ToStatus == execution.StatusAccepted || input.ToStatus == execution.StatusRejected {
-		candidate, getErr := q.GetCandidateSetByExecution(ctx, input.ExecutionID)
-		if getErr != nil {
-			return nil, fmt.Errorf("transition execution: terminal candidate disposition requires a candidate: %w", mapNotFound(getErr))
-		}
 		disposition := "accepted"
 		attemptStatus := "accepted"
 		if input.ToStatus == execution.StatusRejected {
 			disposition = "rejected"
 			attemptStatus = "rejected"
 		}
-		if changed, updateErr := q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
-			Status: disposition, DispositionReason: input.Reason, DisposedAt: &timestamp, ID: candidate.ID,
-		}); updateErr != nil || changed != 1 {
-			return nil, fmt.Errorf("transition execution: candidate disposition: affected=%d: %w", changed, updateErr)
+		if err := transitionCandidateDisposition(ctx, q, input.ExecutionID, disposition, input.Reason, timestamp); err != nil {
+			return nil, fmt.Errorf("transition execution: terminal candidate disposition: %w", err)
 		}
 		if changed, updateErr := q.UpdateGenerationAttemptStatus(ctx, db.UpdateGenerationAttemptStatusParams{
 			Status: attemptStatus, ID: row.AttemptID, Status_2: "candidate_submitted",
@@ -633,10 +627,8 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 		expectedAttemptStatus := "context_prepared"
 		if from == execution.StatusCandidateSubmitted || from == execution.StatusValidating {
 			expectedAttemptStatus = "candidate_submitted"
-			if candidate, getErr := q.GetCandidateSetByExecution(ctx, input.ExecutionID); getErr == nil {
-				_, _ = q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
-					Status: "rejected", DispositionReason: input.Reason, DisposedAt: &timestamp, ID: candidate.ID,
-				})
+			if err := transitionCandidateDisposition(ctx, q, input.ExecutionID, "rejected", input.Reason, timestamp); err != nil {
+				return nil, fmt.Errorf("transition execution: reject candidate before %s: %w", input.ToStatus, err)
 			}
 		}
 		if changed, updateErr := q.UpdateGenerationAttemptStatus(ctx, db.UpdateGenerationAttemptStatusParams{
@@ -678,240 +670,27 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 	return s.GetExecutionManifest(ctx, input.ExecutionID)
 }
 
-// FinalizeCandidate commits the complete governance disposition as one SQLite
-// transaction. For acceptance that includes resource/file ownership and
-// dependency state; for rejection it includes failure routing and handoff.
-func (s *Store) FinalizeCandidate(ctx context.Context, input CandidateDisposition) (*ExecutionManifest, error) {
-	if input.DurationMS < 0 || input.InputTokens < 0 || input.OutputTokens < 0 || input.CostUSD < 0 {
-		return nil, fmt.Errorf("finalize candidate: metrics cannot be negative")
-	}
-	tx, err := s.sqlDB.BeginTx(ctx, nil)
+// transitionCandidateDisposition updates the immutable candidate projection
+// inside its caller's execution transaction. A candidate-bearing execution
+// cannot enter a terminal state unless the corresponding submitted candidate
+// is found and disposed exactly once.
+func transitionCandidateDisposition(
+	ctx context.Context,
+	q *db.Queries,
+	executionID, disposition, reason, timestamp string,
+) error {
+	candidate, err := q.GetCandidateSetByExecution(ctx, executionID)
 	if err != nil {
-		return nil, fmt.Errorf("finalize candidate: begin transaction: %w", err)
+		return fmt.Errorf("candidate: %w", mapNotFound(err))
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	manifest, err := q.GetExecutionManifest(ctx, input.ExecutionID)
+	changed, err := q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
+		Status: disposition, DispositionReason: reason, DisposedAt: &timestamp, ID: candidate.ID,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("finalize candidate: execution: %w", mapNotFound(err))
+		return fmt.Errorf("update candidate %s: %w", candidate.ID, err)
 	}
-	if manifest.Status != string(execution.StatusValidating) {
-		return nil, fmt.Errorf("finalize candidate: execution %s must be validating, got %s", manifest.ID, manifest.Status)
-	}
-	attempt, err := q.GetGenerationAttempt(ctx, manifest.AttemptID)
-	if err != nil {
-		return nil, fmt.Errorf("finalize candidate: attempt: %w", err)
-	}
-	candidate, err := q.GetCandidateSetByExecution(ctx, manifest.ID)
-	if err != nil {
-		return nil, fmt.Errorf("finalize candidate: candidate: %w", mapNotFound(err))
-	}
-	candidateFiles, err := q.ListCandidateFiles(ctx, candidate.ID)
-	if err != nil {
-		return nil, fmt.Errorf("finalize candidate: files: %w", err)
-	}
-	timestamp := now()
-	toStatus := execution.StatusRejected
-	disposition := "rejected"
-	attemptStatus := "rejected"
-	sessionState := "rejected"
-	actionOutcome := "rejected"
-	if input.Accepted {
-		toStatus = execution.StatusAccepted
-		disposition = "accepted"
-		attemptStatus = "accepted"
-		sessionState = "committed"
-		actionOutcome = "committed"
-		if input.Resource == nil || input.Resource.ID != attempt.ResourceID {
-			return nil, fmt.Errorf("finalize candidate: accepted disposition requires the attempt resource")
-		}
-		if err := validateAcceptedFiles(candidateFiles, input.Files, attempt.ResourceID); err != nil {
-			return nil, err
-		}
-	}
-	completedAt := timestamp
-	progressJSON, progressHash := manifest.GoalProgressJson, manifest.GoalProgressHash
-	if input.GoalProgress != nil {
-		progressJSON, progressHash, err = execution.CanonicalRedacted(input.GoalProgress)
-		if err != nil {
-			return nil, fmt.Errorf("finalize candidate: goal progress: %w", err)
-		}
-	}
-	if changed, updateErr := q.UpdateExecutionManifestStatus(ctx, db.UpdateExecutionManifestStatusParams{
-		Status: string(toStatus), DispositionReason: input.Reason, CompletedAt: &completedAt,
-		DurationMs: input.DurationMS, InputTokens: input.InputTokens, OutputTokens: input.OutputTokens,
-		CostUsd: input.CostUSD, UpdatedAt: timestamp, HostCommitRef: input.HostCommitRef,
-		GoalProgressJson: progressJSON, GoalProgressHash: progressHash,
-		ID: manifest.ID, Status_2: manifest.Status,
-	}); updateErr != nil || changed != 1 {
-		return nil, fmt.Errorf("finalize candidate: execution transition: affected=%d: %w", changed, updateErr)
-	}
-	if changed, updateErr := q.UpdateCandidateSetDisposition(ctx, db.UpdateCandidateSetDispositionParams{
-		Status: disposition, DispositionReason: input.Reason, DisposedAt: &timestamp, ID: candidate.ID,
-	}); updateErr != nil || changed != 1 {
-		return nil, fmt.Errorf("finalize candidate: candidate disposition: affected=%d: %w", changed, updateErr)
-	}
-	if changed, updateErr := q.UpdateGenerationAttemptStatus(ctx, db.UpdateGenerationAttemptStatusParams{
-		Status: attemptStatus, ID: attempt.ID, Status_2: "candidate_submitted",
-	}); updateErr != nil || changed != 1 {
-		return nil, fmt.Errorf("finalize candidate: attempt disposition: affected=%d: %w", changed, updateErr)
-	}
-
-	if input.Accepted {
-		resource := *input.Resource
-		if err := q.SetResource(ctx, db.SetResourceParams{
-			ID: resource.ID, Kind: resource.Kind, ContextName: stringPtr(resource.ContextName),
-			DeclarationHash: resource.DeclarationHash, EffectiveHash: resource.EffectiveHash,
-			Model: stringPtr(resource.Model), SettledAt: timestamp,
-		}); err != nil {
-			return nil, fmt.Errorf("finalize candidate: resource: %w", err)
-		}
-		if len(input.Files) > 0 {
-			if err := q.DeleteGeneratedFiles(ctx, attempt.ResourceID); err != nil {
-				return nil, fmt.Errorf("finalize candidate: replace file ownership: %w", err)
-			}
-			for _, file := range input.Files {
-				if err := q.SetGeneratedFile(ctx, db.SetGeneratedFileParams{
-					Path: file.Path, ResourceID: attempt.ResourceID, ContentHash: file.ContentHash,
-					PromptHash: file.PromptHash, Model: file.Model, CreatedAt: timestamp,
-				}); err != nil {
-					return nil, fmt.Errorf("finalize candidate: own file %s: %w", file.Path, err)
-				}
-			}
-		}
-		for _, file := range candidateFiles {
-			if err := q.AcceptCandidateFile(ctx, db.AcceptCandidateFileParams{
-				CandidateFileID: file.ID, ResourceID: attempt.ResourceID, Path: file.Path, AcceptedAt: timestamp,
-			}); err != nil {
-				return nil, fmt.Errorf("finalize candidate: accept file %s: %w", file.Path, err)
-			}
-		}
-		if err := q.DeleteDependencies(ctx, attempt.ResourceID); err != nil {
-			return nil, fmt.Errorf("finalize candidate: clear dependencies: %w", err)
-		}
-		for _, dependency := range input.Dependencies {
-			if dependency.SourceID != attempt.ResourceID {
-				return nil, fmt.Errorf("finalize candidate: dependency source must be %s", attempt.ResourceID)
-			}
-			if err := q.SetDependency(ctx, db.SetDependencyParams{
-				SourceID: dependency.SourceID, TargetID: dependency.TargetID, Kind: dependency.Kind,
-			}); err != nil {
-				return nil, fmt.Errorf("finalize candidate: dependency: %w", err)
-			}
-		}
-		if input.Notes != "" {
-			if err := q.CreateNote(ctx, db.CreateNoteParams{
-				ResourceID: attempt.ResourceID, ApplyID: attempt.ApplyID, Content: input.Notes, CreatedAt: timestamp,
-			}); err != nil {
-				return nil, fmt.Errorf("finalize candidate: note: %w", err)
-			}
-		}
-		ancestorID := stringVal(attempt.ParentAttemptID)
-		for ancestorID != "" {
-			failures, listErr := q.ListFailureClassificationsByAttempt(ctx, ancestorID)
-			if listErr != nil {
-				return nil, fmt.Errorf("finalize candidate: list ancestor failures: %w", listErr)
-			}
-			for _, failure := range failures {
-				if failure.ResolvedAt != nil {
-					continue
-				}
-				if _, resolveErr := q.ResolveFailureClassification(ctx, db.ResolveFailureClassificationParams{
-					Resolution: "resolved by accepted retry", ResolvedByAttempt: &attempt.ID,
-					ResolvedAt: &timestamp, ID: failure.ID,
-				}); resolveErr != nil {
-					return nil, fmt.Errorf("finalize candidate: resolve ancestor failure: %w", resolveErr)
-				}
-			}
-			ancestor, getErr := q.GetGenerationAttempt(ctx, ancestorID)
-			if getErr != nil {
-				return nil, fmt.Errorf("finalize candidate: ancestor attempt: %w", getErr)
-			}
-			ancestorID = stringVal(ancestor.ParentAttemptID)
-		}
-	}
-
-	var failure *FailureClassification
-	if input.Failure != nil {
-		write := *input.Failure
-		write.AttemptID = attempt.ID
-		write.ExecutionID = manifest.ID
-		failure, err = createFailureClassificationTx(ctx, q, write, timestamp)
-		if err != nil {
-			return nil, fmt.Errorf("finalize candidate: failure: %w", err)
-		}
-	}
-	if input.HandoffRole != "" {
-		failureID := ""
-		if failure != nil {
-			failureID = failure.ID
-		}
-		if _, err := createAttemptHandoffTx(ctx, q, AttemptHandoff{
-			SourceAttemptID: attempt.ID, SourceRole: attempt.Role, TargetRole: input.HandoffRole,
-			Reason: input.Reason, ExpectedOutcome: "produce a corrected candidate", FailureID: failureID,
-		}, timestamp); err != nil {
-			return nil, fmt.Errorf("finalize candidate: handoff: %w", err)
-		}
-	}
-	lastError := ""
-	if !input.Accepted {
-		lastError = input.Reason
-	}
-	if err := q.UpdateSessionResourceState(ctx, db.UpdateSessionResourceStateParams{
-		State: sessionState, LastError: stringPtr(lastError), Attempts: int64(input.Attempts),
-		UpdatedAt: timestamp, SessionID: attempt.SessionID, ResourceID: attempt.ResourceID,
-	}); err != nil {
-		return nil, fmt.Errorf("finalize candidate: session resource: %w", err)
-	}
-	actionID := uuid.NewString()
-	if err := q.CreateApplyAction(ctx, db.CreateApplyActionParams{
-		ID: actionID, ApplyID: attempt.ApplyID, ResourceID: attempt.ResourceID, Action: "commit", StartedAt: timestamp,
-	}); err != nil {
-		return nil, fmt.Errorf("finalize candidate: apply action: %w", err)
-	}
-	var rejectionReason *string
-	if !input.Accepted && input.Reason != "" {
-		rejectionReason = &input.Reason
-	}
-	if err := q.UpdateApplyAction(ctx, db.UpdateApplyActionParams{
-		Outcome: &actionOutcome, Error: rejectionReason, DoneAt: &timestamp, ID: actionID,
-	}); err != nil {
-		return nil, fmt.Errorf("finalize candidate: finish apply action: %w", err)
-	}
-	if err := q.CreateExecutionGeneration(ctx, db.CreateExecutionGenerationParams{
-		ID: uuid.NewString(), ApplyID: stringPtr(attempt.ApplyID), ResourceID: attempt.ResourceID,
-		PromptHash: manifest.ContextHash, Model: manifest.Model, Outcome: &disposition,
-		RejectionReason: rejectionReason, RetryCount: attempt.RetryNumber - 1,
-		DurationMs: &input.DurationMS, InputTokens: &input.InputTokens, OutputTokens: &input.OutputTokens,
-		CostUsd: &input.CostUSD, CreatedAt: timestamp, ExecutionID: &manifest.ID,
-	}); err != nil {
-		return nil, fmt.Errorf("finalize candidate: generation projection: %w", err)
-	}
-	if err := createExecutionEvent(ctx, q, manifest.ID, manifest.Status, string(toStatus), "candidate_"+disposition, input.Details, timestamp); err != nil {
-		return nil, fmt.Errorf("finalize candidate: event: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("finalize candidate: commit: %w", err)
-	}
-	return s.GetExecutionManifest(ctx, manifest.ID)
-}
-
-func validateAcceptedFiles(candidateFiles []db.CandidateFile, files []GeneratedFile, resourceID string) error {
-	if len(candidateFiles) != len(files) {
-		return fmt.Errorf("finalize candidate: accepted file set differs from immutable candidate")
-	}
-	accepted := make(map[string]GeneratedFile, len(files))
-	for _, file := range files {
-		if file.ResourceID != resourceID {
-			return fmt.Errorf("finalize candidate: file %s has wrong resource owner", file.Path)
-		}
-		accepted[file.Path] = file
-	}
-	for _, candidate := range candidateFiles {
-		file, ok := accepted[candidate.Path]
-		if !ok || file.ContentHash != candidate.ContentHash {
-			return fmt.Errorf("finalize candidate: accepted file %s differs from immutable candidate", candidate.Path)
-		}
+	if changed != 1 {
+		return fmt.Errorf("candidate %s is not submitted", candidate.ID)
 	}
 	return nil
 }

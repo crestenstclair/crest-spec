@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -283,7 +285,13 @@ func (s *Service) Goal(ctx context.Context, projectName, goalID string) (*GoalDe
 		}
 		result.Acceptance = append(result.Acceptance, view)
 	}
-	facts, _ := s.store.GetVerificationCompletionFacts(ctx, projectName)
+	facts, err := s.store.GetVerificationCompletionFacts(ctx, projectName)
+	if err != nil {
+		if !errors.Is(err, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("load verification completion facts for project %q: %w", projectName, err)
+		}
+		facts = nil
+	}
 	for _, declaration := range intent.Evidence {
 		if !evidenceUsedByScenarios(declaration.ID, result.Acceptance) {
 			continue
@@ -467,11 +475,19 @@ func (s *Service) Resource(ctx context.Context, projectName, resourceID string) 
 			Status: attempt.Status, CreatedAt: attempt.CreatedAt,
 			Links: []Link{link("attempt", "attempt", attempt.ID, "/api/v1/attempts/"+attempt.ID)},
 		}
-		if manifest, getErr := s.store.GetContextManifestByAttempt(ctx, attempt.ID); getErr == nil {
+		manifest, getErr := s.store.GetContextManifestByAttempt(ctx, attempt.ID)
+		if getErr != nil && !errors.Is(getErr, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("load context manifest for attempt %q: %w", attempt.ID, getErr)
+		}
+		if getErr == nil {
 			ref.ContextManifestID = manifest.ID
 			ref.Links = append(ref.Links, link("context", "context", manifest.ID, "/api/v1/contexts/"+manifest.ID))
 		}
-		if execution, getErr := s.store.GetExecutionManifestByAttempt(ctx, attempt.ID); getErr == nil {
+		execution, getErr := s.store.GetExecutionManifestByAttempt(ctx, attempt.ID)
+		if getErr != nil && !errors.Is(getErr, cserrors.ErrNotFound) {
+			return nil, fmt.Errorf("load execution manifest for attempt %q: %w", attempt.ID, getErr)
+		}
+		if getErr == nil {
 			ref.ExecutionID = execution.ID
 			ref.Links = append(ref.Links, link("execution", "execution", execution.ID, "/api/v1/executions/"+execution.ID))
 		}

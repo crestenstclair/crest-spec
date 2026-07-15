@@ -516,7 +516,12 @@ func TestVerifyWaveToolForwardsArgs(t *testing.T) {
 func TestVerifyToolAcceptsOnlyDeclaredWitnessReferences(t *testing.T) {
 	fake := &fakeSpec{}
 	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
-	result := srv.toolFns["spec/verify"](context.Background(), json.RawMessage(`{"witness_id":"witness.signal","check_id":"check-1","session_id":"session-1","real_observation":{"forged":true}}`))
+	forged := srv.toolFns["spec/verify"](context.Background(), json.RawMessage(`{"witness_id":"witness.signal","check_id":"check-1","session_id":"session-1","real_observation":{"forged":true}}`))
+	require.True(t, forged.IsError)
+	assert.Contains(t, forged.Content[0].Text, `unknown field "real_observation"`)
+	assert.Empty(t, fake.lastWitnessID, "rejected arguments must not reach the verifier")
+
+	result := srv.toolFns["spec/verify"](context.Background(), json.RawMessage(`{"witness_id":"witness.signal","check_id":"check-1","session_id":"session-1"}`))
 	require.False(t, result.IsError)
 	assert.Equal(t, "witness.signal", fake.lastWitnessID)
 	assert.Equal(t, "check-1", fake.lastWitnessCheckID)

@@ -34,7 +34,11 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 			if strings.Contains(f.Path, "_test") || strings.Contains(f.Path, "test_") {
 				continue
 			}
-			data, err := s.fs.ReadFile(s.projectFilePath(f.Path))
+			path, err := s.projectFilePath(f.Path)
+			if err != nil {
+				continue
+			}
+			data, err := s.fs.ReadFile(path)
 			if err != nil {
 				continue
 			}
@@ -89,7 +93,11 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 	if len(committed) > 0 {
 		existing := make(map[string]string, len(committed))
 		for _, f := range committed {
-			data, err := s.fs.ReadFile(s.projectFilePath(f.Path))
+			path, err := s.projectFilePath(f.Path)
+			if err != nil {
+				continue
+			}
+			data, err := s.fs.ReadFile(path)
 			if err != nil {
 				continue
 			}
