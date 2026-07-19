@@ -106,6 +106,22 @@ type AttemptHandoff struct {
 	AcceptedAt      *string
 }
 
+type BehavioralWitnessRepairCycle struct {
+	ID                   string
+	SessionID            string
+	ResourceID           string
+	ValidationRunID      string
+	DefinitionSnapshotID string
+	DefinitionHash       string
+	SourceKind           string
+	SourceHash           string
+	RetryNumber          int64
+	MaxRetries           int64
+	Disposition          string
+	Reason               string
+	CreatedAt            string
+}
+
 type CandidateFile struct {
 	ID          string
 	CandidateID string
@@ -124,15 +140,28 @@ type CandidateFileAcceptance struct {
 	AcceptedAt      string
 }
 
+type CandidateReuse struct {
+	ID                     string
+	SessionID              string
+	ResourceID             string
+	SourceCandidateID      string
+	CandidateHash          string
+	GenerationInputHash    string
+	DependencyContractHash string
+	ReusedAt               string
+}
+
 type CandidateSet struct {
-	ID                string
-	ExecutionID       string
-	AttemptID         string
-	CandidateHash     string
-	Status            string
-	DispositionReason string
-	CreatedAt         string
-	DisposedAt        *string
+	ID                     string
+	ExecutionID            string
+	AttemptID              string
+	CandidateHash          string
+	Status                 string
+	DispositionReason      string
+	CreatedAt              string
+	DisposedAt             *string
+	GenerationInputHash    string
+	DependencyContractHash string
 }
 
 type CapabilityGoal struct {
@@ -170,6 +199,17 @@ type ContentBlob struct {
 	Content   []byte
 	ByteSize  int64
 	CreatedAt string
+}
+
+type ContextBatch struct {
+	ID          string
+	SessionID   string
+	WaveIndex   int64
+	Status      string
+	StartedAt   string
+	CompletedAt string
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type ContextManifest struct {
@@ -223,6 +263,25 @@ type Design struct {
 	ContractJson string
 	CreatedAt    string
 	UpdatedAt    string
+}
+
+type DispatchLifecycle struct {
+	ID                    string
+	SessionID             string
+	ResourceID            string
+	AttemptID             *string
+	HostSessionID         string
+	WorkerID              string
+	DispatchRequestedAt   string
+	WorkerAcknowledgedAt  string
+	ContextRequestedAt    string
+	ContextPreparedAt     string
+	ExecutionRegisteredAt string
+	CandidateSubmittedAt  string
+	CandidateAcceptedAt   string
+	CandidateRejectedAt   string
+	CreatedAt             string
+	UpdatedAt             string
 }
 
 type EvaluationAssignment struct {
@@ -729,13 +788,18 @@ type RequirementGoal struct {
 }
 
 type Resource struct {
-	ID              string
-	Kind            string
-	ContextName     *string
-	DeclarationHash string
-	EffectiveHash   string
-	Model           *string
-	SettledAt       string
+	ID                       string
+	Kind                     string
+	ContextName              *string
+	DeclarationHash          string
+	EffectiveHash            string
+	Model                    *string
+	SettledAt                string
+	GenerationInputHash      string
+	ExportedContractHash     string
+	DependencyContractHash   string
+	CodeDeclarationHash      string
+	VerificationContractHash string
 }
 
 type ResourceAssetProfile struct {
@@ -803,18 +867,21 @@ type ResourceCapabilityContribution struct {
 }
 
 type SessionResource struct {
-	SessionID    string
-	ResourceID   string
-	State        string
-	WaveIndex    int64
-	Attempts     int64
-	MaxRetries   int64
-	LastError    *string
-	LastOutput   *string
-	JobID        *string
-	UpdatedAt    string
-	Phase        string
-	DispatchedAt string
+	SessionID           string
+	ResourceID          string
+	State               string
+	WaveIndex           int64
+	Attempts            int64
+	MaxRetries          int64
+	LastError           *string
+	LastOutput          *string
+	JobID               *string
+	UpdatedAt           string
+	Phase               string
+	DispatchedAt        string
+	ExecutionStrategy   string
+	SourceCandidateID   *string
+	ExhaustionFailureID *string
 }
 
 type Task struct {
@@ -952,4 +1019,30 @@ type VerificationEvidenceRecord struct {
 	Currency       string
 	CreatedAt      string
 	InvalidatedAt  *string
+}
+
+type WorkspaceCommitJournal struct {
+	ID          string
+	ExecutionID string
+	CandidateID *string
+	ProjectRoot string
+	Status      string
+	Resolution  string
+	CreatedAt   string
+	UpdatedAt   string
+	ResolvedAt  *string
+}
+
+type WorkspaceCommitJournalFile struct {
+	JournalID            string
+	Path                 string
+	OriginalExists       int64
+	OriginalContentBlob  *string
+	OriginalContentHash  string
+	OriginalMode         int64
+	CandidateContentBlob string
+	CandidateContentHash string
+	CandidateMode        int64
+	WriteIntent          string
+	Ordinal              int64
 }

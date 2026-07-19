@@ -47,7 +47,7 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "With no arguments, starts the MCP server on stdio.")
 			fmt.Fprintln(os.Stderr, "Generation is driven by an agent host via MCP — use init for Codex, Claude Code, or OpenCode.")
-			fmt.Fprintln(os.Stderr, "Or connect via MCP: spec/begin → spec/next → spec/context → spec/commit → spec/finish")
+			fmt.Fprintln(os.Stderr, "Or connect via MCP: spec/begin → spec/context_batch(limit=idle) → dispatch_requested → worker_acknowledged → spec/execution_start → spec/commit → spec/verify_wave → spec/finish")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "Commands:")
 			fmt.Fprintln(os.Stderr, "  init [--agent name] [--force]  bootstrap agent-host integration files")

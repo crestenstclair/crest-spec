@@ -88,8 +88,7 @@ func completeEvaluationAttempt(t *testing.T, st *Store, claim *EvaluationAssignm
 	manifest.SelectorVersion = claim.Configuration.ContextSelectorVersion
 	manifest.BudgetTokens = claim.Configuration.ContextBudgetTokens
 	manifest.TemplateHashes = claim.Configuration.TemplateHashes
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest, Dispatch: true})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, manifest)
 	executionInput := testExecutionManifest()
 	executionInput.AttemptID = attemptID
 	executionInput.ContextManifestID = manifestID
@@ -107,6 +106,11 @@ func completeEvaluationAttempt(t *testing.T, st *Store, claim *EvaluationAssignm
 		Reason: "controlled evaluation completed", DurationMS: 10, InputTokens: 20, OutputTokens: 10,
 	})
 	require.NoError(t, err)
+	// Evaluation variants are independent governed attempts over the same
+	// fixture resource. Release the synthetic session resource between cases.
+	require.NoError(t, st.UpdateSessionResourceState(
+		"session-1", claim.Case.ResourceID, "pending", "", "", ordinal+1, "",
+	))
 	return attemptID
 }
 

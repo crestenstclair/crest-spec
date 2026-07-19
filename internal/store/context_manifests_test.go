@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +17,6 @@ func TestContextManifestRoundTripDeduplicatesContentAndLinksRetries(t *testing.T
 
 	first, err := st.CreateContextManifest(ctx, ContextManifestWrite{
 		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"),
-		Dispatch: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Attempt.RetryNumber)
@@ -23,11 +24,12 @@ func TestContextManifestRoundTripDeduplicatesContentAndLinksRetries(t *testing.T
 
 	resourceState, err := st.GetSessionResource("session-1", "resource.synth")
 	require.NoError(t, err)
-	require.Equal(t, "dispatched", resourceState.State)
-	require.Equal(t, "queued", resourceState.Phase)
+	require.Equal(t, "pending", resourceState.State)
+	require.Empty(t, resourceState.JobID)
 
+	require.NoError(t, st.UpdateSessionResourceState("session-1", "resource.synth", "rejected", "retry", "", 1, ""))
 	secondInput := testContextManifest("attempt-2", "manifest-2", "resource.synth")
-	second, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: secondInput, Dispatch: true})
+	second, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: secondInput})
 	require.NoError(t, err)
 	require.Equal(t, 2, second.Attempt.RetryNumber)
 	require.Equal(t, "attempt-1", second.Attempt.ParentAttemptID)
@@ -53,6 +55,65 @@ func TestContextManifestRoundTripDeduplicatesContentAndLinksRetries(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, attempts, 2)
 	require.Equal(t, "context_prepared", attempts[0].Status)
+}
+
+func TestConcurrentContextManifestPreparationNeverClaimsResource(t *testing.T) {
+	st := newContextManifestStore(t, "resource.concurrent")
+	st.sqlDB.SetMaxOpenConns(1)
+	ctx := context.Background()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+
+	for index := 1; index <= 2; index++ {
+		index := index
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
+				Manifest: testContextManifest(
+					fmt.Sprintf("attempt-%d", index),
+					fmt.Sprintf("manifest-%d", index),
+					"resource.concurrent",
+				),
+			})
+			results <- err
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	require.Equal(t, 2, successes)
+	attempts, err := st.ListGenerationAttemptsBySession(ctx, "session-1")
+	require.NoError(t, err)
+	require.Len(t, attempts, 2)
+	resourceState, err := st.GetSessionResource("session-1", "resource.concurrent")
+	require.NoError(t, err)
+	require.Equal(t, "pending", resourceState.State)
+	require.Empty(t, resourceState.JobID)
+}
+
+func TestContextManifestRejectsLegacyPrepareAndClaimTransition(t *testing.T) {
+	st := newContextManifestStore(t, "resource.legacy-claim")
+	_, err := st.CreateContextManifest(context.Background(), ContextManifestWrite{
+		Manifest: testContextManifest("attempt-legacy", "manifest-legacy", "resource.legacy-claim"),
+		Dispatch: true,
+	})
+	require.ErrorContains(t, err, "preparation cannot claim a resource")
+	resource, err := st.GetSessionResource("session-1", "resource.legacy-claim")
+	require.NoError(t, err)
+	require.Equal(t, "pending", resource.State)
+	require.Empty(t, resource.JobID)
 }
 
 func TestContextManifestBlockedAttemptDoesNotDispatch(t *testing.T) {
@@ -84,7 +145,7 @@ func TestContextManifestCreationIsAtomic(t *testing.T) {
 	duplicate.ID = "section-duplicate"
 	manifest.Sections = append(manifest.Sections, duplicate)
 
-	_, err := st.CreateContextManifest(context.Background(), ContextManifestWrite{Manifest: manifest, Dispatch: true})
+	_, err := st.CreateContextManifest(context.Background(), ContextManifestWrite{Manifest: manifest})
 	require.ErrorContains(t, err, "UNIQUE constraint failed: context_sections.manifest_id, context_sections.ordinal")
 
 	attempts, err := st.ListGenerationAttemptsBySession(context.Background(), "session-1")
@@ -101,7 +162,7 @@ func TestContextManifestCreationIsAtomic(t *testing.T) {
 func TestVacuumReleasesUnreferencedContextSnapshots(t *testing.T) {
 	st := newContextManifestStore(t, "resource.vacuum")
 	_, err := st.CreateContextManifest(context.Background(), ContextManifestWrite{
-		Manifest: testContextManifest("attempt-vacuum", "manifest-vacuum", "resource.vacuum"), Dispatch: true,
+		Manifest: testContextManifest("attempt-vacuum", "manifest-vacuum", "resource.vacuum"),
 	})
 	require.NoError(t, err)
 
@@ -119,11 +180,12 @@ func TestVacuumRetainsOldAttemptThatIsAncestorOfRetainedRetry(t *testing.T) {
 	st := newContextManifestStore(t, "resource.ancestry")
 	ctx := context.Background()
 	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-old", "manifest-old", "resource.ancestry"), Dispatch: true,
+		Manifest: testContextManifest("attempt-old", "manifest-old", "resource.ancestry"),
 	})
 	require.NoError(t, err)
+	require.NoError(t, st.UpdateSessionResourceState("session-1", "resource.ancestry", "rejected", "retry", "", 1, ""))
 	_, err = st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-future", "manifest-future", "resource.ancestry"), Dispatch: true,
+		Manifest: testContextManifest("attempt-future", "manifest-future", "resource.ancestry"),
 	})
 	require.NoError(t, err)
 	_, err = st.sqlDB.Exec("UPDATE generation_attempts SET created_at = ? WHERE id = ?", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), "attempt-future")

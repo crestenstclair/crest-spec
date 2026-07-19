@@ -20,6 +20,7 @@ func TestNew_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.HTTPAddr)
 	assert.Empty(t, cfg.TypeCheckCommand)
 	assert.Empty(t, cfg.TestCommand)
+	assert.Equal(t, 2*time.Minute, cfg.DispatchTimeout)
 	assert.Equal(t, 30*time.Minute, cfg.ExecutionTimeout)
 }
 
@@ -27,6 +28,7 @@ func TestNew_EnvOverrides(t *testing.T) {
 	t.Setenv("CREST_SPEC_GENERATE_MODEL", "claude-opus-4-8")
 	t.Setenv("CREST_SPEC_MAX_RETRIES", "5")
 	t.Setenv("CREST_SPEC_SPEC_DIR", "/tmp/specs")
+	t.Setenv("CREST_SPEC_DISPATCH_TIMEOUT", "90s")
 	t.Setenv("CREST_SPEC_EXECUTION_TIMEOUT", "45m")
 
 	cfg, err := New()
@@ -35,5 +37,12 @@ func TestNew_EnvOverrides(t *testing.T) {
 	assert.Equal(t, "claude-opus-4-8", cfg.GenerateModel)
 	assert.Equal(t, 5, cfg.MaxRetries)
 	assert.Equal(t, "/tmp/specs", cfg.SpecDir)
+	assert.Equal(t, 90*time.Second, cfg.DispatchTimeout)
 	assert.Equal(t, 45*time.Minute, cfg.ExecutionTimeout)
+}
+
+func TestEffectiveDispatchTimeout_ZeroValueFallsBackSafely(t *testing.T) {
+	assert.Equal(t, 2*time.Minute, (&Config{}).EffectiveDispatchTimeout())
+	assert.Equal(t, 2*time.Minute, (*Config)(nil).EffectiveDispatchTimeout())
+	assert.Equal(t, 15*time.Second, (&Config{DispatchTimeout: 15 * time.Second}).EffectiveDispatchTimeout())
 }

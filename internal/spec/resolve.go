@@ -17,19 +17,46 @@ func (s *Spec) Resolve(ctx context.Context, sessionID, resourceID, answer string
 	if err != nil {
 		return fmt.Errorf("get session: %w", err)
 	}
+	if sess.Status != "active" {
+		return fmt.Errorf("resolve resource: session %s is %s", sessionID, sess.Status)
+	}
+
+	sr, err := s.store.GetSessionResource(sessionID, resourceID)
+	if err != nil {
+		return fmt.Errorf("resolve resource: %w", err)
+	}
+	state := ResourceState(sr.State)
+	switch {
+	case state == StateCommitted:
+		return fmt.Errorf("resolve resource: %s is committed; only an engine-authorized validation owner repair may reopen it", resourceID)
+	case state == StatePending || state.NeedsResolution():
+		// Normal guidance/retry states.
+	default:
+		return fmt.Errorf("resolve resource: %s is not resolvable from state %s", resourceID, state)
+	}
 
 	if err := s.store.SetNote(resourceID, sess.ApplyID, answer); err != nil {
 		return fmt.Errorf("set note: %w", err)
 	}
 
 	if model != "" {
-		s.store.SetNote(resourceID+"#model", sess.ApplyID, model)
+		if err := s.store.SetNote(resourceID+"#model", sess.ApplyID, model); err != nil {
+			return fmt.Errorf("set model note: %w", err)
+		}
 	}
 
-	// Transition resource back to pending for re-dispatch
-	sr, _ := s.store.GetSessionResource(sessionID, resourceID)
-	if sr != nil {
-		s.store.UpdateSessionResourceState(sessionID, resourceID, "pending", "", "", sr.Attempts, "")
+	// Transition resource back to pending for re-dispatch. The concrete store
+	// also resolves an exactly linked, handoffless affected-closure exhaustion
+	// classification in the same transaction, so hosts need one triage action.
+	type linkedExhaustionResolver interface {
+		ResolveSessionResource(context.Context, string, string, string) error
+	}
+	if resolver, ok := s.store.(linkedExhaustionResolver); ok {
+		if err := resolver.ResolveSessionResource(ctx, sessionID, resourceID, answer); err != nil {
+			return fmt.Errorf("reopen resource: %w", err)
+		}
+	} else if err := s.store.UpdateSessionResourceState(sessionID, resourceID, "pending", "", "", sr.Attempts, ""); err != nil {
+		return fmt.Errorf("reopen resource: %w", err)
 	}
 
 	return nil
@@ -66,13 +93,18 @@ func (s *Spec) Amend(ctx context.Context, sessionID, resourceID string) error {
 	newEffectiveHash := planResult.Hashes[resourceID]
 
 	if err := s.store.SetResource(store.Resource{
-		ID:              resourceID,
-		Kind:            resource.Kind,
-		ContextName:     resource.ContextName,
-		DeclarationHash: newDeclHash,
-		EffectiveHash:   newEffectiveHash,
-		Model:           s.cfg.GenerateModel,
-		SettledAt:       time.Now().UTC(),
+		ID:                       resourceID,
+		Kind:                     resource.Kind,
+		ContextName:              resource.ContextName,
+		DeclarationHash:          newDeclHash,
+		EffectiveHash:            newEffectiveHash,
+		CodeDeclarationHash:      planResult.CodeDeclarationHashes[resourceID],
+		VerificationContractHash: planResult.VerificationContractHashes[resourceID],
+		GenerationInputHash:      planResult.GenerationInputHashes[resourceID],
+		ExportedContractHash:     planResult.ExportedContractHashes[resourceID],
+		DependencyContractHash:   planResult.DependencyContractHashes[resourceID],
+		Model:                    s.cfg.GenerateModel,
+		SettledAt:                time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("update resource hash: %w", err)
 	}

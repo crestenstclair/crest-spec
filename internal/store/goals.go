@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/crestenstclair/crest-spec/internal/db"
+	"github.com/google/uuid"
 )
 
 // ProjectIntentSnapshot is the normalized, specification-derived project
@@ -347,6 +348,25 @@ func reconcileVerificationDefinitions(ctx context.Context, q *db.Queries, snapsh
 			}); err != nil {
 				return fmt.Errorf("link %s to %s %s: %w", definition.DefinitionID, target.Kind, target.ID, err)
 			}
+		}
+	}
+	staleEvidence, err := q.MarkEvidenceWithoutActiveVerificationContractStale(
+		ctx,
+		db.MarkEvidenceWithoutActiveVerificationContractStaleParams{
+			InvalidatedAt: &timestamp,
+			ProjectName:   snapshot.ProjectName,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("invalidate evidence without an active verification contract: %w", err)
+	}
+	for _, record := range staleEvidence {
+		if err := q.PutVerificationEvidenceInvalidation(ctx, db.PutVerificationEvidenceInvalidationParams{
+			ID: uuid.NewString(), EvidenceRecordID: record.ID,
+			Reason:     "verification definition or evidence target changed or was removed",
+			SourceType: "project_intent", SourceID: snapshot.SpecHash, CreatedAt: timestamp,
+		}); err != nil {
+			return fmt.Errorf("record definition-change evidence invalidation: %w", err)
 		}
 	}
 	return nil

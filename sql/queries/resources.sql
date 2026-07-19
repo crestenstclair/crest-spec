@@ -6,13 +6,22 @@ SELECT * FROM resources WHERE id = ?;
 SELECT * FROM resources ORDER BY id;
 
 -- name: SetResource :exec
-INSERT INTO resources (id, kind, context_name, declaration_hash, effective_hash, model, settled_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO resources (
+    id, kind, context_name, declaration_hash, effective_hash,
+    generation_input_hash, exported_contract_hash, dependency_contract_hash,
+    code_declaration_hash, verification_contract_hash, model, settled_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     kind = excluded.kind,
     context_name = excluded.context_name,
     declaration_hash = excluded.declaration_hash,
     effective_hash = excluded.effective_hash,
+    generation_input_hash = excluded.generation_input_hash,
+    exported_contract_hash = excluded.exported_contract_hash,
+    dependency_contract_hash = excluded.dependency_contract_hash,
+    code_declaration_hash = excluded.code_declaration_hash,
+    verification_contract_hash = excluded.verification_contract_hash,
     model = excluded.model,
     settled_at = excluded.settled_at;
 

@@ -26,8 +26,13 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 	require.NoError(t, st.CreateApply("apply-dashboard", "spec-hash"))
 	require.NoError(t, st.CreateSession(store.Session{ID: "session-dashboard", ApplyID: "apply-dashboard", PlanJSON: "[]", WavesJSON: "[]", HashesJSON: "{}"}))
 	require.NoError(t, st.UpsertSessionResource(store.SessionResource{SessionID: "session-dashboard", ResourceID: "resource.dashboard", State: "pending", MaxRetries: 3}))
-	manifest, err := st.CreateContextManifest(context.Background(), store.ContextManifestWrite{
-		Dispatch: true,
+	ctx := context.Background()
+	lifecycle, err := st.RequestContext(ctx, store.DispatchRequest{
+		SessionID: "session-dashboard", ResourceID: "resource.dashboard",
+	})
+	require.NoError(t, err)
+	manifest, err := st.CreateContextManifest(ctx, store.ContextManifestWrite{
+		DispatchLifecycleID: lifecycle.ID,
 		Manifest: store.ContextManifest{
 			ID: "manifest-dashboard",
 			Attempt: store.GenerationAttempt{
@@ -48,18 +53,29 @@ func TestDashboardContextInspectorAPIsUseCanonicalStore(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	executionManifest, err := st.StartExecution(context.Background(), store.ExecutionManifest{
+	lifecycle, err = st.RequestDispatch(ctx, store.DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-dashboard", ResourceID: "resource.dashboard",
+		HostSessionID: "dashboard-host-session", WorkerID: "dashboard-worker",
+	})
+	require.NoError(t, err)
+	_, err = st.AcknowledgeDispatch(ctx, store.DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-dashboard", ResourceID: "resource.dashboard",
+		HostSessionID: "dashboard-host-session", WorkerID: "dashboard-worker",
+	})
+	require.NoError(t, err)
+	executionManifest, err := st.StartExecution(ctx, store.ExecutionManifest{
 		AttemptID: "attempt-dashboard", ContextManifestID: "manifest-dashboard",
 		ProtocolVersion: executionpkg.ProtocolVersion, IdempotencyKey: "dashboard-request",
 		PlanOperationID: "operation-dashboard", Role: "resource_implementer",
 		RolePolicyVersion: executionpkg.RolePolicyVersion, ContextPolicy: "resource-implementation-v1",
 		HostName: "dashboard-host", Provider: "test", Model: "test-model",
+		HostSessionID:      "dashboard-host-session",
 		TemplateHashes:     map[string]string{"system": "template-hash"},
 		SystemInstructions: "system snapshot", ContextHash: manifest.ContextHash,
 		Tools: []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
 	})
 	require.NoError(t, err)
-	_, err = st.SubmitCandidate(context.Background(), executionManifest.ID, []store.CandidateFile{{
+	_, err = st.SubmitCandidate(ctx, executionManifest.ID, []store.CandidateFile{{
 		Path: "src/dashboard.go", Content: "package dashboard\n", WriteIntent: "create",
 	}})
 	require.NoError(t, err)

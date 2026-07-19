@@ -53,9 +53,14 @@ func (f *FlexInvariants) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	var result []Invariant
-	for _, group := range m {
-		result = append(result, group...)
+	for _, key := range keys {
+		result = append(result, m[key]...)
 	}
 	*f = result
 	return nil
@@ -427,20 +432,34 @@ type Validation struct {
 // commands are run by crest-spec and parsed through the same observation
 // contract; callers cannot supply the observations accepted as evidence.
 type Witness struct {
-	ID               string                 `json:"id,omitempty"`
-	Scope            string                 `json:"scope"`
-	Goal             string                 `json:"goal,omitempty"`
-	Capability       string                 `json:"capability,omitempty"`
-	Resources        []string               `json:"resources,omitempty"`
-	Evidence         []string               `json:"evidence,omitempty"`
-	Command          []string               `json:"command"`
-	NegativeCommand  []string               `json:"negativeCommand"`
-	WorkingDirectory string                 `json:"workingDirectory,omitempty"`
-	Timeout          string                 `json:"timeout,omitempty"`
-	Environment      []string               `json:"environment,omitempty"`
-	Artifacts        []string               `json:"artifacts,omitempty"`
-	Observation      ObservationDeclaration `json:"observation"`
-	Predicates       []WitnessPredicate     `json:"predicates"`
+	ID         string   `json:"id,omitempty"`
+	Scope      string   `json:"scope"`
+	Goal       string   `json:"goal,omitempty"`
+	Capability string   `json:"capability,omitempty"`
+	Resources  []string `json:"resources,omitempty"`
+	// RepairResources is the explicit subset of observed Resources that a
+	// failed (not malformed/theater) witness authorizes CrestSpec to reopen in
+	// an active session. Keeping observation targets and repair ownership
+	// separate prevents broad witnesses from speculatively regenerating every
+	// resource they inspect.
+	RepairResources []string `json:"repairResources,omitempty"`
+	// CounterexampleRepairResources is the opt-in subset of RepairResources
+	// that owns the controlled negative harness. A negative command that exits
+	// unexpectedly or fails to falsify the behavior may route only these
+	// owners; it is never evidence that production owners should be reopened.
+	CounterexampleRepairResources []string `json:"counterexampleRepairResources,omitempty"`
+	Evidence                      []string `json:"evidence,omitempty"`
+	Command                       []string `json:"command"`
+	NegativeCommand               []string `json:"negativeCommand"`
+	// NegativeExpectedExitCode declares the intentional process status for the
+	// controlled counterexample. Zero preserves the default command contract.
+	NegativeExpectedExitCode int                    `json:"negativeExpectedExitCode,omitempty"`
+	WorkingDirectory         string                 `json:"workingDirectory,omitempty"`
+	Timeout                  string                 `json:"timeout,omitempty"`
+	Environment              []string               `json:"environment,omitempty"`
+	Artifacts                []string               `json:"artifacts,omitempty"`
+	Observation              ObservationDeclaration `json:"observation"`
+	Predicates               []WitnessPredicate     `json:"predicates"`
 }
 
 type ObservationDeclaration struct {
@@ -456,6 +475,9 @@ type WitnessPredicate struct {
 	Min    *float64 `json:"min,omitempty"`
 	Max    *float64 `json:"max,omitempty"`
 	Member any      `json:"member,omitempty"`
+	// RepairResources opts this predicate into exact positive-failure routing.
+	// Every owner must also be in the witness-wide RepairResources set.
+	RepairResources []string `json:"repairResources,omitempty"`
 }
 
 type Assertion struct {

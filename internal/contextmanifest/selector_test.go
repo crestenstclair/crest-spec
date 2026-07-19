@@ -63,6 +63,48 @@ func TestSelectRecordsUnavailableAndDuplicateSources(t *testing.T) {
 	require.Contains(t, result.Sections[3].Reason, "duplicate content hash")
 }
 
+func TestSelectIncludesMandatorySourcesEvenWhenTheirContentMatches(t *testing.T) {
+	content := "package audio\n"
+	result := Select([]Candidate{
+		{
+			Kind: "owned_code", Title: "Primary implementation", SourceKind: "repository_file",
+			SourceID: "resource.audio:src/audio.go", Content: content, Priority: PriorityCode,
+			Mandatory: true, InclusionReason: "complete owned implementation",
+		},
+		{
+			Kind: "owned_code", Title: "Module implementation", SourceKind: "repository_file",
+			SourceID: "resource.audio:src/mod.go", Content: content, Priority: PriorityCode,
+			Mandatory: true, InclusionReason: "complete owned implementation",
+		},
+	}, MinimumBudget)
+
+	require.False(t, result.Blocked)
+	require.Len(t, result.Sections, 2)
+	require.Equal(t, Included, result.Sections[0].Decision)
+	require.Equal(t, Included, result.Sections[1].Decision)
+	require.Equal(t, content, result.Sections[0].Content)
+	require.Equal(t, content, result.Sections[1].Content)
+}
+
+func TestSelectSeparatesSourceProvenanceFromPresentationContent(t *testing.T) {
+	const (
+		raw          = "pub fn render() {}\n"
+		presentation = "UPDATE MODE\n\n```\n" + raw + "```\n"
+	)
+	result := Select([]Candidate{{
+		Kind: "owned_code", Title: "Existing file", SourceKind: "repository_file", SourceID: "src/lib.rs",
+		Content: presentation, ProvenanceHash: Hash(raw), ProvenanceBytes: len([]byte(raw)),
+		Priority: PriorityCode, Mandatory: true,
+	}}, MinimumBudget)
+
+	require.Len(t, result.Sections, 1)
+	section := result.Sections[0]
+	require.Equal(t, Hash(raw), section.OriginalHash)
+	require.Equal(t, len([]byte(raw)), section.OriginalBytes)
+	require.Equal(t, presentation, section.Content)
+	require.Equal(t, Hash(presentation), section.SelectedHash)
+}
+
 func TestNormalizeBudgetUsesStableBounds(t *testing.T) {
 	require.Equal(t, DefaultBudget, NormalizeBudget(0))
 	require.Equal(t, MinimumBudget, NormalizeBudget(1))

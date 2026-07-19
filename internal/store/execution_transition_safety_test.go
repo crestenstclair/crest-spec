@@ -12,11 +12,9 @@ func newSubmittedExecution(t *testing.T) (*Store, *ExecutionManifest, *Candidate
 	t.Helper()
 	st := newContextManifestStore(t, "resource.transition-safety")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.transition-safety"),
-		Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(
+		t, st, testContextManifest("attempt-1", "manifest-1", "resource.transition-safety"),
+	)
 	started, err := st.StartExecution(ctx, testExecutionManifest())
 	require.NoError(t, err)
 	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{

@@ -39,12 +39,35 @@ distinct_count, differ, set_contains) require a JSON ARRAY field.
 Tasks agents run in parallel across resources.
 
 ### Stage 3 — Generate (wave loop)
-The existing generation loop:
-- `spec_next` returns the next wave of resources (dependency order)
-- One role-specific agent per resource calls
-  `spec_context → spec_execution_start → generate files → spec_commit(attempt_id)`
-  with internal retry on rejection (up to maxRetries)
-- Generator agents within a wave run in parallel
+The workflow creates a bounded pool (default `maxWorkers=4`) of autonomous,
+role-specific generator workers for each generation pass. A worker keeps one
+stable logical `worker_id`, repeatedly pulls one immediately runnable context
+with `spec/context_batch(limit=1)`, and processes multiple resources
+sequentially before it returns. Pool slots run in parallel; this is not one
+fresh agent per resource.
+
+Every unblocked assignment uses the mandatory lifecycle:
+
+`context_batch/context → dispatch_requested → worker_acknowledged → execution_start → generate → commit`
+
+The prepared context is immutable but unclaimed. `dispatch_requested` claims it
+for the stable host/worker identities before the worker follows the resource
+prompt; `worker_acknowledged` must succeed before `execution_start`. A retry
+uses `spec/context` with the parent attempt, a new `DispatchID`, and the same
+full lifecycle. A `rebuild_context` response refreshes a stale snapshot without
+consuming a model retry. A live worker that cannot reach `execution_start`
+after claiming an assignment records `dispatch_failed` with the exact
+identities and a concrete reason so the engine can atomically release it.
+
+Claude Dynamic Workflows currently expose no within-run follow-up/resume handle
+for an `agent()` after it returns. Therefore the warm unit here is one
+autonomous multi-resource agent per pool slot for a generation pass. Do not
+fake reuse by launching a new per-resource agent under the same `worker_id`.
+The workflow recreates the bounded pool only after the prior pool has drained
+and behavioral/project verification has completed. Agent launch failure occurs
+before that agent can pull or claim a context; a hard process death after a
+claim relies on CrestSpec's persisted orphan-recovery path because the workflow
+host cannot execute a callback inside a dead agent.
 
 ### Stage 4 — Verify (per check, after each wave's commits)
 After each wave's generators commit, for every committed resource the workflow
@@ -110,7 +133,7 @@ next `spec_next` call.
 1. spec_plan       — review what will change. If empty, stop.
 2. spec_begin      — returns session_id, plan, waves, PendingDestroys.
 3. spec_confirm_destroys — if PendingDestroys is non-empty, confirm first.
-4. Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>"}})
+4. Workflow({scriptPath: ".claude/workflows/spec-generate.js", args: {sessionId: "<session_id>", maxWorkers: 4}})
 5. Review triaged + unresolved lists; surface halts and skips to the user.
 6. spec_finish     — REFUSES (Blocked=true, blocking_checks listed) while any
    behavioral check is pending/failed/theater/malformed. Resolve the blockers;
@@ -122,7 +145,8 @@ next `spec_next` call.
    re-authoring pass; fix the check definitions (tasks stage), not the code.
 ```
 
-Use `args.model` to override the generation model. Never haiku.
+Use `args.model` to override the generation model and `args.maxWorkers` to
+bound the warm pool. Never haiku.
 
 ## Return value
 
@@ -140,8 +164,9 @@ Use `args.model` to override the generation model. Never haiku.
 
 ## Failure handling
 
-- Generator retries are bounded by maxRetries (default 3) inside the generator
-  agent. Every retry is a new immutable attempt with its own SQLite execution
+- Generator retries are bounded by maxRetries (default 3) inside the warm
+  generator worker. Every retry is a new immutable attempt with its own
+  dispatch lifecycle and SQLite execution
   manifest. `spec_context` selects the required role (including a routed role
   handoff), injects the prior failure (`## Previous Errors`), any
   triage guidance (`## Guidance`), AND the previous attempt's files (UPDATE
@@ -180,14 +205,18 @@ as a failure.
   `spec_commit` so the loop's feedback stays coherent. (The user's own hand
   edits to generated files are fine — once generated, the disk is theirs;
   the planner never polices content.)
-- Every generator must call `spec_execution_start` with
+- Every generator assignment must record `dispatch_requested`, then
+  `worker_acknowledged`, before calling `spec_execution_start` with
   `crest-execution-v1`, the exact context/template hashes, role, host, model,
   settings, tools, permissions, and system instructions before generating.
   `spec_commit` accepts `attempt_id`, files, and notes only; it derives all
-  other authority from canonical SQLite state.
+  other authority from canonical SQLite state. A claimed assignment that
+  cannot reach execution records `dispatch_failed`; this is host failure
+  bookkeeping, never an implementation-retry shortcut.
 - `spec_skip` is for a WRONG SPEC (quote the contradiction), never for hard
   work or non-convergence. Halts are resolved by humans, not by skipping.
-- Waves are sequential; resources within a wave run in parallel.
+- Waves are sequential; bounded warm workers run in parallel and refill from
+  the current wave until the generation pass drains.
 - Design and tasks phases run once per session (before the wave loop).
 - Behavioral checks live only in sqlite (never in .cue files) until graduated
   and manually authored into invariants by the spec-authoring skill.

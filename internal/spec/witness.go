@@ -71,13 +71,15 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 		Timeout: timeout, Environment: witness.Environment,
 	})
 	finalSourceTreeHash, finalSourceTreeHashErr := validationpkg.HashSourceTree(root)
+	realExecutionFailed := witnessExecutionFailed(realExecution, 0)
+	negativeExecutionFailed := witnessExecutionFailed(negativeExecution, witness.NegativeExpectedExitCode)
 
 	classification, reason := "", ""
 	var realObservation, negativeObservation check.Observation
 	var realParseError, negativeParseError string
-	if executionFailed(realExecution) || executionFailed(negativeExecution) {
+	if realExecutionFailed || negativeExecutionFailed {
 		classification = "failed"
-		reason = witnessExecutionFailure(realExecution, negativeExecution)
+		reason = witnessExecutionFailure(realExecution, negativeExecution, witness.NegativeExpectedExitCode)
 	} else if finalSourceTreeHashErr != nil {
 		classification = "failed"
 		reason = fmt.Sprintf("hash source tree after witness execution: %v", finalSourceTreeHashErr)
@@ -95,6 +97,7 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 
 	behavioralCheck, predicateErr := witnessCheck(witness)
 	var verdict check.Verdict
+	verdictEvaluated := false
 	if classification == "" && predicateErr != nil {
 		classification, reason = "malformed", predicateErr.Error()
 	}
@@ -103,11 +106,12 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 			classification, reason = "malformed", malformedReason
 		} else {
 			verdict = check.Verify(behavioralCheck, realObservation, negativeObservation)
+			verdictEvaluated = true
 			switch {
-			case verdict.Theater:
-				classification = "theater"
 			case verdict.Structural:
 				classification = "malformed"
+			case verdict.Theater:
+				classification = "theater"
 			case verdict.Passed:
 				classification = "passed"
 			default:
@@ -163,11 +167,151 @@ func (s *Spec) VerifyWitness(ctx context.Context, witnessID, checkID, sessionID 
 	}); err != nil {
 		return VerifyResult{}, fmt.Errorf("verify witness: project completion: %w", err)
 	}
+	if classification == "passed" {
+		if err := s.settlePassedWitnessRepairContracts(ctx, planResult, witness, sessionID, persisted.SourceTreeHash); err != nil {
+			return VerifyResult{}, err
+		}
+	}
+	repairResources := witnessRepairResourcesForOutcome(
+		witness, classification, realExecutionFailed, negativeExecutionFailed,
+		finalSourceTreeHashErr != nil, verdictEvaluated, verdict,
+		behavioralCheck, realObservation,
+	)
+	repairRouting, err := s.reopenFailedWitnessRepairResources(
+		ctx, sessionID, witness, classification, persisted.ID, reason, repairResources,
+	)
+	if err != nil {
+		return VerifyResult{}, err
+	}
+	if repairRouting == nil {
+		repairRouting = &store.BehavioralWitnessRepairRoutingResult{}
+	}
 	return VerifyResult{
 		WitnessID: witnessID, ValidationRunID: persisted.ID, Classification: classification,
-		Passed: classification == "passed", Theater: classification == "theater",
+		ReopenedResources:  repairRouting.ReopenedResources,
+		ExhaustedResources: repairRouting.ExhaustedResources,
+		RepairEpochs:       repairRouting.Epochs,
+		Passed:             classification == "passed", Theater: classification == "theater",
 		Malformed: classification == "malformed", Reason: reason,
 	}, nil
+}
+
+// reopenFailedWitnessRepairResources turns a failed accepted-tree observation
+// into narrowly declared repair work. Positive predicate failures route only
+// their opted-in owners (or the legacy witness-wide owners when no predicate
+// opts in). A controlled negative that fails to falsify may route only the
+// explicit counterexample owners. Malformed results never reopen source. A
+// missing session keeps spec/verify useful as evidence-only verification.
+func (s *Spec) reopenFailedWitnessRepairResources(
+	ctx context.Context,
+	sessionID string,
+	witness cuepkg.Witness,
+	classification string,
+	validationRunID string,
+	reason string,
+	repairResourceIDs []string,
+) (*store.BehavioralWitnessRepairRoutingResult, error) {
+	if (classification != "failed" && classification != "theater") ||
+		sessionID == "" || len(repairResourceIDs) == 0 {
+		return nil, nil
+	}
+	session, err := s.store.GetSession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("verify witness: inspect repair session: %w", err)
+	}
+	if session.Status != "active" {
+		return nil, nil
+	}
+
+	eligible := make([]string, 0, len(repairResourceIDs))
+	for _, resourceID := range repairResourceIDs {
+		resource, getErr := s.store.GetSessionResource(sessionID, resourceID)
+		if getErr != nil {
+			// A repair owner outside the changed/verification frontier is not
+			// authorization to enlarge this immutable session after Begin.
+			continue
+		}
+		if ResourceState(resource.State) == StateCommitted {
+			eligible = append(eligible, resourceID)
+		}
+	}
+	if len(eligible) == 0 {
+		return nil, nil
+	}
+	sort.Strings(eligible)
+	repairReason := fmt.Sprintf(
+		"behavioral witness %s failed in validation run %s: %s",
+		witness.ID, validationRunID, reason,
+	)
+	maxRepairRetries := 0
+	if s.cfg != nil {
+		maxRepairRetries = s.cfg.WaveMaxRetries
+	}
+	routed, err := s.store.RouteBehavioralWitnessFailure(ctx, store.BehavioralWitnessRepairRoutingInput{
+		SessionID: sessionID, ValidationRunID: validationRunID,
+		ResourceIDs: eligible, Reason: repairReason,
+		MaxRepairRetries: maxRepairRetries,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("verify witness: route declared repair resources: %w", err)
+	}
+	return routed, nil
+}
+
+// witnessRepairResourcesForOutcome keeps positive production failures and
+// controlled-negative harness failures on separate ownership paths. Process-
+// level real failures retain the witness-wide fallback because no predicate
+// observation exists. Once any predicate opts into exact routing, only owners
+// of predicates that actually failed are eligible. The negative side is
+// always opt-in: theater or an unexpected negative exit can only repair the
+// declared counterexample harness owners.
+func witnessRepairResourcesForOutcome(
+	witness cuepkg.Witness,
+	classification string,
+	realExecutionFailed, negativeExecutionFailed, sourceHashFailed bool,
+	verdictEvaluated bool,
+	verdict check.Verdict,
+	behavioralCheck check.Check,
+	realObservation check.Observation,
+) []string {
+	if classification != "failed" && classification != "theater" {
+		return nil
+	}
+	owners := make(map[string]bool)
+	add := func(resourceIDs []string) {
+		for _, resourceID := range resourceIDs {
+			owners[resourceID] = true
+		}
+	}
+
+	if realExecutionFailed || sourceHashFailed {
+		add(witness.RepairResources)
+	} else if verdictEvaluated && !verdict.RealResult.Passed {
+		predicateRoutingOptIn := false
+		for _, predicate := range witness.Predicates {
+			predicateRoutingOptIn = predicateRoutingOptIn || len(predicate.RepairResources) > 0
+		}
+		if !predicateRoutingOptIn {
+			add(witness.RepairResources)
+		} else {
+			for index, predicate := range behavioralCheck.Predicates {
+				evaluation := check.Evaluate(check.Check{Predicates: []check.Predicate{predicate}}, realObservation)
+				if !evaluation.Passed {
+					add(witness.Predicates[index].RepairResources)
+				}
+			}
+		}
+	}
+
+	if negativeExecutionFailed || (verdictEvaluated && verdict.StubResult.Passed) {
+		add(witness.CounterexampleRepairResources)
+	}
+	result := make([]string, 0, len(owners))
+	for resourceID := range owners {
+		result = append(result, resourceID)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (s *Spec) projectRoot() string {
@@ -183,23 +327,28 @@ func witnessByID(witnesses map[string]cuepkg.Witness, id string) (cuepkg.Witness
 	return cuepkg.Witness{}, false
 }
 
-func executionFailed(execution validationpkg.Execution) bool {
-	return execution.LaunchError != "" || execution.TimedOut || execution.ExitCode != 0
+func witnessExecutionFailed(execution validationpkg.Execution, expectedExitCode int) bool {
+	return execution.LaunchError != "" || execution.TimedOut || execution.ExitCode != expectedExitCode
 }
 
-func witnessExecutionFailure(real, negative validationpkg.Execution) string {
+func witnessExecutionFailure(real, negative validationpkg.Execution, negativeExpectedExitCode int) string {
 	var failures []string
 	for _, item := range []struct {
-		name string
-		run  validationpkg.Execution
-	}{{"real", real}, {"negative", negative}} {
+		name             string
+		run              validationpkg.Execution
+		expectedExitCode int
+	}{{"real", real, 0}, {"negative", negative, negativeExpectedExitCode}} {
 		switch {
 		case item.run.TimedOut:
 			failures = append(failures, item.name+" command timed out")
 		case item.run.LaunchError != "":
 			failures = append(failures, item.name+" command could not run: "+item.run.LaunchError)
-		case item.run.ExitCode != 0:
-			failures = append(failures, fmt.Sprintf("%s command exited %d", item.name, item.run.ExitCode))
+		case item.run.ExitCode != item.expectedExitCode:
+			failure := fmt.Sprintf("%s command exited %d", item.name, item.run.ExitCode)
+			if item.expectedExitCode != 0 {
+				failure += fmt.Sprintf(", expected %d", item.expectedExitCode)
+			}
+			failures = append(failures, failure)
 		}
 	}
 	return strings.Join(failures, "; ")

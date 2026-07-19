@@ -12,15 +12,17 @@ type Edge struct {
 }
 
 type Resource struct {
-	ID            string
-	Kind          string
-	ContextName   string
-	ParentID      string
-	Declaration   any
-	Meta          Meta
-	Dependencies  []Edge
-	Validations   []Validation
-	Contributions []Contribution
+	ID                       string
+	Kind                     string
+	ContextName              string
+	ParentID                 string
+	Declaration              any
+	Meta                     Meta
+	Dependencies             []Edge
+	Validations              []Validation
+	Contributions            []Contribution
+	BehavioralContractHash   string
+	VerificationContractHash string
 }
 
 type Registry struct {
@@ -85,6 +87,7 @@ func NewRegistry(project *Project) (*Registry, error) {
 	if err := reg.buildTraceability(); err != nil {
 		return nil, err
 	}
+	reg.attachBehavioralContractHashes()
 
 	return reg, nil
 }
@@ -122,7 +125,44 @@ func (reg *Registry) normalizeValidationDefinitions() error {
 		validateValidationDefinition(&errs, fmt.Sprintf("project.validations[%d]", index), definition, validResources)
 	}
 	for name, witness := range reg.Project.Witnesses {
-		validateRefs(&errs, "project.witnesses."+name+".resources", witness.Resources, validResources)
+		path := "project.witnesses." + name
+		validateRefs(&errs, path+".resources", witness.Resources, validResources)
+		validateRefs(&errs, path+".repairResources", witness.RepairResources, validResources)
+		validateRefs(&errs, path+".counterexampleRepairResources", witness.CounterexampleRepairResources, validResources)
+		observed := make(map[string]bool, len(witness.Resources))
+		for _, resourceID := range witness.Resources {
+			observed[resourceID] = true
+		}
+		repairOwners := make(map[string]bool, len(witness.RepairResources))
+		for _, resourceID := range witness.RepairResources {
+			repairOwners[resourceID] = true
+			if !observed[resourceID] {
+				errs = append(errs, fmt.Sprintf(
+					"%s.repairResources must be a subset of %s.resources; %q is not observed",
+					path, path, resourceID,
+				))
+			}
+		}
+		for _, resourceID := range witness.CounterexampleRepairResources {
+			if !observed[resourceID] || !repairOwners[resourceID] {
+				errs = append(errs, fmt.Sprintf(
+					"%s.counterexampleRepairResources must be a subset of %s.resources and %s.repairResources; %q is not an observed repair owner",
+					path, path, path, resourceID,
+				))
+			}
+		}
+		for index, predicate := range witness.Predicates {
+			predicatePath := fmt.Sprintf("%s.predicates[%d].repairResources", path, index)
+			validateRefs(&errs, predicatePath, predicate.RepairResources, validResources)
+			for _, resourceID := range predicate.RepairResources {
+				if !repairOwners[resourceID] {
+					errs = append(errs, fmt.Sprintf(
+						"%s must be a subset of %s.repairResources; %q is not a witness repair owner",
+						predicatePath, path, resourceID,
+					))
+				}
+			}
+		}
 	}
 	if len(errs) == 0 {
 		return nil

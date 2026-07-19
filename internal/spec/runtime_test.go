@@ -140,18 +140,22 @@ func TestCollectModuleFiles_RustModulesAndManifest(t *testing.T) {
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
 	fs := OSFileSystem{}
+	const (
+		manifest = "\n[package]\nname = \"x\"\n\n"
+		lib      = "\npub mod kernel;\n"
+		module   = "pub mod note_id;\n\n"
+	)
 
 	require.NoError(t, fs.MkdirAll(filepath.Join(src, "kernel"), 0o755))
-	require.NoError(t, fs.WriteFile(filepath.Join(root, "Cargo.toml"), []byte("[package]\nname = \"x\"\n"), 0o644))
-	require.NoError(t, fs.WriteFile(filepath.Join(src, "lib.rs"), []byte("pub mod kernel;\n"), 0o644))
-	require.NoError(t, fs.WriteFile(filepath.Join(src, "kernel", "mod.rs"), []byte("pub mod note_id;\n"), 0o644))
+	require.NoError(t, fs.WriteFile(filepath.Join(root, "Cargo.toml"), []byte(manifest), 0o644))
+	require.NoError(t, fs.WriteFile(filepath.Join(src, "lib.rs"), []byte(lib), 0o644))
+	require.NoError(t, fs.WriteFile(filepath.Join(src, "kernel", "mod.rs"), []byte(module), 0o644))
 
 	got := collectModuleFiles(fs, src, "rust")
 
-	require.Contains(t, got, "Cargo.toml")
-	assert.Contains(t, got["Cargo.toml"], "[package]")
-	assert.Contains(t, got, filepath.Join("src", "lib.rs"))
-	assert.Contains(t, got, filepath.Join("src", "kernel", "mod.rs"))
+	assert.Equal(t, manifest, got["Cargo.toml"], "manifest provenance must retain its exact raw bytes")
+	assert.Equal(t, lib, got[filepath.Join("src", "lib.rs")], "module provenance must retain leading whitespace")
+	assert.Equal(t, module, got[filepath.Join("src", "kernel", "mod.rs")], "module provenance must retain trailing whitespace")
 }
 
 func TestCollectModuleFiles_UnsupportedLanguage(t *testing.T) {

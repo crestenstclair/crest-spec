@@ -13,10 +13,7 @@ import (
 func TestVacuumRetainsBlobsReferencedByExecutionProvenance(t *testing.T) {
 	st := newContextManifestStore(t, "resource.vacuum-execution")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.vacuum-execution"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.vacuum-execution"))
 	executionInput := testExecutionManifest()
 	started, err := st.StartExecution(ctx, executionInput)
 	require.NoError(t, err)
@@ -48,10 +45,7 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 		Capabilities:  []IntentCapability{{ID: "capability.play", Description: "render a note", Goals: []string{"goal.play"}}},
 		RequiredGoals: []string{"goal.play"},
 	}))
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.synth"))
 
 	input := testExecutionManifest()
 	input.GoalIDs = []string{"goal.play"}
@@ -139,8 +133,8 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	retryManifest := testContextManifest("attempt-2", "manifest-2", "resource.synth")
 	retryManifest.Attempt.Role = "minimal_diff_repair"
 	retryManifest.Attempt.ParentAttemptID = "attempt-1"
-	_, err = st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: retryManifest, Dispatch: true})
-	require.NoError(t, err)
+	require.NoError(t, st.UpdateSessionResourceState("session-1", "resource.synth", "rejected", "validation failed", "", 1, ""))
+	prepareAndClaimTestContext(t, st, retryManifest)
 	require.NoError(t, st.AcceptAttemptHandoff(ctx, handoffs[0].ID, "attempt-2"))
 	handoffs, err = st.ListAttemptHandoffsBySource(ctx, "attempt-1")
 	require.NoError(t, err)
@@ -165,7 +159,7 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
 		ExecutionID: retry.ID, Accepted: true, Reason: "retry passed",
-		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "test-model"},
 		Files: []GeneratedFile{{
 			Path: "synth.go", ResourceID: "resource.synth", ContentHash: retryCandidate.Files[0].ContentHash,
 			PromptHash: retry.ContextHash, Model: "test-model",
@@ -180,17 +174,85 @@ func TestExecutionCandidateFailureAndHandoffRoundTrip(t *testing.T) {
 	require.NotNil(t, resolvedFailures[0].ResolvedAt)
 }
 
-func TestExecutionRejectsMismatchedContextAndIllegalTransitions(t *testing.T) {
-	st := newContextManifestStore(t, "resource.synth")
+func TestStartExecutionCannotOverwriteDispatchHostIdentity(t *testing.T) {
+	const resourceID = "resource.dispatch-identity"
+	st := newContextManifestStore(t, resourceID)
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
+	lifecycle, err := st.RequestContext(ctx, DispatchRequest{
+		SessionID: "session-1", ResourceID: resourceID,
+	})
+	require.NoError(t, err)
+	_, err = st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest:            testContextManifest("attempt-1", "manifest-1", resourceID),
+		DispatchLifecycleID: lifecycle.ID,
+	})
+	require.NoError(t, err)
+	lifecycle, err = st.RequestDispatch(ctx, DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-1", ResourceID: resourceID,
+		HostSessionID: "host-session-original", WorkerID: "worker-1",
+	})
+	require.NoError(t, err)
+	_, err = st.AcknowledgeDispatch(ctx, DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-1", ResourceID: resourceID,
+		HostSessionID: "host-session-original", WorkerID: "worker-1",
 	})
 	require.NoError(t, err)
 
 	input := testExecutionManifest()
-	input.ContextHash = "stale-context"
+	input.HostSessionID = "host-session-conflict"
 	_, err = st.StartExecution(ctx, input)
+	require.ErrorContains(t, err, "dispatch lifecycle identity conflicts")
+
+	got, err := st.GetDispatchLifecycle(ctx, lifecycle.ID)
+	require.NoError(t, err)
+	require.Equal(t, "host-session-original", got.HostSessionID)
+	require.Nil(t, got.ExecutionRegisteredAt)
+}
+
+func TestStartExecutionPreservesAcknowledgedDispatchHostIdentity(t *testing.T) {
+	const resourceID = "resource.dispatch-identity-preserved"
+	st := newContextManifestStore(t, resourceID)
+	ctx := context.Background()
+	lifecycle, err := st.RequestContext(ctx, DispatchRequest{
+		SessionID: "session-1", ResourceID: resourceID,
+	})
+	require.NoError(t, err)
+	_, err = st.CreateContextManifest(ctx, ContextManifestWrite{
+		Manifest:            testContextManifest("attempt-1", "manifest-1", resourceID),
+		DispatchLifecycleID: lifecycle.ID,
+	})
+	require.NoError(t, err)
+	lifecycle, err = st.RequestDispatch(ctx, DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-1", ResourceID: resourceID,
+		HostSessionID: "host-session-preserved", WorkerID: "worker-1",
+	})
+	require.NoError(t, err)
+	_, err = st.AcknowledgeDispatch(ctx, DispatchRequest{
+		ID: lifecycle.ID, SessionID: "session-1", ResourceID: resourceID,
+		HostSessionID: "host-session-preserved", WorkerID: "worker-1",
+	})
+	require.NoError(t, err)
+
+	input := testExecutionManifest()
+	input.HostSessionID = "host-session-preserved"
+	_, err = st.StartExecution(ctx, input)
+	require.NoError(t, err)
+
+	got, err := st.GetDispatchLifecycle(ctx, lifecycle.ID)
+	require.NoError(t, err)
+	require.Equal(t, "host-session-preserved", got.HostSessionID)
+	require.NotNil(t, got.WorkerAcknowledgedAt)
+	require.NotNil(t, got.ExecutionRegisteredAt)
+}
+
+func TestExecutionRejectsMismatchedContextAndIllegalTransitions(t *testing.T) {
+	st := newContextManifestStore(t, "resource.synth")
+	ctx := context.Background()
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.synth"))
+
+	input := testExecutionManifest()
+	input.ContextHash = "stale-context"
+	_, err := st.StartExecution(ctx, input)
 	require.ErrorContains(t, err, "context hash mismatch")
 
 	input = testExecutionManifest()
@@ -209,10 +271,7 @@ func TestExecutionRejectsMismatchedContextAndIllegalTransitions(t *testing.T) {
 func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.synth"))
 	started, err := st.StartExecution(ctx, testExecutionManifest())
 	require.NoError(t, err)
 	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
@@ -225,7 +284,7 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 	// A mismatched accepted hash rolls back every state projection.
 	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
 		ExecutionID: started.ID, Accepted: true,
-		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "test-model"},
 		Files:    []GeneratedFile{{Path: "synth.go", ResourceID: "resource.synth", ContentHash: "tampered"}},
 		Attempts: 1,
 	})
@@ -238,7 +297,7 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 
 	accepted, err := st.FinalizeCandidate(ctx, CandidateDisposition{
 		ExecutionID: started.ID, Accepted: true, Reason: "all validations passed",
-		Resource: &Resource{ID: "resource.synth", Kind: "asset", ContextName: "Audio", DeclarationHash: "decl", EffectiveHash: "effective", Model: "test-model"},
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", ContextName: "Audio", DeclarationHash: "decl", EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "test-model"},
 		Files: []GeneratedFile{{
 			Path: "synth.go", ResourceID: "resource.synth", ContentHash: candidate.Files[0].ContentHash,
 			PromptHash: started.ContextHash, Model: "test-model",
@@ -275,13 +334,180 @@ func TestFinalizeCandidateAtomicallyAcceptsResourceOwnershipAndGeneration(t *tes
 	require.Equal(t, "accepted", generationRows[0].Outcome)
 }
 
+func TestFinalizeCandidateMergesAcceptedFileOwnership(t *testing.T) {
+	st := newContextManifestStore(t, "resource.merge")
+	ctx := context.Background()
+	require.NoError(t, st.SetResource(Resource{
+		ID: "resource.merge", Kind: "asset", DeclarationHash: "old-decl",
+		EffectiveHash: "old-effective", Model: "old-model", SettledAt: time.Now(),
+	}))
+	require.NoError(t, st.SetGeneratedFile(GeneratedFile{
+		Path: "changed.go", ResourceID: "resource.merge", ContentHash: "old-changed",
+		PromptHash: "old-prompt", Model: "old-model", CreatedAt: time.Now(),
+	}))
+	require.NoError(t, st.SetGeneratedFile(GeneratedFile{
+		Path: "untouched.go", ResourceID: "resource.merge", ContentHash: "untouched-hash",
+		PromptHash: "untouched-prompt", Model: "old-model", CreatedAt: time.Now(),
+	}))
+
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.merge"))
+	started, err := st.StartExecution(ctx, testExecutionManifest())
+	require.NoError(t, err)
+	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "changed.go", Content: "package merge\n", WriteIntent: "modify",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{
+		ExecutionID: started.ID, ToStatus: execution.StatusValidating,
+	})
+	require.NoError(t, err)
+	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID, Accepted: true,
+		Resource: &Resource{
+			ID: "resource.merge", Kind: "asset", DeclarationHash: "new-decl",
+			EffectiveHash: "new-effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "test-model",
+		},
+		Files: []GeneratedFile{{
+			Path: "changed.go", ResourceID: "resource.merge", ContentHash: candidate.Files[0].ContentHash,
+			PromptHash: started.ContextHash, Model: "test-model",
+		}},
+		Attempts: 1,
+	})
+	require.NoError(t, err)
+
+	owned, err := st.GetGeneratedFiles("resource.merge")
+	require.NoError(t, err)
+	require.Len(t, owned, 2)
+	byPath := make(map[string]GeneratedFile, len(owned))
+	for _, file := range owned {
+		byPath[file.Path] = file
+	}
+	require.Equal(t, candidate.Files[0].ContentHash, byPath["changed.go"].ContentHash)
+	require.Equal(t, "test-model", byPath["changed.go"].Model)
+	require.Equal(t, "untouched-hash", byPath["untouched.go"].ContentHash)
+	require.Equal(t, "untouched-prompt", byPath["untouched.go"].PromptHash)
+}
+
+func TestMigration026RepairsMissingOwnershipFromLatestAcceptedCandidate(t *testing.T) {
+	st := newContextManifestStore(t, "resource.repair")
+	ctx := context.Background()
+
+	accept := func(attemptID, manifestID, idempotencyKey, model, content string) (*CandidateSet, *ExecutionManifest) {
+		t.Helper()
+		prepareAndClaimTestContext(t, st, testContextManifest(attemptID, manifestID, "resource.repair"))
+		executionInput := testExecutionManifest()
+		executionInput.AttemptID = attemptID
+		executionInput.ContextManifestID = manifestID
+		executionInput.IdempotencyKey = idempotencyKey
+		executionInput.Model = model
+		started, err := st.StartExecution(ctx, executionInput)
+		require.NoError(t, err)
+		candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{
+			{Path: "backfill.go", Content: content, WriteIntent: "modify"},
+			{Path: "preserve.go", Content: content, WriteIntent: "modify"},
+		})
+		require.NoError(t, err)
+		_, err = st.TransitionExecution(ctx, ExecutionTransition{
+			ExecutionID: started.ID, ToStatus: execution.StatusValidating,
+		})
+		require.NoError(t, err)
+		files := make([]GeneratedFile, 0, len(candidate.Files))
+		for _, file := range candidate.Files {
+			files = append(files, GeneratedFile{
+				Path: file.Path, ResourceID: "resource.repair", ContentHash: file.ContentHash,
+				PromptHash: started.ContextHash, Model: model,
+			})
+		}
+		_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+			ExecutionID: started.ID, Accepted: true,
+			Resource: &Resource{
+				ID: "resource.repair", Kind: "asset", DeclarationHash: "decl",
+				EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: model,
+			},
+			Files: files, Attempts: 1,
+		})
+		require.NoError(t, err)
+		return candidate, started
+	}
+
+	_, _ = accept("attempt-1", "manifest-1", "host-request-1", "old-model", "old content")
+	require.NoError(t, st.UpdateSessionResourceState(
+		"session-1", "resource.repair", "rejected", "retry", "", 1, "",
+	))
+	latestCandidate, latestExecution := accept(
+		"attempt-2", "manifest-2", "host-request-2", "new-model", "new content",
+	)
+
+	latestByPath := make(map[string]CandidateFile, len(latestCandidate.Files))
+	for _, file := range latestCandidate.Files {
+		latestByPath[file.Path] = file
+	}
+	_, err := st.sqlDB.Exec(`DELETE FROM generated_files
+		WHERE resource_id = 'resource.repair' AND path = 'backfill.go'`)
+	require.NoError(t, err)
+	require.NoError(t, st.SetGeneratedFile(GeneratedFile{
+		Path: "preserve.go", ResourceID: "resource.repair", ContentHash: "existing-hash",
+		PromptHash: "existing-prompt", Model: "existing-model", CreatedAt: time.Unix(1, 0),
+	}))
+	_, err = st.sqlDB.Exec(`DELETE FROM schema_migrations
+		WHERE filename = '026_repair_generated_file_ownership.sql'`)
+	require.NoError(t, err)
+	require.NoError(t, st.migrate())
+
+	owned, err := st.GetGeneratedFiles("resource.repair")
+	require.NoError(t, err)
+	require.Len(t, owned, 2)
+	byPath := make(map[string]GeneratedFile, len(owned))
+	for _, file := range owned {
+		byPath[file.Path] = file
+	}
+	require.Equal(t, latestByPath["backfill.go"].ContentHash, byPath["backfill.go"].ContentHash)
+	require.Equal(t, latestExecution.ContextHash, byPath["backfill.go"].PromptHash)
+	require.Equal(t, "new-model", byPath["backfill.go"].Model)
+	require.Equal(t, "existing-hash", byPath["preserve.go"].ContentHash)
+	require.Equal(t, "existing-prompt", byPath["preserve.go"].PromptHash)
+	require.Equal(t, "existing-model", byPath["preserve.go"].Model)
+	require.NoError(t, st.migrate(), "the repair migration must remain idempotent")
+}
+
+func TestFinalizeCandidateRejectsAttemptThatLostResourceClaim(t *testing.T) {
+	st := newContextManifestStore(t, "resource.stale")
+	ctx := context.Background()
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.stale"))
+	started, err := st.StartExecution(ctx, testExecutionManifest())
+	require.NoError(t, err)
+	_, err = st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
+		Path: "stale.go", Content: "package stale\n", WriteIntent: "create",
+	}})
+	require.NoError(t, err)
+	_, err = st.TransitionExecution(ctx, ExecutionTransition{
+		ExecutionID: started.ID,
+		ToStatus:    execution.StatusValidating,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, st.UpdateSessionResourceState(
+		"session-1", "resource.stale", "dispatched", "", "", 1, "attempt-new",
+	))
+	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
+		ExecutionID: started.ID,
+		Reason:      "stale worker must not commit",
+		Attempts:    1,
+	})
+	require.ErrorContains(t, err, "attempt attempt-1 no longer owns dispatched resource resource.stale")
+
+	manifest, err := st.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusValidating), manifest.Status)
+	candidate, err := st.GetCandidateSetByAttempt(ctx, "attempt-1")
+	require.NoError(t, err)
+	require.Equal(t, "submitted", candidate.Status)
+}
+
 func TestFinalizeCandidateRollsBackEveryProjectionWhenLateEventWriteFails(t *testing.T) {
 	st := newContextManifestStore(t, "resource.rollback")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.rollback"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.rollback"))
 	started, err := st.StartExecution(ctx, testExecutionManifest())
 	require.NoError(t, err)
 	candidate, err := st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
@@ -310,7 +536,7 @@ func TestFinalizeCandidateRollsBackEveryProjectionWhenLateEventWriteFails(t *tes
 		ExecutionID: started.ID, Accepted: true, Reason: "valid candidate",
 		Resource: &Resource{
 			ID: "resource.rollback", Kind: "asset", DeclarationHash: "decl",
-			EffectiveHash: "effective", Model: "test-model",
+			EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "test-model",
 		},
 		Files: []GeneratedFile{{
 			Path: "rollback.go", ResourceID: "resource.rollback", ContentHash: candidate.Files[0].ContentHash,
@@ -368,10 +594,7 @@ func TestFinalizeCandidateRollsBackEveryProjectionWhenLateEventWriteFails(t *tes
 func TestFinalizeCandidateRejectsWithFailureAndHandoffInOneTransaction(t *testing.T) {
 	st := newContextManifestStore(t, "resource.rejected")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.rejected"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.rejected"))
 	started, err := st.StartExecution(ctx, testExecutionManifest())
 	require.NoError(t, err)
 	_, err = st.SubmitCandidate(ctx, started.ID, []CandidateFile{{
@@ -429,10 +652,7 @@ func TestFinalizeCandidateRejectsWithFailureAndHandoffInOneTransaction(t *testin
 func TestFailureRoutingBlocksSpecificationAndValidationDefects(t *testing.T) {
 	st := newContextManifestStore(t, "resource.synth")
 	ctx := context.Background()
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.synth"))
 
 	failure, err := st.CreateFailureClassification(ctx, FailureClassificationWrite{
 		AttemptID: "attempt-1", Category: execution.FailureInvalidValidation,

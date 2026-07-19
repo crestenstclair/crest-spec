@@ -8,55 +8,66 @@ import (
 )
 
 type SessionResource struct {
-	SessionID    string
-	ResourceID   string
-	State        string
-	WaveIndex    int
-	Attempts     int
-	MaxRetries   int
-	LastError    string
-	LastOutput   string
-	JobID        string
-	UpdatedAt    time.Time
-	Phase        string
-	DispatchedAt time.Time
+	SessionID           string
+	ResourceID          string
+	State               string
+	WaveIndex           int
+	Attempts            int
+	MaxRetries          int
+	LastError           string
+	LastOutput          string
+	JobID               string
+	UpdatedAt           time.Time
+	Phase               string
+	DispatchedAt        time.Time
+	ExecutionStrategy   string
+	SourceCandidateID   string
+	ExhaustionFailureID string
 }
 
 func dbSessionResourceToSessionResource(row db.SessionResource) SessionResource {
 	return SessionResource{
-		SessionID:    row.SessionID,
-		ResourceID:   row.ResourceID,
-		State:        row.State,
-		WaveIndex:    int(row.WaveIndex),
-		Attempts:     int(row.Attempts),
-		MaxRetries:   int(row.MaxRetries),
-		LastError:    stringVal(row.LastError),
-		LastOutput:   stringVal(row.LastOutput),
-		JobID:        stringVal(row.JobID),
-		UpdatedAt:    parseTime(row.UpdatedAt),
-		Phase:        row.Phase,
-		DispatchedAt: parseTime(row.DispatchedAt),
+		SessionID:           row.SessionID,
+		ResourceID:          row.ResourceID,
+		State:               row.State,
+		WaveIndex:           int(row.WaveIndex),
+		Attempts:            int(row.Attempts),
+		MaxRetries:          int(row.MaxRetries),
+		LastError:           stringVal(row.LastError),
+		LastOutput:          stringVal(row.LastOutput),
+		JobID:               stringVal(row.JobID),
+		UpdatedAt:           parseTime(row.UpdatedAt),
+		Phase:               row.Phase,
+		DispatchedAt:        parseTime(row.DispatchedAt),
+		ExecutionStrategy:   row.ExecutionStrategy,
+		SourceCandidateID:   stringVal(row.SourceCandidateID),
+		ExhaustionFailureID: stringVal(row.ExhaustionFailureID),
 	}
 }
 
 func (s *Store) UpsertSessionResource(resource SessionResource) error {
+	if resource.ExecutionStrategy == "" {
+		resource.ExecutionStrategy = "generate"
+	}
 	dispatchedAt := ""
 	if !resource.DispatchedAt.IsZero() {
 		dispatchedAt = resource.DispatchedAt.Format(time.RFC3339Nano)
 	}
 	return s.queries.UpsertSessionResource(context.Background(), db.UpsertSessionResourceParams{
-		SessionID:    resource.SessionID,
-		ResourceID:   resource.ResourceID,
-		State:        resource.State,
-		WaveIndex:    int64(resource.WaveIndex),
-		Attempts:     int64(resource.Attempts),
-		MaxRetries:   int64(resource.MaxRetries),
-		LastError:    stringPtr(resource.LastError),
-		LastOutput:   stringPtr(resource.LastOutput),
-		JobID:        stringPtr(resource.JobID),
-		UpdatedAt:    now(),
-		Phase:        resource.Phase,
-		DispatchedAt: dispatchedAt,
+		SessionID:         resource.SessionID,
+		ResourceID:        resource.ResourceID,
+		State:             resource.State,
+		WaveIndex:         int64(resource.WaveIndex),
+		Attempts:          int64(resource.Attempts),
+		MaxRetries:        int64(resource.MaxRetries),
+		LastError:         stringPtr(resource.LastError),
+		LastOutput:        stringPtr(resource.LastOutput),
+		JobID:             stringPtr(resource.JobID),
+		UpdatedAt:         now(),
+		Phase:             resource.Phase,
+		DispatchedAt:      dispatchedAt,
+		ExecutionStrategy: resource.ExecutionStrategy,
+		SourceCandidateID: stringPtr(resource.SourceCandidateID),
 	})
 }
 

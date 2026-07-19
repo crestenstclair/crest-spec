@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	SelectorVersion  = "context-selector-v1"
+	SelectorVersion  = "context-selector-v2"
 	EstimatorVersion = "chars-per-token-v1:4"
 	DefaultBudget    = 32768
 	MinimumBudget    = 1024
@@ -41,12 +41,16 @@ const (
 )
 
 type Candidate struct {
-	Kind              string
-	Title             string
-	SourceKind        string
-	SourceID          string
-	SourcePath        string
-	Content           string
+	Kind       string
+	Title      string
+	SourceKind string
+	SourceID   string
+	SourcePath string
+	Content    string
+	// ProvenanceHash and ProvenanceBytes describe the exact source bytes when
+	// Content is a presentation envelope rather than the source itself.
+	ProvenanceHash    string
+	ProvenanceBytes   int
 	Priority          Priority
 	Mandatory         bool
 	Truncatable       bool
@@ -134,14 +138,11 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 	}
 
 	mandatoryTokens := 0
-	mandatoryContent := make(map[string]bool)
 	mandatoryIdentities := make(map[string]bool)
 	for _, candidate := range ordered {
-		hash := Hash(candidate.Content)
 		identity := candidate.Kind + "\x00" + candidate.SourceKind + "\x00" + candidate.SourceID
-		if candidate.Mandatory && candidate.UnavailableReason == "" && !mandatoryContent[hash] && !mandatoryIdentities[identity] {
+		if candidate.Mandatory && candidate.UnavailableReason == "" && !mandatoryIdentities[identity] {
 			mandatoryTokens += candidateTokenCost(candidate)
-			mandatoryContent[hash] = true
 			mandatoryIdentities[identity] = true
 		}
 	}
@@ -152,16 +153,16 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 
 	remaining := budget
 	mandatoryRemaining := mandatoryTokens
-	reservedMandatoryContent := make(map[string]bool, len(mandatoryContent))
+	reservedMandatoryIdentities := make(map[string]bool, len(mandatoryIdentities))
 	seen := make(map[string]bool, len(ordered))
 	seenContent := make(map[string]string, len(ordered))
 	for _, candidate := range ordered {
 		section := baseSection(candidate, len(result.Sections))
 		identity := candidate.Kind + "\x00" + candidate.SourceKind + "\x00" + candidate.SourceID
 		contentHash := Hash(candidate.Content)
-		if candidate.Mandatory && candidate.UnavailableReason == "" && mandatoryContent[contentHash] && !reservedMandatoryContent[contentHash] {
+		if candidate.Mandatory && candidate.UnavailableReason == "" && mandatoryIdentities[identity] && !reservedMandatoryIdentities[identity] {
 			mandatoryRemaining -= candidateTokenCost(candidate)
-			reservedMandatoryContent[contentHash] = true
+			reservedMandatoryIdentities[identity] = true
 		}
 		switch {
 		case candidate.UnavailableReason != "":
@@ -170,7 +171,7 @@ func Select(candidates []Candidate, requestedBudget int) Result {
 		case seen[identity]:
 			section.Decision = Omitted
 			section.Reason = "duplicate source identity"
-		case seenContent[contentHash] != "":
+		case seenContent[contentHash] != "" && !candidate.Mandatory:
 			section.Decision = Omitted
 			section.Reason = "duplicate content hash; first source is " + seenContent[contentHash]
 		case result.Blocked:
@@ -245,12 +246,18 @@ func canonicalCandidates(candidates []Candidate) []Candidate {
 }
 
 func baseSection(candidate Candidate, ordinal int) Section {
+	originalHash := candidate.ProvenanceHash
+	originalBytes := candidate.ProvenanceBytes
+	if originalHash == "" {
+		originalHash = Hash(candidate.Content)
+		originalBytes = len([]byte(candidate.Content))
+	}
 	return Section{
 		Ordinal: ordinal, Kind: candidate.Kind, Title: candidate.Title,
 		SourceKind: candidate.SourceKind, SourceID: candidate.SourceID,
 		SourcePath: candidate.SourcePath, Priority: candidate.Priority,
-		Mandatory: candidate.Mandatory, OriginalHash: Hash(candidate.Content),
-		OriginalBytes: len([]byte(candidate.Content)),
+		Mandatory: candidate.Mandatory, OriginalHash: originalHash,
+		OriginalBytes: originalBytes,
 	}
 }
 

@@ -472,7 +472,7 @@ func (q *Queries) GetAttemptHandoff(ctx context.Context, id string) (AttemptHand
 }
 
 const getCandidateSet = `-- name: GetCandidateSet :one
-SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at FROM candidate_sets WHERE id = ?
+SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at, generation_input_hash, dependency_contract_hash FROM candidate_sets WHERE id = ?
 `
 
 func (q *Queries) GetCandidateSet(ctx context.Context, id string) (CandidateSet, error) {
@@ -487,12 +487,14 @@ func (q *Queries) GetCandidateSet(ctx context.Context, id string) (CandidateSet,
 		&i.DispositionReason,
 		&i.CreatedAt,
 		&i.DisposedAt,
+		&i.GenerationInputHash,
+		&i.DependencyContractHash,
 	)
 	return i, err
 }
 
 const getCandidateSetByAttempt = `-- name: GetCandidateSetByAttempt :one
-SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at FROM candidate_sets WHERE attempt_id = ?
+SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at, generation_input_hash, dependency_contract_hash FROM candidate_sets WHERE attempt_id = ?
 `
 
 func (q *Queries) GetCandidateSetByAttempt(ctx context.Context, attemptID string) (CandidateSet, error) {
@@ -507,12 +509,14 @@ func (q *Queries) GetCandidateSetByAttempt(ctx context.Context, attemptID string
 		&i.DispositionReason,
 		&i.CreatedAt,
 		&i.DisposedAt,
+		&i.GenerationInputHash,
+		&i.DependencyContractHash,
 	)
 	return i, err
 }
 
 const getCandidateSetByExecution = `-- name: GetCandidateSetByExecution :one
-SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at FROM candidate_sets WHERE execution_id = ?
+SELECT id, execution_id, attempt_id, candidate_hash, status, disposition_reason, created_at, disposed_at, generation_input_hash, dependency_contract_hash FROM candidate_sets WHERE execution_id = ?
 `
 
 func (q *Queries) GetCandidateSetByExecution(ctx context.Context, executionID string) (CandidateSet, error) {
@@ -527,6 +531,8 @@ func (q *Queries) GetCandidateSetByExecution(ctx context.Context, executionID st
 		&i.DispositionReason,
 		&i.CreatedAt,
 		&i.DisposedAt,
+		&i.GenerationInputHash,
+		&i.DependencyContractHash,
 	)
 	return i, err
 }
@@ -709,7 +715,7 @@ func (q *Queries) GetFailureClassification(ctx context.Context, id string) (Fail
 }
 
 const getLatestRejectedCandidateForResource = `-- name: GetLatestRejectedCandidateForResource :one
-SELECT cs.id, cs.execution_id, cs.attempt_id, cs.candidate_hash, cs.status, cs.disposition_reason, cs.created_at, cs.disposed_at FROM candidate_sets cs
+SELECT cs.id, cs.execution_id, cs.attempt_id, cs.candidate_hash, cs.status, cs.disposition_reason, cs.created_at, cs.disposed_at, cs.generation_input_hash, cs.dependency_contract_hash FROM candidate_sets cs
 JOIN generation_attempts ga ON ga.id = cs.attempt_id
 WHERE ga.session_id = ? AND ga.resource_id = ? AND cs.status = 'rejected'
 ORDER BY cs.created_at DESC, cs.id DESC LIMIT 1
@@ -732,6 +738,8 @@ func (q *Queries) GetLatestRejectedCandidateForResource(ctx context.Context, arg
 		&i.DispositionReason,
 		&i.CreatedAt,
 		&i.DisposedAt,
+		&i.GenerationInputHash,
+		&i.DependencyContractHash,
 	)
 	return i, err
 }

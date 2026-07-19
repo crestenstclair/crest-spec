@@ -50,6 +50,12 @@ func (f *fakeFS) WriteFile(path string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
+func (f *fakeFS) WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
+	return f.WriteFile(path, data, perm)
+}
+
+func (f *fakeFS) Chmod(path string, mode fs.FileMode) error { return nil }
+
 func (f *fakeFS) MkdirAll(path string, perm fs.FileMode) error {
 	f.dirs[path] = true
 	return nil
@@ -70,6 +76,8 @@ func (f *fakeFS) Stat(path string) (fs.FileInfo, error) {
 	}
 	return nil, os.ErrNotExist
 }
+
+func (f *fakeFS) Lstat(path string) (fs.FileInfo, error) { return f.Stat(path) }
 
 type fakeFileInfo struct {
 	name  string

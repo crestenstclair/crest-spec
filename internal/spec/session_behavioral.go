@@ -29,13 +29,16 @@ type TaskInput struct {
 
 // VerifyResult is the outcome of running Verify on a single check.
 type VerifyResult struct {
-	WitnessID       string `json:"witness_id,omitempty"`
-	ValidationRunID string `json:"validation_run_id,omitempty"`
-	Classification  string `json:"classification,omitempty"`
-	Passed          bool   `json:"passed"`
-	Theater         bool   `json:"theater"`
-	Malformed       bool   `json:"malformed"`
-	Reason          string `json:"reason"`
+	WitnessID          string                                        `json:"witness_id,omitempty"`
+	ValidationRunID    string                                        `json:"validation_run_id,omitempty"`
+	Classification     string                                        `json:"classification,omitempty"`
+	ReopenedResources  []string                                      `json:"reopened_resources,omitempty"`
+	ExhaustedResources []string                                      `json:"exhausted_resources,omitempty"`
+	RepairEpochs       map[string]store.BehavioralWitnessRepairEpoch `json:"repair_epochs,omitempty"`
+	Passed             bool                                          `json:"passed"`
+	Theater            bool                                          `json:"theater"`
+	Malformed          bool                                          `json:"malformed"`
+	Reason             string                                        `json:"reason"`
 }
 
 // GraduateResult is the outcome of graduating a check: the structured claim

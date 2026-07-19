@@ -112,3 +112,33 @@ func TestStubAndLiveToolCatalogsAreIdentical(t *testing.T) {
 		seen[definition.Name] = struct{}{}
 	}
 }
+
+func TestDispatchEventSchemaRequiresPreparedContextIdentityAndFailureReason(t *testing.T) {
+	server := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	var schema map[string]any
+	for _, definition := range server.tools {
+		if definition.Name == "spec/dispatch_event" {
+			require.NoError(t, json.Unmarshal(definition.InputSchema, &schema))
+			break
+		}
+	}
+	require.NotNil(t, schema)
+	required, ok := schema["required"].([]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t,
+		[]any{"event", "dispatch_id", "session_id", "resource_id", "host_session_id", "worker_id"},
+		required,
+	)
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	event, ok := properties["event"].(map[string]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []any{"dispatch_requested", "worker_acknowledged", "dispatch_failed"}, event["enum"])
+	conditions, ok := schema["allOf"].([]any)
+	require.True(t, ok)
+	require.Len(t, conditions, 1)
+	encoded, err := json.Marshal(conditions[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"const":"dispatch_failed"`)
+	assert.Contains(t, string(encoded), `"required":["reason"]`)
+}

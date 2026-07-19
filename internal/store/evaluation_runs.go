@@ -694,6 +694,10 @@ func (s *Store) deriveEvaluationMetrics(ctx context.Context, assignment db.Evalu
 		contextRecord.BudgetTokens != configuration.ContextBudgetTokens || !equalStringMaps(manifest.TemplateHashes, configuration.TemplateHashes) {
 		return nil, "", "", fmt.Errorf("derive evaluation metrics: execution does not match assignment configuration")
 	}
+	consumedAttempts, err := s.queries.CountExecutionAttemptsThroughAttempt(ctx, attemptID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("derive evaluation metrics: retry accounting: %w", err)
+	}
 	value := func(number float64) *float64 { return &number }
 	accepted := 0.0
 	if manifest.Status == "accepted" {
@@ -701,7 +705,7 @@ func (s *Store) deriveEvaluationMetrics(ctx context.Context, assignment db.Evalu
 	}
 	metrics := []EvaluationMetricObservation{
 		{Name: "accepted_implementation", Value: value(accepted), SourceType: "execution_manifest", SourceID: manifest.ID},
-		{Name: "retry_count", Value: value(float64(maxInt(contextRecord.Attempt.RetryNumber-1, 0))), Unit: "attempts", SourceType: "generation_attempt", SourceID: attemptID},
+		{Name: "retry_count", Value: value(float64(maxInt(int(consumedAttempts)-1, 0))), Unit: "attempts", SourceType: "execution_manifest", SourceID: manifest.ID},
 		{Name: "input_tokens", Value: value(float64(manifest.InputTokens)), Unit: "tokens", SourceType: "execution_manifest", SourceID: manifest.ID},
 		{Name: "output_tokens", Value: value(float64(manifest.OutputTokens)), Unit: "tokens", SourceType: "execution_manifest", SourceID: manifest.ID},
 		{Name: "cost_usd", Value: value(manifest.CostUSD), Unit: "usd", SourceType: "execution_manifest", SourceID: manifest.ID},

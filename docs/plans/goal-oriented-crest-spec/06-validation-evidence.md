@@ -49,6 +49,7 @@ project: witnesses: registration_round_trip: {
     capability: "capability.create_account"
     command:    ["go", "test", "./e2e", "-run", "TestRegistrationWitness", "-json"]
     negativeCommand: ["go", "test", "./e2e", "-run", "TestRegistrationNegativeWitness", "-json"]
+    negativeExpectedExitCode: 1
     workingDirectory: "."
     timeout: "2m"
     artifacts: ["bin/example-server"]
@@ -67,7 +68,26 @@ project: witnesses: registration_round_trip: {
 }
 ```
 
-The negative command must use the same observation parser/schema and emit all predicate fields. It may run a declared stub/fixture, feature-disabled executable, or controlled negative input. It may not be an arbitrary caller-supplied observation.
+The negative command must use the same observation parser/schema and emit all predicate fields. It may run a declared stub/fixture, feature-disabled executable, or controlled negative input. It may not be an arbitrary caller-supplied observation. Both commands default to expected exit code `0`; when the controlled negative intentionally exits nonzero, `negativeExpectedExitCode` must declare the exact expected status.
+
+`repairResources` is optional and must be a canonical subset of the witness's
+observed `resources`. Each predicate may declare a narrower `repairResources`
+subset; when any predicate opts in, a schema-valid positive failure routes only
+owners of predicates that actually failed. A real process failure retains the
+witness-wide fallback because no predicate observation exists.
+
+`counterexampleRepairResources` is an explicit subset of both `resources` and
+the witness-wide `repairResources`. An unexpected negative exit or a negative
+observation that still exhibits the behavior (theater) may route only these
+controlled-harness owners—never production owners. Without this opt-in,
+negative/theater outcomes schedule no repair. Malformed observations always
+remain evidence blockers without mutation authority.
+
+Every routing decision is persisted against the exact witness-definition hash
+and content-addressed source identity. The same epoch can reopen at most the
+configured wave retry budget; exhaustion is explicit and not dispatchable. A
+genuinely new accepted candidate or changed witness definition starts a new,
+auditable epoch.
 
 ## Controlled execution and provenance
 

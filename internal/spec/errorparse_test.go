@@ -21,6 +21,21 @@ func TestParseErrorFilePaths(t *testing.T) {
 			expected: []string{"src/Synth/Voice.rs"},
 		},
 		{
+			name:     "rustfmt diff",
+			input:    "Diff in /workspace/crest-synth/src/testing/demo_scene.rs:143:\n-old\n+new",
+			expected: []string{"/workspace/crest-synth/src/testing/demo_scene.rs"},
+		},
+		{
+			name:     "rust test panic",
+			input:    "thread 'shell::standalone_application::tests::demo' (1234) panicked at src/shell/standalone_application.rs:1396:9:\nassertion failed",
+			expected: []string{"src/shell/standalone_application.rs"},
+		},
+		{
+			name:     "rust test executable is not a diagnostic span",
+			input:    "Running unittests src/lib.rs (target/debug/deps/example)\ntest result: FAILED",
+			expected: nil,
+		},
+		{
 			name:     "typescript error",
 			input:    "src/components/App.tsx(42,5): error TS2304: Cannot find name 'foo'\nsrc/utils/helpers.ts(10,1): error TS2322: Type mismatch",
 			expected: []string{"src/components/App.tsx", "src/utils/helpers.ts"},

@@ -75,7 +75,13 @@ func sqliteDSN(dbPath string) string {
 		"foreign_keys(1)",
 		"journal_mode(WAL)",
 	}
-	values := make([]string, 0, len(pragmas))
+	// Every Store transaction mutates canonical state. Reserve SQLite's single
+	// writer at BeginTx, before transaction-scoped reads establish a snapshot.
+	// With the driver's default deferred mode, concurrent read-then-write
+	// transactions can fail their upgrade with SQLITE_BUSY even though a busy
+	// timeout is configured; SQLite cannot wait on that upgrade without risking
+	// a deadlock. Immediate mode makes writers wait and serialize at BEGIN.
+	values := []string{"_txlock=immediate"}
 	for _, pragma := range pragmas {
 		values = append(values, "_pragma="+url.QueryEscape(pragma))
 	}

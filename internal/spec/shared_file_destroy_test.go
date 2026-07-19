@@ -16,7 +16,7 @@ import (
 const twoResourceSpecCUE = `package crestsynth
 
 project: name: "rt"
-project: meta: language: "go"
+project: meta: language: "rust"
 project: contexts: Audio: purpose: "audio"
 project: contexts: Audio: valueObjects: Tone: {from: "f64"}
 project: contexts: Audio: valueObjects: Beep: {from: "f64"}
@@ -32,9 +32,9 @@ func TestDestroySparesFilesWithOtherOwners(t *testing.T) {
 	require.GreaterOrEqual(t, len(next.Resources), 2, "need two resources in the wave")
 	resA, resB := next.Resources[0].ResourceID, next.Resources[1].ResourceID
 
-	dir := t.TempDir()
-	shared := dir + "/lib.rs"
-	own := dir + "/plugin_only.rs"
+	projectRoot := filepath.Dir(s.cfg.SpecDir)
+	shared := filepath.Join(projectRoot, "src", "mod.rs")
+	own := filepath.Join(projectRoot, "src", "plugin_only.rs")
 
 	// resource A commits the shared file first...
 	_, err = commitTestAttempt(t, s, ctx, st.sessionID, resA,
@@ -50,7 +50,7 @@ func TestDestroySparesFilesWithOtherOwners(t *testing.T) {
 
 	sess, err := s.store.GetSession(st.sessionID)
 	require.NoError(t, err)
-	destroyed, err := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: otherID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	destroyed, err := s.executeDestroys(ctx, []planpkg.PlannedAction{{ResourceID: otherID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
 	require.NoError(t, err)
 	require.Len(t, destroyed, 1)
 

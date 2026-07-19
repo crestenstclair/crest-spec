@@ -101,7 +101,19 @@ func TestPrepareContextPersistsVerticalSliceWithDependenciesConsumersAndAcceptan
 
 	resourceState, err := st.GetSessionResource(sessionID, resourceID)
 	require.NoError(t, err)
+	require.Equal(t, "pending", resourceState.State)
+	require.Empty(t, resourceState.JobID)
+
+	_, err = s.ReportDispatchEvent(ctx, DispatchEventOptions{
+		Event: "dispatch_requested", DispatchID: result.DispatchID,
+		SessionID: sessionID, ResourceID: resourceID,
+		HostSessionID: "host-context-test", WorkerID: "worker-1",
+	})
+	require.NoError(t, err)
+	resourceState, err = st.GetSessionResource(sessionID, resourceID)
+	require.NoError(t, err)
 	require.Equal(t, "dispatched", resourceState.State)
+	require.Equal(t, result.AttemptID, resourceState.JobID)
 
 	require.NoError(t, st.UpdateSessionResourceState(sessionID, resourceID, "rejected", "go test: renderer returned silence", "", 1, ""))
 	second, err := s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID, Role: "minimal_diff_repair"})
@@ -139,6 +151,208 @@ func TestPrepareContextRejectsUnknownRoleBeforeDispatch(t *testing.T) {
 	manifests, listErr := st.ListContextManifests(context.Background(), 10)
 	require.NoError(t, listErr)
 	require.Empty(t, manifests)
+	lifecycles, lifecycleErr := st.ListDispatchLifecyclesBySession(context.Background(), sessionID)
+	require.NoError(t, lifecycleErr)
+	require.Empty(t, lifecycles, "invalid role must not leave an orphan dispatch lifecycle")
+}
+
+func TestPrepareContextResponseLossReplaysUnclaimedAttempt(t *testing.T) {
+	s, st, sessionID := newVerticalSliceContextSpec(t)
+	ctx := context.Background()
+	resourceID := "domainService.Audio.Renderer"
+
+	first, err := s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID})
+	require.NoError(t, err)
+	second, err := s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID})
+	require.NoError(t, err)
+	require.Equal(t, first.AttemptID, second.AttemptID)
+	require.Equal(t, first.DispatchID, second.DispatchID)
+	_, err = s.PrepareContext(ctx, ContextOptions{
+		SessionID: sessionID, ResourceID: resourceID, Role: "minimal_diff_repair",
+	})
+	require.ErrorContains(t, err, "already has unclaimed prepared attempt")
+
+	attempts, err := st.ListGenerationAttemptsBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	lifecycles, err := st.ListDispatchLifecyclesBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, lifecycles, 1, "a rejected duplicate claim must not create an orphan lifecycle")
+	resourceState, err := st.GetSessionResource(sessionID, resourceID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", resourceState.State)
+	require.Empty(t, resourceState.JobID)
+}
+
+func TestPrepareWaveContextsBoundsUnclaimedWorkAndDispatchClaimsByAttempt(t *testing.T) {
+	s, st, sessionID := newVerticalSliceContextSpec(t)
+	ctx := context.Background()
+	wave, err := s.Next(ctx, sessionID)
+	require.NoError(t, err)
+	require.False(t, wave.Done)
+	require.NotEmpty(t, wave.Resources)
+
+	batch, err := s.PrepareWaveContexts(ctx, WaveContextOptions{SessionID: sessionID, Limit: len(wave.Resources)})
+	require.NoError(t, err)
+	require.Equal(t, wave.WaveIndex, batch.WaveIndex)
+	require.False(t, batch.Done)
+	require.False(t, batch.ValidationReady)
+	require.Equal(t, -1, batch.ValidationWaveIndex)
+	require.Len(t, batch.Contexts, len(wave.Resources))
+	for index, item := range batch.Contexts {
+		require.Equal(t, wave.Resources[index].ResourceID, item.ResourceID)
+		require.Empty(t, item.Error)
+		require.NotNil(t, item.Context)
+		require.NotEmpty(t, item.Context.AttemptID)
+		require.NotEmpty(t, item.Context.DispatchID)
+		state, stateErr := st.GetSessionResource(sessionID, item.ResourceID)
+		require.NoError(t, stateErr)
+		require.Equal(t, "pending", state.State)
+		require.Empty(t, state.JobID)
+	}
+	lifecycles, err := st.ListDispatchLifecyclesBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, lifecycles, len(wave.Resources))
+	for index := 1; index < len(lifecycles); index++ {
+		require.NotNil(t, lifecycles[index-1].ContextPreparedAt)
+		require.NotNil(t, lifecycles[index].ContextRequestedAt)
+		require.False(t, lifecycles[index].ContextRequestedAt.Before(*lifecycles[index-1].ContextPreparedAt),
+			"resource context lifecycles must represent serial preparation after the shared batch")
+	}
+	preparations, err := st.ListContextBatchesBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, preparations, 1)
+	require.Equal(t, "completed", preparations[0].Status)
+	require.Equal(t, wave.WaveIndex, preparations[0].WaveIndex)
+	require.NotNil(t, preparations[0].CompletedAt)
+
+	second, err := s.PrepareWaveContexts(ctx, WaveContextOptions{SessionID: sessionID, Limit: len(wave.Resources)})
+	require.NoError(t, err)
+	require.Len(t, second.Contexts, len(wave.Resources), "unclaimed contexts are replayed after response loss")
+	for index := range batch.Contexts {
+		require.Equal(t, batch.Contexts[index].Context.AttemptID, second.Contexts[index].Context.AttemptID)
+	}
+	attempts, err := st.ListGenerationAttemptsBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, attempts, len(wave.Resources))
+	preparations, err = st.ListContextBatchesBySession(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, preparations, 1, "polling unclaimed prepared contexts does not repeat shared preparation")
+
+	assigned := batch.Contexts[0]
+	requested, err := s.ReportDispatchEvent(ctx, DispatchEventOptions{
+		Event: "dispatch_requested", DispatchID: assigned.Context.DispatchID,
+		SessionID: sessionID, ResourceID: assigned.ResourceID,
+		HostSessionID: "host-batch-test", WorkerID: "worker-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, assigned.Context.AttemptID, requested.AttemptID)
+	state, err := st.GetSessionResource(sessionID, assigned.ResourceID)
+	require.NoError(t, err)
+	require.Equal(t, "dispatched", state.State)
+	require.Equal(t, assigned.Context.AttemptID, state.JobID)
+}
+
+func TestPrepareWaveContextsDoesNotChargeLegacyCounterWithoutExecution(t *testing.T) {
+	const parallelResources = `package crestsynth
+
+project: name: "batch"
+project: meta: language: "go"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	contributesTo: [{capability: "capability.exercise_resource", contribution: "represents tone"}]
+}
+project: contexts: Audio: valueObjects: Gain: {
+	from: "f64"
+	contributesTo: [{capability: "capability.exercise_resource", contribution: "represents gain"}]
+}
+`
+	s, session := newTestSpecWithSessionCUE(t, parallelResources)
+	ctx := context.Background()
+	const exhausted = "valueObject.Audio.Gain"
+	require.NoError(t, s.store.UpdateSessionResourceState(
+		session.sessionID, exhausted, "rejected", "prior attempts exhausted", "", 3, "",
+	))
+
+	batch, err := s.PrepareWaveContexts(ctx, WaveContextOptions{SessionID: session.sessionID, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, batch.Contexts, 2)
+	items := make(map[string]WaveContextItem, len(batch.Contexts))
+	for _, item := range batch.Contexts {
+		items[item.ResourceID] = item
+	}
+	require.Empty(t, items[exhausted].Error)
+	require.NotNil(t, items[exhausted].Context,
+		"retry budget advances on registered executions, not a stale resource counter")
+	prepared := items["valueObject.Audio.Tone"]
+	require.Empty(t, prepared.Error)
+	require.NotNil(t, prepared.Context)
+	require.NotEmpty(t, prepared.Context.AttemptID)
+	state, err := s.store.GetSessionResource(session.sessionID, prepared.ResourceID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", state.State)
+	require.Empty(t, state.JobID)
+}
+
+func TestPrepareWaveContextsLimitPreventsWholeWavePrequeue(t *testing.T) {
+	const parallelResources = `package crestsynth
+
+project: name: "bounded-batch"
+project: meta: language: "go"
+project: contexts: Audio: purpose: "audio"
+project: contexts: Audio: valueObjects: Tone: {
+	from: "f64"
+	contributesTo: [{capability: "capability.exercise_resource", contribution: "represents tone"}]
+}
+project: contexts: Audio: valueObjects: Gain: {
+	from: "f64"
+	contributesTo: [{capability: "capability.exercise_resource", contribution: "represents gain"}]
+}
+`
+	s, session := newTestSpecWithSessionCUE(t, parallelResources)
+	ctx := context.Background()
+	first, err := s.PrepareWaveContexts(ctx, WaveContextOptions{
+		SessionID: session.sessionID, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Contexts, 1)
+	attempts, err := s.store.ListGenerationAttemptsBySession(ctx, session.sessionID)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1, "wave width must not determine prepared queue width")
+
+	replayed, err := s.PrepareWaveContexts(ctx, WaveContextOptions{
+		SessionID: session.sessionID, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, replayed.Contexts, 1)
+	require.Equal(t, first.Contexts[0].Context.AttemptID, replayed.Contexts[0].Context.AttemptID)
+	attempts, err = s.store.ListGenerationAttemptsBySession(ctx, session.sessionID)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1, "duplicate polling must replay rather than prepare the rest of the wave")
+}
+
+func TestPrepareWaveContextsSignalsFinalValidationWithoutDummyWorker(t *testing.T) {
+	s, st, sessionID := newVerticalSliceContextSpec(t)
+	resources, err := st.ListSessionResources(sessionID)
+	require.NoError(t, err)
+	require.NotEmpty(t, resources)
+	gateWave := -1
+	for _, resource := range resources {
+		if resource.WaveIndex > gateWave {
+			gateWave = resource.WaveIndex
+		}
+		require.NoError(t, st.UpdateSessionResourceState(
+			sessionID, resource.ResourceID, "committed", "", "", resource.Attempts, resource.JobID,
+		))
+	}
+
+	batch, err := s.PrepareWaveContexts(context.Background(), WaveContextOptions{SessionID: sessionID})
+	require.NoError(t, err)
+	require.False(t, batch.Done, "validation is an explicit queue transition before done")
+	require.Empty(t, batch.Contexts)
+	require.True(t, batch.ValidationReady)
+	require.Equal(t, gateWave, batch.ValidationWaveIndex)
 }
 
 func TestPrepareContextRecordsMandatoryBudgetBlockWithoutDispatch(t *testing.T) {
@@ -160,6 +374,63 @@ func TestPrepareContextRecordsMandatoryBudgetBlockWithoutDispatch(t *testing.T) 
 	resourceState, err := st.GetSessionResource(sessionID, resourceID)
 	require.NoError(t, err)
 	require.Equal(t, "pending", resourceState.State)
+
+	refreshed, err := s.PrepareContext(context.Background(), ContextOptions{
+		SessionID: sessionID, ResourceID: resourceID,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, result.AttemptID, refreshed.AttemptID,
+		"a context_blocked audit record must not occupy the unclaimed dispatch queue")
+	require.False(t, refreshed.Blocked)
+}
+
+func TestDispatchRequestedInvalidatesStalePreparedContextWithoutClaimOrRetry(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	const outputPath = "generated/stale-before-dispatch.go"
+	projectPath := filepath.Join(filepath.Dir(s.cfg.SpecDir), outputPath)
+	_, err := commitTestAttempt(t, s, ctx, state.sessionID, state.resourceID, []CommitFile{{
+		Path: outputPath, Content: "package generated\n\nconst Value = 1\n",
+	}}, "", "test-model")
+	require.NoError(t, err)
+	_, err = s.store.ReopenSessionResources(ctx, state.sessionID, []string{state.resourceID}, "repair requested")
+	require.NoError(t, err)
+
+	prepared, err := s.PrepareContext(ctx, ContextOptions{
+		SessionID: state.sessionID, ResourceID: state.resourceID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(projectPath, []byte("package generated\n\nconst Value = 2\n"), 0o644))
+	_, err = s.ReportDispatchEvent(ctx, DispatchEventOptions{
+		Event: "dispatch_requested", DispatchID: prepared.DispatchID,
+		SessionID: state.sessionID, ResourceID: state.resourceID,
+		HostSessionID: "host-stale-test", WorkerID: "worker-1",
+	})
+	require.ErrorContains(t, err, "rebuild_context")
+
+	resource, err := s.store.GetSessionResource(state.sessionID, state.resourceID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", resource.State)
+	require.Empty(t, resource.JobID)
+	attempts, err := s.store.ListGenerationAttemptsBySession(ctx, state.sessionID)
+	require.NoError(t, err)
+	require.Equal(t, "abandoned", attempts[len(attempts)-1].Status)
+
+	refreshed, err := s.PrepareContext(ctx, ContextOptions{
+		SessionID: state.sessionID, ResourceID: state.resourceID,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, prepared.AttemptID, refreshed.AttemptID)
+	currentBytes := "package generated\n\nconst Value = 2\n"
+	foundCurrentSource := false
+	for _, section := range refreshed.Sections {
+		if section.SourceKind == "repository_file" && section.SourcePath == outputPath &&
+			section.Decision != contextmanifest.Omitted {
+			require.Equal(t, contextmanifest.Hash(currentBytes), section.OriginalHash)
+			foundCurrentSource = true
+		}
+	}
+	require.True(t, foundCurrentSource, "replacement context must snapshot the current repository bytes")
 }
 
 func TestReferenceContextRejectsOutsideAndSecretBearingPaths(t *testing.T) {
@@ -209,7 +480,7 @@ func TestContextSourcesExposeAvailableAndUnavailableDecisions(t *testing.T) {
 	require.Contains(t, acceptance[0].Content, "a requested frequency produces an audio frame")
 
 	withoutAcceptance := input
-	withoutAcceptance.action.Capabilities = nil
+	withoutAcceptance.action.ResourceID = "asset.Unlinked"
 	unavailableAcceptance := acceptanceContextSource(withoutAcceptance)
 	require.Len(t, unavailableAcceptance, 1)
 	require.Empty(t, unavailableAcceptance[0].Content)

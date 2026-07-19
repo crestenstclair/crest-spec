@@ -31,13 +31,17 @@ project: contexts: Audio: domainServices: Mixer: {
 // spec and starts a session, returning the value object (wave 0) and domain
 // service (wave 1) resource IDs.
 func newTestSpecWithTwoWaveSession(t *testing.T) (s *Spec, sessionID, wave0ID, wave1ID string) {
+	return newTestSpecWithTwoWaveSessionCUE(t, twoWaveSpecCUE)
+}
+
+func newTestSpecWithTwoWaveSessionCUE(t *testing.T, specCUE string) (s *Spec, sessionID, wave0ID, wave1ID string) {
 	t.Helper()
 	st, err := store.New(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { st.Close() })
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(withTestIntent(twoWaveSpecCUE)), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "spec.cue"), []byte(withTestIntent(specCUE)), 0o644))
 
 	cfg := &config.Config{SpecDir: dir, GenerateModel: "claude-sonnet-4-6", MaxRetries: 3}
 	s = New(st, OSFileSystem{}, cfg)
@@ -98,7 +102,10 @@ func TestNext_RewindsToEarlierWavePending(t *testing.T) {
 
 	// Wave-level verification / resolve resets the wave-0 resource back to
 	// pending AFTER CurrentWave has advanced to 1.
-	require.NoError(t, s.Resolve(ctx, sessionID, wave0ID, "regenerate with new guidance", ""))
+	_, err = s.store.ReopenSessionResources(
+		ctx, sessionID, []string{wave0ID}, "validation batch requested owner repair",
+	)
+	require.NoError(t, err)
 
 	// Next must rewind and re-serve the wave-0 resource — not skip it forever.
 	n, err = s.Next(ctx, sessionID)
@@ -107,4 +114,17 @@ func TestNext_RewindsToEarlierWavePending(t *testing.T) {
 	require.Equal(t, 0, n.WaveIndex, "Next must rewind to wave 0")
 	require.Len(t, n.Resources, 1)
 	require.Equal(t, wave0ID, n.Resources[0].ResourceID)
+}
+
+func TestNext_RewindsAfterLegacyCallerAdvancedPastFinalWave(t *testing.T) {
+	s, sessionID, wave0ID, _ := newTestSpecWithTwoWaveSession(t)
+	ctx := context.Background()
+	require.NoError(t, s.store.UpdateSession(sessionID, "active", 99))
+
+	next, err := s.Next(ctx, sessionID)
+	require.NoError(t, err)
+	require.False(t, next.Done, "persisted cursor must not hide dispatchable repair work")
+	require.Equal(t, 0, next.WaveIndex)
+	require.Len(t, next.Resources, 1)
+	require.Equal(t, wave0ID, next.Resources[0].ResourceID)
 }

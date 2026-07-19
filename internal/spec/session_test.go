@@ -2,6 +2,7 @@ package spec
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
@@ -9,6 +10,7 @@ import (
 	"github.com/crestenstclair/crest-spec/internal/graph"
 	planpkg "github.com/crestenstclair/crest-spec/internal/plan"
 	"github.com/crestenstclair/crest-spec/internal/store"
+	validationpkg "github.com/crestenstclair/crest-spec/internal/validation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +79,152 @@ func TestAttributeErrorToResource(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAttributeErrorToResourcesUsesFullPrimaryDiagnostics(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	owners := map[string]string{
+		"resource.audio_renderer": "src/audio_renderer.rs",
+		"resource.hidef":          "src/hidef.rs",
+		"resource.control":        "src/control.rs",
+		"resource.shell":          "src/shell.rs",
+		"resource.mix_engine":     "src/mix_engine.rs",
+	}
+	var resources []store.SessionResource
+	for resourceID, path := range owners {
+		require.NoError(t, st.SetResource(store.Resource{ID: resourceID, Kind: "valueObject"}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{Path: path, ResourceID: resourceID}))
+		resources = append(resources, store.SessionResource{ResourceID: resourceID})
+	}
+	s := New(st, OSFileSystem{}, &config.Config{})
+	diagnostics := strings.Join([]string{
+		"error[E0308]: renderer mismatch\n --> src/audio_renderer.rs:10:5",
+		"error[E0277]: lane mismatch\n --> src/hidef.rs:20:5",
+		"error[E0061]: control mismatch\n --> src/control.rs:30:5",
+		"error[E0599]: shell mismatch\n --> src/shell.rs:40:5",
+		"note: MixEngine is defined here\n ::: src/mix_engine.rs:3:1",
+	}, "\n") + strings.Repeat("\ncompiler context", 1000)
+	validation := ValidationResult{
+		Message:   "...[earlier output truncated]...\ncompiler context",
+		Execution: &validationpkg.Execution{Stderr: diagnostics},
+	}
+
+	matched := s.attributeErrorToResources(validationDiagnosticOutput(validation), resources)
+	require.ElementsMatch(t, []string{
+		"resource.audio_renderer", "resource.hidef", "resource.control", "resource.shell",
+	}, matched)
+	require.NotContains(t, matched, "resource.mix_engine", "secondary definition spans must not reopen innocent owners")
+}
+
+func TestAttributeErrorToResourcesPrefersUniqueRootsOverSharedIntegrationFiles(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	resources := []store.SessionResource{
+		{ResourceID: "resource.event_log"},
+		{ResourceID: "resource.event_record"},
+		{ResourceID: "resource.state_tree"},
+	}
+	ownedPaths := []string{
+		"src/control/event_log.rs",
+		"src/control/event_record.rs",
+		"src/control/state_tree.rs",
+	}
+	for i, resource := range resources {
+		require.NoError(t, st.SetResource(store.Resource{ID: resource.ResourceID, Kind: "valueObject"}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+			Path: ownedPaths[i], ResourceID: resource.ResourceID,
+		}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+			Path: "src/control/mod.rs", ResourceID: resource.ResourceID,
+		}))
+	}
+	s := New(st, OSFileSystem{}, &config.Config{})
+
+	rootAndCascade := strings.Join([]string{
+		"error: expected item, found `/`",
+		" --> src/control/event_log.rs:1:1",
+		"error: file is loaded as a module multiple times",
+		" --> src/control/mod.rs:4:1",
+	}, "\n")
+	require.Equal(t, []string{"resource.event_log"},
+		s.attributeErrorToResources(rootAndCascade, resources),
+		"a shared module diagnostic must not reopen every resource when a unique root is present",
+	)
+
+	sharedOnly := "error: conflicting module declarations\n --> src/control/mod.rs:4:1"
+	require.ElementsMatch(t,
+		[]string{"resource.event_log", "resource.event_record", "resource.state_tree"},
+		s.attributeErrorToResources(sharedOnly, resources),
+		"a genuinely shared-only diagnostic must retain all possible owners for triage",
+	)
+}
+
+func TestAttributeErrorToResourcesMatchesProductionParseRootsWithoutSharedOrStaleFanout(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	rootOwners := map[string]string{
+		"resource.event_log":       "src/control/event_log.rs",
+		"resource.state_projector": "src/control/state_projector.rs",
+		"resource.automatic_midi":  "src/testing/automatic_midi_test.rs",
+	}
+	resources := make([]store.SessionResource, 0, len(rootOwners)+1)
+	for resourceID, ownedPath := range rootOwners {
+		require.NoError(t, st.SetResource(store.Resource{ID: resourceID, Kind: "valueObject"}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{Path: ownedPath, ResourceID: resourceID}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+			Path: "src/control/mod.rs", ResourceID: resourceID,
+		}))
+		resources = append(resources, store.SessionResource{ResourceID: resourceID})
+	}
+	const unrelatedID = "resource.unrelated_consumer"
+	require.NoError(t, st.SetResource(store.Resource{ID: unrelatedID, Kind: "valueObject"}))
+	require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{Path: "src/control/mod.rs", ResourceID: unrelatedID}))
+	resources = append(resources, store.SessionResource{ResourceID: unrelatedID})
+
+	// Historical ownership outside this session must not turn the active
+	// AutomaticMidi owner into an ambiguous repair target.
+	const staleID = "resource.stale_patch"
+	require.NoError(t, st.SetResource(store.Resource{ID: staleID, Kind: "valueObject"}))
+	require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+		Path: "src/testing/automatic_midi_test.rs", ResourceID: staleID,
+	}))
+
+	diagnostics := strings.Join([]string{
+		"error: expected item, found `/`\n --> src/control/state_projector.rs:1:1",
+		"error: expected item, found `/`\n --> src/control/event_log.rs:1:1",
+		"error: expected item, found `/`\n --> src/testing/automatic_midi_test.rs:1:1",
+		"error: file is loaded as a module multiple times\n --> src/control/mod.rs:4:1",
+		"Running unittests src/lib.rs (target/debug/deps/crest_synth)",
+	}, "\n")
+	s := New(st, OSFileSystem{}, &config.Config{})
+	require.ElementsMatch(t,
+		[]string{"resource.event_log", "resource.state_projector", "resource.automatic_midi"},
+		s.attributeErrorToResources(diagnostics, resources),
+	)
+}
+
+func TestAttributeErrorToResourcesIgnoresToolProgressFileNames(t *testing.T) {
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	resources := []store.SessionResource{{ResourceID: "resource.one"}, {ResourceID: "resource.two"}}
+	for _, resource := range resources {
+		require.NoError(t, st.SetResource(store.Resource{ID: resource.ResourceID, Kind: "valueObject"}))
+		require.NoError(t, st.SetGeneratedFile(store.GeneratedFile{
+			Path: "src/lib.rs", ResourceID: resource.ResourceID,
+		}))
+	}
+	s := New(st, OSFileSystem{}, &config.Config{})
+	require.Empty(t, s.attributeErrorToResources(
+		"Running unittests src/lib.rs (target/debug/deps/crest_synth)\ntest result: FAILED",
+		resources,
+	), "a test executable progress line is not a diagnostic ownership span")
 }
 
 func TestRunProjectValidations_RecordsFailures(t *testing.T) {
@@ -312,6 +460,26 @@ func TestFilterForTarget_DropsEmptyWaves(t *testing.T) {
 	assert.Equal(t, "res.A", filteredActions[0].ResourceID)
 	require.Len(t, filteredWaves, 1)
 	assert.Equal(t, []string{"res.A"}, filteredWaves[0])
+}
+
+func TestFilterWavesForActionsDropsUnchangedNodesAndCompressesGaps(t *testing.T) {
+	waves := [][]string{
+		{"context.Audio", "valueObject.Audio.Unchanged"},
+		{"domainService.Audio.Changed"},
+		{"adapter.Audio.Unchanged"},
+		{"asset.Audio.Manifest"},
+	}
+	actions := []planpkg.PlannedAction{
+		{ResourceID: "domainService.Audio.Changed", Kind: planpkg.ActionModify},
+		{ResourceID: "asset.Audio.Manifest", Kind: planpkg.ActionModify},
+		{ResourceID: "removed.Resource", Kind: planpkg.ActionDestroy},
+	}
+
+	filtered := filterWavesForActions(waves, actions)
+	require.Equal(t, [][]string{
+		{"domainService.Audio.Changed"},
+		{"asset.Audio.Manifest"},
+	}, filtered)
 }
 
 func TestFilterForTarget_TargetOnly(t *testing.T) {

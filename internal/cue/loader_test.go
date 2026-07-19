@@ -171,6 +171,7 @@ project: {
 		scope: "goal", goal: "goal.verified", capability: "capability.run", evidence: ["evidence.witness"]
 		command: ["go", "test", "./e2e", "-run", "TestReal"]
 		negativeCommand: ["go", "test", "./e2e", "-run", "TestNegative"]
+		negativeExpectedExitCode: 1
 		workingDirectory: ".", timeout: "2m", environment: ["PATH"], artifacts: ["bin/example"]
 		observation: {kind: "json_stdout", marker: "CREST_OBS", schema: {worked: "bool"}}
 		predicates: [{field: "worked", op: "equals", member: true}]
@@ -184,6 +185,7 @@ project: {
 	require.Equal(t, "validation.project_test", p.Validations[0].ID)
 	require.True(t, p.Validations[0].Named)
 	require.Equal(t, "witness.round_trip", p.Witnesses["round_trip"].ID)
+	require.Equal(t, 1, p.Witnesses["round_trip"].NegativeExpectedExitCode)
 }
 
 func TestLoad_RejectsUnsafeOrNonFalsifiableWitness(t *testing.T) {
@@ -199,6 +201,7 @@ project: {
 	completion: requiredGoals: ["goal.verified"]
 	witnesses: bad: {
 		scope: "goal", goal: "goal.verified", command: ["go", "test"], negativeCommand: ["go", "test"]
+		negativeExpectedExitCode: 256
 		workingDirectory: "../outside", observation: {kind: "json_stdout", marker: "", schema: {worked: "bool"}}
 		predicates: [{field: "missing", op: "equals", member: true}]
 	}
@@ -208,6 +211,7 @@ project: {
 	_, err := Load(dir)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "negativeCommand must differ")
+	require.ErrorContains(t, err, "negativeExpectedExitCode must be between 0 and 255")
 	require.ErrorContains(t, err, "workingDirectory must remain inside")
 	require.ErrorContains(t, err, "absent from the observation schema")
 }

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,22 +35,36 @@ import (
 // method captures its arguments so tests can assert forwarding.
 type fakeSpec struct {
 	specHandler
-	lastFiles          []specmod.CommitFile
-	lastNotes          string
-	lastModel          string
-	lastAttempt        string
-	lastExecutionStart specmod.ExecutionStartOptions
-	lastVerifySession  string
-	lastVerifyWave     int
-	lastWitnessID      string
-	lastWitnessCheckID string
-	lastWitnessSession string
-	lastContext        specmod.ContextOptions
-	evaluationRuns     []storemod.EvaluationRun
-	lastEvalRunID      string
-	lastEvalOwner      string
-	lastEvalSplit      string
-	lastEvalLease      time.Duration
+	lastFiles            []specmod.CommitFile
+	lastNotes            string
+	lastModel            string
+	lastAttempt          string
+	lastExecutionStart   specmod.ExecutionStartOptions
+	lastVerifySession    string
+	lastVerifyWave       int
+	verifyResult         *specmod.WaveVerifyResult
+	lastWitnessID        string
+	lastWitnessCheckID   string
+	lastWitnessSession   string
+	lastContext          specmod.ContextOptions
+	lastContextBatch     specmod.WaveContextOptions
+	lastDispatchEvent    specmod.DispatchEventOptions
+	lastAbandonSession   string
+	lastAbandonReason    string
+	lastInvalidate       bool
+	evaluationRuns       []storemod.EvaluationRun
+	lastEvalRunID        string
+	lastEvalOwner        string
+	lastEvalSplit        string
+	lastEvalLease        time.Duration
+	workspaceRecoveries  int
+	recoverCalls         int
+	recoveryOrder        []string
+	lastDispatchBefore   time.Time
+	lastExecutionBefore  time.Time
+	workspaceRecoveryErr error
+	executionRecoveryErr error
+	nextCalls            int
 }
 
 func (f *fakeSpec) Plan(ctx context.Context) (*specmod.PlanResult, error) {
@@ -60,6 +77,7 @@ func (f *fakeSpec) ConfirmDestroys(ctx context.Context, sessionID string, resour
 	return nil, nil
 }
 func (f *fakeSpec) Next(ctx context.Context, sessionID string) (*specmod.NextResult, error) {
+	f.nextCalls++
 	return &specmod.NextResult{}, nil
 }
 func (f *fakeSpec) Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error) {
@@ -68,6 +86,17 @@ func (f *fakeSpec) Context(ctx context.Context, sessionID, resourceID string) (*
 func (f *fakeSpec) PrepareContext(ctx context.Context, opts specmod.ContextOptions) (*specmod.ContextResult, error) {
 	f.lastContext = opts
 	return &specmod.ContextResult{AttemptID: "attempt-test", ContextManifestID: "manifest-test"}, nil
+}
+func (f *fakeSpec) PrepareWaveContexts(ctx context.Context, opts specmod.WaveContextOptions) (*specmod.WaveContextResult, error) {
+	f.lastContextBatch = opts
+	return &specmod.WaveContextResult{WaveIndex: 2, Contexts: []specmod.WaveContextItem{{
+		ResourceID: "resource.test", Context: &specmod.ContextResult{AttemptID: "attempt-batch"},
+	}}}, nil
+}
+
+func (f *fakeSpec) ReportDispatchEvent(_ context.Context, opts specmod.DispatchEventOptions) (*storemod.DispatchLifecycle, error) {
+	f.lastDispatchEvent = opts
+	return &storemod.DispatchLifecycle{ID: opts.DispatchID, SessionID: opts.SessionID, ResourceID: opts.ResourceID}, nil
 }
 func (f *fakeSpec) InspectContext(ctx context.Context, manifestID, attemptID string) (*storemod.ContextManifest, error) {
 	return &storemod.ContextManifest{ID: manifestID}, nil
@@ -92,8 +121,17 @@ func (f *fakeSpec) InspectExecution(ctx context.Context, id, attemptID string) (
 func (f *fakeSpec) ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error) {
 	return nil, nil
 }
-func (f *fakeSpec) RecoverExecutions(ctx context.Context, before time.Time) (int, error) {
-	return 0, nil
+func (f *fakeSpec) RecoverWorkspaceCommits(ctx context.Context) (int, error) {
+	f.workspaceRecoveries++
+	f.recoveryOrder = append(f.recoveryOrder, "workspace")
+	return 0, f.workspaceRecoveryErr
+}
+func (f *fakeSpec) RecoverExecutions(ctx context.Context, dispatchBefore, executionBefore time.Time) (int, error) {
+	f.recoverCalls++
+	f.recoveryOrder = append(f.recoveryOrder, "execution")
+	f.lastDispatchBefore = dispatchBefore
+	f.lastExecutionBefore = executionBefore
+	return 0, f.executionRecoveryErr
 }
 func (f *fakeSpec) ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error) {
 	return nil, nil
@@ -112,6 +150,12 @@ func (f *fakeSpec) CommitAttempt(ctx context.Context, attemptID string, files []
 	f.lastFiles = files
 	f.lastNotes = notes
 	return &specmod.CommitResult{AttemptID: attemptID}, nil
+}
+func (f *fakeSpec) Abandon(ctx context.Context, sessionID, reason string, invalidateCommitted bool) (*specmod.AbandonResult, error) {
+	f.lastAbandonSession = sessionID
+	f.lastAbandonReason = reason
+	f.lastInvalidate = invalidateCommitted
+	return &specmod.AbandonResult{SessionID: sessionID, Status: "aborted", Reason: reason, CommittedInvalidated: 2}, nil
 }
 func (f *fakeSpec) Commit(ctx context.Context, sessionID, resourceID string, files []specmod.CommitFile, notes string, model string) (*specmod.CommitResult, error) {
 	f.lastFiles = files
@@ -220,6 +264,9 @@ func (f *fakeSpec) WaveStatus(ctx context.Context, sessionID string, waveIndex i
 func (f *fakeSpec) VerifyWave(ctx context.Context, sessionID string, waveIndex int) *specmod.WaveVerifyResult {
 	f.lastVerifySession = sessionID
 	f.lastVerifyWave = waveIndex
+	if f.verifyResult != nil {
+		return f.verifyResult
+	}
 	return &specmod.WaveVerifyResult{WaveIndex: waveIndex, Passed: true}
 }
 func (f *fakeSpec) EvolvePrompt(ctx context.Context, sessionID string) (string, error) {
@@ -331,6 +378,8 @@ func TestInitialize(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "crest-spec", serverInfo["name"])
 	assert.Equal(t, "0.1.0", serverInfo["version"])
+	assert.NotEmpty(t, serverInfo["buildFingerprint"])
+	assert.NotEmpty(t, serverInfo["processStartedAt"])
 
 	caps, ok := result["capabilities"].(map[string]any)
 	require.True(t, ok)
@@ -385,6 +434,8 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 	assert.True(t, names["spec/context_attempts"])
 	assert.True(t, names["spec/context_inspect"])
 	assert.True(t, names["spec/context_compare"])
+	assert.True(t, names["spec/context_batch"])
+	assert.True(t, names["spec/dispatch_event"])
 	assert.True(t, names["spec/attempt_inspect"])
 	assert.True(t, names["spec/attempt_compare"])
 	assert.True(t, names["spec/capabilities"])
@@ -412,11 +463,29 @@ func TestToolsList_DropsRemovedTools(t *testing.T) {
 		"spec/project_overview",
 		"spec/goals", "spec/capabilities", "spec/resources", "spec/plan_inspect",
 		"spec/impact",
-		"spec/unlock", "spec/apply_amendments", "spec/list_amendments",
+		"spec/abandon", "spec/unlock", "spec/apply_amendments", "spec/list_amendments",
 		"spec/graduate_amendment",
 	} {
 		assert.True(t, names[kept], "tool %q should be registered", kept)
 	}
+}
+
+func TestSpecAbandonForwardsAuditReasonAndInvalidationChoice(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+
+	result := srv.toolFns["spec/abandon"](context.Background(), json.RawMessage(`{
+		"session_id":"session-unsafe",
+		"reason":"context was incomplete",
+		"invalidate_committed":true
+	}`))
+
+	require.False(t, result.IsError)
+	require.Equal(t, "session-unsafe", fake.lastAbandonSession)
+	require.Equal(t, "context was incomplete", fake.lastAbandonReason)
+	require.True(t, fake.lastInvalidate)
+	require.Contains(t, result.Content[0].Text, `"status":"aborted"`)
+	require.Contains(t, result.Content[0].Text, `"committed_invalidated":2`)
 }
 
 func TestTypedObservationToolsShareDashboardContracts(t *testing.T) {
@@ -501,8 +570,49 @@ func TestContextToolCreatesAttemptWithSelectionOptions(t *testing.T) {
 	require.Contains(t, result.Content[0].Text, `"AttemptID":"attempt-test"`)
 }
 
-func TestVerifyWaveToolForwardsArgs(t *testing.T) {
+func TestDispatchEventToolForwardsHostBoundary(t *testing.T) {
 	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"event":"worker_acknowledged","dispatch_id":"dispatch-1","session_id":"s","resource_id":"r","host_session_id":"host-1","worker_id":"worker-2"}`)
+	result := srv.toolFns["spec/dispatch_event"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Equal(t, specmod.DispatchEventOptions{
+		Event: "worker_acknowledged", DispatchID: "dispatch-1", SessionID: "s", ResourceID: "r",
+		HostSessionID: "host-1", WorkerID: "worker-2",
+	}, fake.lastDispatchEvent)
+}
+
+func TestDispatchEventToolForwardsImmediateHostDispatchFailure(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"event":"dispatch_failed","dispatch_id":"dispatch-1","session_id":"s","resource_id":"r","host_session_id":"host-1","worker_id":"worker-2","reason":"worker spawn failed"}`)
+	result := srv.toolFns["spec/dispatch_event"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Equal(t, specmod.DispatchEventOptions{
+		Event: "dispatch_failed", DispatchID: "dispatch-1", SessionID: "s", ResourceID: "r",
+		HostSessionID: "host-1", WorkerID: "worker-2", Reason: "worker spawn failed",
+	}, fake.lastDispatchEvent)
+}
+
+func TestContextBatchToolPreparesCurrentWaveWithOneCall(t *testing.T) {
+	fake := &fakeSpec{}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	args := json.RawMessage(`{"session_id":"s","role":"minimal_diff_repair","budget_tokens":12288,"limit":3}`)
+	result := srv.toolFns["spec/context_batch"](context.Background(), args)
+	require.False(t, result.IsError)
+	require.Equal(t, specmod.WaveContextOptions{
+		SessionID: "s", Role: "minimal_diff_repair", BudgetTokens: 12288, Limit: 3,
+	}, fake.lastContextBatch)
+	require.Contains(t, result.Content[0].Text, `"resource_id":"resource.test"`)
+	require.Contains(t, result.Content[0].Text, `"AttemptID":"attempt-batch"`)
+}
+
+func TestVerifyWaveToolForwardsArgs(t *testing.T) {
+	fake := &fakeSpec{verifyResult: &specmod.WaveVerifyResult{
+		WaveIndex: 2, Passed: true, Deferred: true,
+		DeferredReason:      "downstream consumers may still be stale",
+		IntegrationGateWave: 4, PendingResources: []string{"resource.consumer"},
+	}}
 	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
 	args := json.RawMessage(`{"session_id":"sess-1","wave_index":2}`)
 	res := srv.toolFns["spec/verify_wave"](context.Background(), args)
@@ -511,6 +621,9 @@ func TestVerifyWaveToolForwardsArgs(t *testing.T) {
 	require.False(t, res.IsError)
 	assert.Contains(t, res.Content[0].Text, `"Passed":true`)
 	assert.Contains(t, res.Content[0].Text, `"WaveIndex":2`)
+	assert.Contains(t, res.Content[0].Text, `"Deferred":true`)
+	assert.Contains(t, res.Content[0].Text, `"IntegrationGateWave":4`)
+	assert.Contains(t, res.Content[0].Text, `"resource.consumer"`)
 }
 
 func TestVerifyToolAcceptsOnlyDeclaredWitnessReferences(t *testing.T) {
@@ -551,6 +664,28 @@ func TestAbout_Static(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.Content[0].Text, "state engine only")
+	assert.Contains(t, result.Content[0].Text, "Build fingerprint:")
+}
+
+func TestSpecToolRejectsExecutableReplacedAfterServerStartup(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "crest-spec")
+	require.NoError(t, os.WriteFile(executable, []byte("old engine"), 0o755))
+
+	srv := New(&fakeSpec{}, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	srv.build = captureBuildIdentity(executable)
+	replacement := filepath.Join(dir, "replacement")
+	require.NoError(t, os.WriteFile(replacement, []byte("new engine with different bytes"), 0o755))
+	require.NoError(t, os.Rename(replacement, executable))
+
+	resp := sendRequest(t, srv, nil, "tools/call", 1, toolCallParams{
+		Name: "spec/plan", Arguments: json.RawMessage(`{}`),
+	})
+	result, ok := resp.Result.(toolResult)
+	require.True(t, ok)
+	require.True(t, result.IsError)
+	require.Contains(t, result.Content[0].Text, "executable changed")
+	require.Contains(t, result.Content[0].Text, "restart")
 }
 
 func TestLiveMetrics(t *testing.T) {
@@ -644,6 +779,99 @@ func TestStdioTransport_InitializeFlow(t *testing.T) {
 	assert.Contains(t, output, "2024-11-05")
 	assert.Contains(t, output, "crest-spec")
 	assert.Contains(t, output, "spec/commit")
+}
+
+func TestStdioStartupInvokesLifecycleRecoveryBeforeServing(t *testing.T) {
+	fake := &fakeSpec{}
+	const dispatchTimeout = 45 * time.Second
+	const executionTimeout = 17 * time.Minute
+	started := time.Now().UTC()
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{
+		DispatchTimeout: dispatchTimeout, ExecutionTimeout: executionTimeout,
+	})
+
+	require.NoError(t, srv.Run(context.Background()))
+	require.Equal(t, 1, fake.workspaceRecoveries)
+	require.Equal(t, 1, fake.recoverCalls)
+	require.Equal(t, []string{"workspace", "execution"}, fake.recoveryOrder,
+		"workspace rollback must finish before other lifecycle recovery or request serving")
+	require.WithinDuration(t, started.Add(-dispatchTimeout), fake.lastDispatchBefore, time.Second)
+	require.WithinDuration(t, started.Add(-executionTimeout), fake.lastExecutionBefore, time.Second)
+}
+
+func TestStdioStartupZeroValueConfigUsesSafeDispatchDefault(t *testing.T) {
+	fake := &fakeSpec{}
+	started := time.Now().UTC()
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+
+	require.NoError(t, srv.Run(context.Background()))
+	require.Equal(t, 1, fake.recoverCalls)
+	require.WithinDuration(
+		t,
+		started.Add(-config.DefaultDispatchTimeout),
+		fake.lastDispatchBefore,
+		time.Second,
+	)
+	require.True(t, fake.lastExecutionBefore.IsZero(),
+		"a zero execution timeout remains disabled rather than timing out active executions immediately")
+}
+
+func TestStdioStartupRecoveryDivergenceKeepsDiagnosticsAvailableAndBlocksMutation(t *testing.T) {
+	fake := &fakeSpec{workspaceRecoveryErr: errors.New("src/lib.rs contains third-party bytes")}
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"about","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"spec/status","arguments":{"session_id":"session-1"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"spec/next","arguments":{"session_id":"session-1"}}}`,
+	}, "\n") + "\n"
+	var output bytes.Buffer
+	srv := New(fake, strings.NewReader(input), &output, zerolog.Nop(), &config.Config{})
+
+	require.NoError(t, srv.Run(context.Background()),
+		"a fail-closed workspace divergence must not terminate stdio")
+	require.Zero(t, fake.recoverCalls,
+		"execution recovery cannot run against an unresolved workspace")
+	require.Zero(t, fake.nextCalls,
+		"a scheduling handler must not run while workspace recovery is blocked")
+
+	encoded := output.String()
+	require.Contains(t, encoded, `"recoveryBlocker"`)
+	require.Contains(t, encoded, "recovery_blocker")
+	require.Contains(t, encoded, `"stage":"workspace_commit_recovery"`)
+	require.Contains(t, encoded, "recovery_blocked")
+	require.Contains(t, encoded, "third-party bytes")
+	require.Contains(t, encoded, "session_id",
+		"spec/status remains callable and returns its ordinary payload plus the blocker")
+}
+
+func TestBlockedMutationRetriesRecoveryAndClearsBlockerOnlyAfterSuccess(t *testing.T) {
+	fake := &fakeSpec{workspaceRecoveryErr: errors.New("manual edit diverged")}
+	srv := New(fake, strings.NewReader(""), io.Discard, zerolog.Nop(), &config.Config{})
+	srv.prepareStartupRecovery(context.Background())
+	require.NotNil(t, srv.recoveryBlockerSnapshot())
+
+	blocked := srv.handleToolCall(context.Background(), 1, mustJSON(t, toolCallParams{
+		Name: "spec/next", Arguments: json.RawMessage(`{"session_id":"session-1"}`),
+	}))
+	blockedResult := blocked.Result.(toolResult)
+	require.True(t, blockedResult.IsError)
+	require.Zero(t, fake.nextCalls)
+
+	fake.workspaceRecoveryErr = nil
+	recovered := srv.handleToolCall(context.Background(), 2, mustJSON(t, toolCallParams{
+		Name: "spec/next", Arguments: json.RawMessage(`{"session_id":"session-1"}`),
+	}))
+	recoveredResult := recovered.Result.(toolResult)
+	require.False(t, recoveredResult.IsError, recoveredResult.Content[0].Text)
+	require.Equal(t, 1, fake.nextCalls)
+	require.Nil(t, srv.recoveryBlockerSnapshot())
+}
+
+func mustJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	require.NoError(t, err)
+	return encoded
 }
 
 func TestHTTPTransport(t *testing.T) {

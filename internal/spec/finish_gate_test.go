@@ -51,6 +51,7 @@ func TestFinishBlocksOnUnresolvedChecks(t *testing.T) {
 	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
+	verifyFinishGateSession(t, s, st)
 
 	seedChecks(t, s, st.resourceID, []string{"pending", "malformed", "passed"})
 
@@ -81,6 +82,7 @@ func TestFinishForceOverridesGate(t *testing.T) {
 	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
+	verifyFinishGateSession(t, s, st)
 
 	seedChecks(t, s, st.resourceID, []string{"failed"})
 
@@ -96,6 +98,7 @@ func TestFinishProceedsWhenChecksResolved(t *testing.T) {
 	_, err := commitTestAttempt(t, s, ctx, st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "", "claude-sonnet-4-6")
 	require.NoError(t, err)
+	verifyFinishGateSession(t, s, st)
 
 	seedChecks(t, s, st.resourceID, []string{"passed", "graduated"})
 
@@ -103,6 +106,15 @@ func TestFinishProceedsWhenChecksResolved(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.Blocked)
 	require.Equal(t, 1, res.Committed)
+}
+
+func verifyFinishGateSession(t *testing.T, s *Spec, state commitTestSession) {
+	t.Helper()
+	resource, err := s.store.GetSessionResource(state.sessionID, state.resourceID)
+	require.NoError(t, err)
+	result := s.VerifyWave(context.Background(), state.sessionID, resource.WaveIndex)
+	require.True(t, result.Passed)
+	require.True(t, result.IntegrationValidated)
 }
 
 // Destroying a resource removes its behavioral state too — otherwise checks
@@ -118,7 +130,7 @@ func TestDestroyRemovesBehavioralState(t *testing.T) {
 
 	sess, err := s.store.GetSession(st.sessionID)
 	require.NoError(t, err)
-	destroyed, err := s.executeDestroys([]planpkg.PlannedAction{{ResourceID: st.resourceID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
+	destroyed, err := s.executeDestroys(ctx, []planpkg.PlannedAction{{ResourceID: st.resourceID, Kind: planpkg.ActionDestroy}}, sess.ApplyID)
 	require.NoError(t, err)
 	require.Len(t, destroyed, 1)
 

@@ -9,6 +9,8 @@ import (
 	"github.com/kelseyhightower/envconfig"
 )
 
+const DefaultDispatchTimeout = 2 * time.Minute
+
 type Config struct {
 	HTTPAddr string `envconfig:"HTTP_ADDR"`
 
@@ -20,7 +22,18 @@ type Config struct {
 	TestCommand      string        `envconfig:"TEST_CMD"`
 	Mode             string        `envconfig:"MODE" default:"default"`
 	Evolve           string        `envconfig:"EVOLVE" default:"all"`
+	DispatchTimeout  time.Duration `envconfig:"DISPATCH_TIMEOUT" default:"2m"`
 	ExecutionTimeout time.Duration `envconfig:"EXECUTION_TIMEOUT" default:"30m"`
+}
+
+// EffectiveDispatchTimeout preserves the production default for Config values
+// built directly in tests or embeddings rather than through New. A zero-value
+// dispatch timeout must not turn the recovery cutoff into "right now".
+func (c *Config) EffectiveDispatchTimeout() time.Duration {
+	if c == nil || c.DispatchTimeout == 0 {
+		return DefaultDispatchTimeout
+	}
+	return c.DispatchTimeout
 }
 
 func New() (*Config, error) {

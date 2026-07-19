@@ -63,6 +63,8 @@ func TestNew_AllTablesExist(t *testing.T) {
 		"execution_manifests",
 		"execution_tools",
 		"execution_events",
+		"dispatch_lifecycles",
+		"context_batches",
 		"execution_goals",
 		"execution_capabilities",
 		"candidate_sets",
@@ -73,6 +75,7 @@ func TestNew_AllTablesExist(t *testing.T) {
 		"validation_runs",
 		"validation_executions",
 		"verification_evidence_records",
+		"behavioral_witness_repair_cycles",
 		"evaluation_case_assessments",
 		"evaluation_cases",
 		"evaluation_datasets",
@@ -173,6 +176,10 @@ func TestNewMigratesPopulatedLegacyDatabaseWithoutInventingProvenance(t *testing
 	resource, err := st.GetResource("legacy.resource")
 	require.NoError(t, err)
 	assert.Equal(t, "effective", resource.EffectiveHash)
+	assert.Empty(t, resource.GenerationInputHash, "legacy rows use an explicit empty baseline marker")
+	assert.Empty(t, resource.ExportedContractHash, "legacy rows use an explicit empty baseline marker")
+	assert.Empty(t, resource.CodeDeclarationHash, "legacy rows preserve unknown code provenance")
+	assert.Empty(t, resource.VerificationContractHash, "legacy rows preserve unknown repair-verification provenance")
 	generations, err := st.ListGenerations("legacy.resource", 10)
 	require.NoError(t, err)
 	require.Len(t, generations, 1)
@@ -197,6 +204,24 @@ func TestNewMigratesPopulatedLegacyDatabaseWithoutInventingProvenance(t *testing
 	require.NoError(t, err)
 	require.Len(t, generations, 1)
 	assert.True(t, generations[0].Legacy)
+}
+
+func TestResourceIncrementalHashesRoundTrip(t *testing.T) {
+	st := testStore(t)
+	want := Resource{
+		ID: "aggregate.incremental", Kind: "aggregate", DeclarationHash: "declaration",
+		EffectiveHash: "legacy-effective", GenerationInputHash: "direct-input",
+		ExportedContractHash: "public-contract", CodeDeclarationHash: "code-contract",
+		VerificationContractHash: "repair-contract", Model: "model", SettledAt: time.Now().UTC(),
+	}
+	require.NoError(t, st.SetResource(want))
+
+	got, err := st.GetResource(want.ID)
+	require.NoError(t, err)
+	assert.Equal(t, want.GenerationInputHash, got.GenerationInputHash)
+	assert.Equal(t, want.ExportedContractHash, got.ExportedContractHash)
+	assert.Equal(t, want.CodeDeclarationHash, got.CodeDeclarationHash)
+	assert.Equal(t, want.VerificationContractHash, got.VerificationContractHash)
 }
 
 // ---------------------------------------------------------------------------

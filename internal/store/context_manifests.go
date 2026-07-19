@@ -89,17 +89,25 @@ type ContextManifestSummary struct {
 }
 
 // ContextManifestWrite is persisted as one transaction with its attempt,
-// sections, blobs, and session dispatch transition.
+// sections, blobs, and lifecycle binding. Preparing immutable context does not
+// claim the session resource; RequestDispatch performs that transition only
+// after the host has reserved a real worker slot.
 type ContextManifestWrite struct {
-	Manifest  ContextManifest
-	Dispatch  bool
-	HandoffID string
+	Manifest ContextManifest
+	// Dispatch is retained only so stale callers fail loudly instead of
+	// silently recreating the unsafe prepare-and-claim transition.
+	Dispatch            bool
+	HandoffID           string
+	DispatchLifecycleID string
 }
 
 func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifestWrite) (_ *ContextManifest, err error) {
 	m := input.Manifest
-	if err := validateContextManifest(m, input.Dispatch); err != nil {
+	if err := validateContextManifest(m); err != nil {
 		return nil, err
+	}
+	if input.Dispatch {
+		return nil, fmt.Errorf("create context manifest: preparation cannot claim a resource; record dispatch_requested after context preparation")
 	}
 
 	tx, err := s.sqlDB.BeginTx(ctx, nil)
@@ -113,7 +121,6 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 	}()
 	q := s.queries.WithTx(tx)
 	timestamp := now()
-
 	attemptCount, err := q.CountGenerationAttempts(ctx, db.CountGenerationAttemptsParams{
 		SessionID: m.Attempt.SessionID, ResourceID: m.Attempt.ResourceID,
 	})
@@ -157,6 +164,16 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 		RolePolicyVersion: m.Attempt.RolePolicyVersion,
 	}); err != nil {
 		return nil, fmt.Errorf("create context manifest: insert attempt: %w", err)
+	}
+	if input.DispatchLifecycleID != "" {
+		affected, lifecycleErr := q.BindPreparedDispatchContext(ctx, db.BindPreparedDispatchContextParams{
+			AttemptID: &m.Attempt.ID, ContextPreparedAt: timestamp, UpdatedAt: timestamp,
+			ID: input.DispatchLifecycleID, SessionID: m.Attempt.SessionID,
+			ResourceID: m.Attempt.ResourceID, AttemptID_2: &m.Attempt.ID,
+		})
+		if lifecycleErr != nil || affected != 1 {
+			return nil, fmt.Errorf("create context manifest: bind dispatch lifecycle: affected=%d: %w", affected, lifecycleErr)
+		}
 	}
 	if input.HandoffID != "" {
 		handoff, handoffErr := q.GetAttemptHandoff(ctx, input.HandoffID)
@@ -235,19 +252,6 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 		}
 	}
 
-	if input.Dispatch {
-		var affected int64
-		affected, err = q.SetSessionResourceDispatchedTx(ctx, db.SetSessionResourceDispatchedTxParams{
-			DispatchedAt: timestamp, UpdatedAt: timestamp,
-			SessionID: m.Attempt.SessionID, ResourceID: m.Attempt.ResourceID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create context manifest: dispatch resource: %w", err)
-		}
-		if affected != 1 {
-			return nil, fmt.Errorf("create context manifest: dispatch resource: session resource not found")
-		}
-	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("create context manifest: commit: %w", err)
 	}
@@ -255,7 +259,7 @@ func (s *Store) CreateContextManifest(ctx context.Context, input ContextManifest
 	return &m, nil
 }
 
-func validateContextManifest(m ContextManifest, dispatch bool) error {
+func validateContextManifest(m ContextManifest) error {
 	if m.ID == "" || m.Attempt.ID == "" || m.Attempt.SessionID == "" || m.Attempt.ApplyID == "" || m.Attempt.ResourceID == "" {
 		return fmt.Errorf("create context manifest: manifest, attempt, session, apply, and resource identifiers are required")
 	}
@@ -268,9 +272,6 @@ func validateContextManifest(m ContextManifest, dispatch bool) error {
 	}
 	if m.BudgetTokens <= 0 || m.EstimatedTokens < 0 || m.OriginalBytes < 0 || m.SelectedBytes < 0 {
 		return fmt.Errorf("create context manifest: context sizes are invalid")
-	}
-	if dispatch == m.Blocked {
-		return fmt.Errorf("create context manifest: blocked manifests cannot dispatch and prepared manifests must dispatch")
 	}
 	for _, section := range m.Sections {
 		if section.ID == "" || section.Kind == "" || section.SourceKind == "" || section.SourceID == "" || section.OriginalHash == "" {

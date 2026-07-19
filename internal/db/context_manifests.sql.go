@@ -625,11 +625,13 @@ func (q *Queries) PutContentBlob(ctx context.Context, arg PutContentBlobParams) 
 
 const setSessionResourceDispatchedTx = `-- name: SetSessionResourceDispatchedTx :execrows
 UPDATE session_resources
-SET state = 'dispatched', phase = 'queued', dispatched_at = ?, updated_at = ?
+SET state = 'dispatched', phase = 'queued', job_id = ?, dispatched_at = ?, updated_at = ?
 WHERE session_id = ? AND resource_id = ?
+  AND state IN ('pending', 'rejected', 'errored', 'timed_out', 'blocked')
 `
 
 type SetSessionResourceDispatchedTxParams struct {
+	JobID        *string
 	DispatchedAt string
 	UpdatedAt    string
 	SessionID    string
@@ -638,6 +640,7 @@ type SetSessionResourceDispatchedTxParams struct {
 
 func (q *Queries) SetSessionResourceDispatchedTx(ctx context.Context, arg SetSessionResourceDispatchedTxParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionResourceDispatchedTx,
+		arg.JobID,
 		arg.DispatchedAt,
 		arg.UpdatedAt,
 		arg.SessionID,

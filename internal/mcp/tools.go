@@ -56,12 +56,27 @@ func (s *Server) registerInfoTools() {
 	})
 }
 
-func (s *Server) handleAbout(_ context.Context, _ json.RawMessage) toolResult {
-	return textResult(`crest-spec — declarative code generation MCP server (state engine only).
+func (s *Server) handleAbout(ctx context.Context, _ json.RawMessage) toolResult {
+	s.prepareStartupRecovery(ctx)
+	if blocker := s.recoveryBlockerSnapshot(); blocker != nil {
+		return jsonResult(map[string]any{
+			"name":                 "crest-spec",
+			"description":          "crest-spec — declarative code generation MCP server (state engine only).",
+			"build_fingerprint":    s.build.SHA256,
+			"process_started_at":   s.startTime.UTC().Format(time.RFC3339Nano),
+			"recovery_blocker":     blocker,
+			"diagnostic_tools":     []string{"about", "live_metrics", "spec/status", "spec/sql"},
+			"mutation_fail_closed": true,
+		})
+	}
+	return textResult(fmt.Sprintf(`crest-spec — declarative code generation MCP server (state engine only).
 
 This server plans, tracks, validates, and records. It does not run LLMs.
 Claude Code orchestrates generation natively. Call spec/begin and follow
-the returned Instructions, or read the server instructions from initialize.`)
+the returned Instructions, or read the server instructions from initialize.
+
+Build fingerprint: %s
+Process started: %s`, s.build.SHA256, s.startTime.UTC().Format(time.RFC3339Nano)))
 }
 
 // registerSpecStubs adds placeholder stubs when no spec handler is provided.
@@ -177,6 +192,12 @@ type specSessionArgs struct {
 	SessionID string `json:"session_id"`
 }
 
+type specAbandonArgs struct {
+	SessionID           string `json:"session_id"`
+	Reason              string `json:"reason"`
+	InvalidateCommitted bool   `json:"invalidate_committed"`
+}
+
 type specSessionResourceArgs struct {
 	SessionID  string `json:"session_id"`
 	ResourceID string `json:"resource_id"`
@@ -185,9 +206,27 @@ type specSessionResourceArgs struct {
 type specContextArgs struct {
 	SessionID       string `json:"session_id"`
 	ResourceID      string `json:"resource_id"`
+	DispatchID      string `json:"dispatch_id"`
 	Role            string `json:"role"`
 	BudgetTokens    int    `json:"budget_tokens"`
 	ParentAttemptID string `json:"parent_attempt_id"`
+}
+
+type specDispatchEventArgs struct {
+	Event         string `json:"event"`
+	DispatchID    string `json:"dispatch_id"`
+	SessionID     string `json:"session_id"`
+	ResourceID    string `json:"resource_id"`
+	HostSessionID string `json:"host_session_id"`
+	WorkerID      string `json:"worker_id"`
+	Reason        string `json:"reason"`
+}
+
+type specContextBatchArgs struct {
+	SessionID    string `json:"session_id"`
+	Role         string `json:"role"`
+	BudgetTokens int    `json:"budget_tokens"`
+	Limit        int    `json:"limit"`
 }
 
 type specContextInspectArgs struct {
@@ -569,24 +608,44 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/next", Description: "Step 2: Get next wave of resources to generate (respects dependency order). Returns done=true when all waves complete.",
+		Name: "spec/next", Description: "Low-level queue view. Returns the next dependency wave needing model work, or validation_ready=true with no resources when fast-path/committed work requires the closure gate. Returns done=true only after validation is complete.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"}},"required":["session_id"]}`),
 	}, specTool("next", func(ctx context.Context, a specSessionArgs) (any, error) {
 		return s.spec.Next(ctx, a.SessionID)
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/context", Description: "Create an immutable generation attempt and select goal-directed context for a resource. Returns attempt/context IDs, structured inclusion decisions, budgets, and legacy rendered prompts. A mandatory-budget block is recorded without dispatching.",
+		Name: "spec/context", Description: "Create an immutable, unclaimed generation attempt and select goal-directed context for a resource. The returned DispatchID must pass through dispatch_requested and worker_acknowledged before execution_start. Response-loss retries replay the active compatible unclaimed attempt. A mandatory-budget block is audit-only. NoDispatch=true means CrestSpec reinstated an exact accepted candidate; do not assign a worker.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"resource_id":{"type":"string","description":"Resource identifier"},"role":{"type":"string","description":"Agent role; defaults to resource_implementer"},"budget_tokens":{"type":"integer","description":"Optional requested context budget, clamped to engine bounds"},"parent_attempt_id":{"type":"string","description":"Optional explicit retry parent; defaults to the latest attempt for this session resource"}},"required":["session_id","resource_id"]}`),
 	}, specTool("context", func(ctx context.Context, a specContextArgs) (any, error) {
 		return s.spec.PrepareContext(ctx, specmod.ContextOptions{
-			SessionID: a.SessionID, ResourceID: a.ResourceID, Role: a.Role,
+			SessionID: a.SessionID, ResourceID: a.ResourceID, DispatchID: a.DispatchID, Role: a.Role,
 			BudgetTokens: a.BudgetTokens, ParentAttemptID: a.ParentAttemptID,
 		})
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/execution_start", Description: "Register the exact host, model, tools, settings, templates, system instructions, and context hash before an agent executes an attempt. Required before spec/commit.",
+		Name: "spec/dispatch_event", Description: "Record an engine-verified host worker assignment for an already-prepared context. dispatch_requested atomically claims the resource; worker_acknowledged precedes execution_start. If worker delivery fails before execution registration, dispatch_failed with the exact identities and a reason atomically abandons the context and releases the claim without charging a retry.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"event":{"type":"string","enum":["dispatch_requested","worker_acknowledged","dispatch_failed"]},"dispatch_id":{"type":"string","minLength":1,"description":"DispatchID returned by the prepared context"},"session_id":{"type":"string"},"resource_id":{"type":"string"},"host_session_id":{"type":"string","minLength":1,"description":"Stable identity for this top-level host run"},"worker_id":{"type":"string","minLength":1,"description":"Stable reusable worker identity within the host session"},"reason":{"type":"string","minLength":1,"description":"Required when event is dispatch_failed"}},"required":["event","dispatch_id","session_id","resource_id","host_session_id","worker_id"],"allOf":[{"if":{"properties":{"event":{"const":"dispatch_failed"}},"required":["event"]},"then":{"required":["reason"]}}]}`),
+	}, specTool("dispatch event", func(ctx context.Context, a specDispatchEventArgs) (any, error) {
+		return s.spec.ReportDispatchEvent(ctx, specmod.DispatchEventOptions{
+			Event: a.Event, DispatchID: a.DispatchID, SessionID: a.SessionID,
+			ResourceID: a.ResourceID, HostSessionID: a.HostSessionID, WorkerID: a.WorkerID,
+			Reason: a.Reason,
+		})
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/context_batch", Description: "Prepare immutable, unclaimed contexts for at most the host's immediately idle worker capacity. Repeated polls replay active unclaimed attempts. Record dispatch_requested for each returned DispatchID before assigning it; that event atomically claims the resource by AttemptID.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"role":{"type":"string","description":"Optional uniform role override; normally omitted so each resource or pending handoff selects its role"},"budget_tokens":{"type":"integer","description":"Optional uniform context budget, clamped to engine bounds"},"limit":{"type":"integer","minimum":1,"description":"Number of immediately idle worker slots; defaults safely to one"}},"required":["session_id"]}`),
+	}, specTool("context batch", func(ctx context.Context, a specContextBatchArgs) (any, error) {
+		return s.spec.PrepareWaveContexts(ctx, specmod.WaveContextOptions{
+			SessionID: a.SessionID, Role: a.Role, BudgetTokens: a.BudgetTokens, Limit: a.Limit,
+		})
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/execution_start", Description: "Register the exact host, model, tools, settings, templates, system instructions, and context hash before an agent executes an attempt. Requires a prepared attempt whose DispatchID was assigned and acknowledged by a real worker, and is required before spec/commit.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string"},"protocol_version":{"type":"string","const":"crest-execution-v1"},"idempotency_key":{"type":"string"},"context_hash":{"type":"string"},"role":{"type":"string"},"host_name":{"type":"string"},"host_version":{"type":"string"},"provider":{"type":"string"},"model":{"type":"string"},"inference_config":{"type":"object"},"agent_config":{"type":"object"},"tools":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"permission":{"type":"string"}},"required":["name","permission"]}},"template_hashes":{"type":"object","additionalProperties":{"type":"string"}},"system_instructions":{"type":"string"},"host_session_id":{"type":"string"}},"required":["attempt_id","protocol_version","idempotency_key","context_hash","role","host_name","model","template_hashes"]}`),
 	}, specTool("execution start", func(ctx context.Context, a specExecutionStartArgs) (any, error) {
 		return s.spec.StartExecution(ctx, specmod.ExecutionStartOptions{
@@ -624,7 +683,7 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/commit", Description: "Submit candidate files for a prepared and started attempt. Session, resource, role, model, and context are derived from SQLite; mechanical validation accepts or rejects the immutable candidate.",
+		Name: "spec/commit", Description: "Stage and accept immutable candidate files for a prepared attempt. Declared resource commands are deferred because even focused tests may compile stale downstream consumers; spec/verify_wave runs the deduplicated affected-closure validation batch after the final wave.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"attempt_id":{"type":"string","description":"Attempt returned by spec/context and registered by spec/execution_start"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}}}},"notes":{"type":"string","description":"Design decision notes"},"duration_ms":{"type":"integer"},"input_tokens":{"type":"integer"},"output_tokens":{"type":"integer"},"cost_usd":{"type":"number"},"host_commit_ref":{"type":"string"}},"required":["attempt_id"]}`),
 	}, s.handleSpecCommit)
 
@@ -650,7 +709,7 @@ func (s *Server) registerSpecLifecycleTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/finish", Description: "Step 6: Finalize the session and release the lock. Call after all waves are done. REFUSES (Blocked=true, with blocking_checks) while any behavioral check is pending, failed, theater, or malformed — resolve them (regenerate, or re-author malformed checks via the tasks stage) rather than forcing. force=true is an explicit human-level override.",
+		Name: "spec/finish", Description: "Finalize the session and release the lock only after every resource is committed/skipped and each committed resource passed the final affected-closure validation batch. Mechanical closure validation cannot be forced. force=true overrides only unresolved behavioral checks.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"force":{"type":"boolean","description":"Force finish even with incomplete resources"}},"required":["session_id"]}`),
 	}, specTool("finish", func(ctx context.Context, a specFinishArgs) (any, error) {
 		return s.spec.Finish(ctx, a.SessionID, a.Force)
@@ -719,7 +778,7 @@ func (s *Server) registerSpecLifecycleTools() {
 
 	s.addTool(toolDef{
 		Name:        "spec/verify",
-		Description: "Execute a declared witness against the accepted source tree, execute its declared negative case, parse both through the same schema, and persist the falsification-gated evidence. Caller-supplied observations are not accepted.",
+		Description: "Execute a declared witness against the accepted source tree, execute its controlled negative, parse both through one schema, and persist falsification-gated evidence. Positive failures route exact predicate repairResources (or the witness-wide fallback for a process failure); negative exit/theater failures route only explicit counterexampleRepairResources. Every exact source/definition epoch has a durable retry ceiling. Malformed runs never schedule repair. Caller-supplied observations are not accepted.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"witness_id":{"type":"string","description":"Canonical witness.<name> identifier"},"check_id":{"type":"string","description":"Optional legacy task check to advance when the witness covers its resource"},"session_id":{"type":"string","description":"Optional session provenance"}},"required":["witness_id"]}`),
 	}, specTool("verify", func(ctx context.Context, a specVerifyArgs) (any, error) {
 		return s.spec.VerifyWitness(ctx, a.WitnessID, a.CheckID, a.SessionID)
@@ -930,19 +989,19 @@ func (s *Server) registerSpecQueryTools() {
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/status", Description: "Session-level status overview. Without session_id: shows general state. With session_id: shows wave progress, per-wave resource counts (committed/rejected/errored/pending).",
+		Name: "spec/status", Description: "Session-level status overview. With session_id, includes wave progress and durable timing attribution for context preparation, prepared-to-dispatch queueing, dispatch-to-acknowledgement, acknowledgement-to-execution, model work, submission/commit, validation, and explicitly unattributed gaps.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID (optional — omit for general status)"}}}`),
 	}, s.handleSpecStatus)
 
 	s.addTool(toolDef{
-		Name: "spec/wave_status", Description: "Detailed wave-level view: per-resource state, attempts, retries, errors. Use to inspect progress within a specific wave.",
+		Name: "spec/wave_status", Description: "Detailed wave-level view with per-resource state, retries, errors, durable lifecycle timestamps, phase timing, and explicitly unattributed gaps.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`),
 	}, specTool("wave_status", func(ctx context.Context, a specWaveStatusArgs) (any, error) {
 		return s.spec.WaveStatus(ctx, a.SessionID, a.WaveIndex)
 	}))
 
 	s.addTool(toolDef{
-		Name: "spec/verify_wave", Description: "Run wave-level verification: project type-check/test commands plus project-level validations, executed in the project root. Returns passed plus per-resource attributed errors. Call after a wave's resources have committed; route failures back via spec/resolve.",
+		Name: "spec/verify_wave", Description: "Schedule affected-closure validation. Earlier waves return Deferred=true without running commands while downstream consumers are stale. After the final wave is terminal, runs deduplicated resource validations plus project type-check/test/project gates, attributes diagnostics to every matched owner, and atomically reopens those owners for repair.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID"},"wave_index":{"type":"integer","description":"Wave index (0-based)"}},"required":["session_id","wave_index"]}`),
 	}, specTool("verify_wave", func(ctx context.Context, a specWaveStatusArgs) (any, error) {
 		return s.spec.VerifyWave(ctx, a.SessionID, a.WaveIndex), nil
@@ -992,6 +1051,13 @@ func (s *Server) registerSpecQueryTools() {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"resource_id":{"type":"string","description":"Resource identifier"}},"required":["resource_id"]}`),
 	}, specTool("inspect", func(ctx context.Context, a specResourceArgs) (any, error) {
 		return s.spec.Inspect(ctx, a.ResourceID)
+	}))
+
+	s.addTool(toolDef{
+		Name: "spec/abandon", Description: "Abandon an interrupted session without deleting accepted files or history. Unfinished resources and attempts become terminal, provisional accepted resources are invalidated until closure validation can run, the apply is cancelled, and only the session's own lock is released. Set invalidate_committed to additionally re-plan already-verified resources against their existing files.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"session_id":{"type":"string","minLength":1,"description":"Session ID to abandon"},"reason":{"type":"string","minLength":1,"description":"Required audit reason"},"invalidate_committed":{"type":"boolean","description":"Also mark already-verified resource hashes stale; provisional accepted resources are always invalidated, while files and ownership are preserved"}},"required":["session_id","reason"]}`),
+	}, specTool("abandon", func(ctx context.Context, a specAbandonArgs) (any, error) {
+		return s.spec.Abandon(ctx, a.SessionID, a.Reason, a.InvalidateCommitted)
 	}))
 
 	s.addTool(toolDef{
@@ -1107,14 +1173,31 @@ func (s *Server) handleSpecStatus(ctx context.Context, args json.RawMessage) too
 		if err != nil {
 			return errorResult(fmt.Sprintf("session status: %v", err))
 		}
-		return jsonResult(result)
+		return s.statusResult(result)
 	}
 
 	result, err := s.spec.Status(ctx)
 	if err != nil {
 		return errorResult(fmt.Sprintf("status: %v", err))
 	}
-	return jsonResult(result)
+	return s.statusResult(result)
+}
+
+func (s *Server) statusResult(status any) toolResult {
+	blocker := s.recoveryBlockerSnapshot()
+	if blocker == nil {
+		return jsonResult(status)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		return errorResult(fmt.Sprintf("marshal status: %v", err))
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return errorResult(fmt.Sprintf("decode status: %v", err))
+	}
+	object["recovery_blocker"] = blocker
+	return jsonResult(object)
 }
 
 func (s *Server) handleSpecGraph(ctx context.Context, _ json.RawMessage) toolResult {

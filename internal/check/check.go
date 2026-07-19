@@ -33,10 +33,10 @@ type Predicate struct {
 	// Value/Min/Max are pointers so a MISSING key is distinguishable from an
 	// explicit 0 — a predicate whose required bound is absent is a structural
 	// authoring error (it would otherwise silently compare against 0).
-	Value  *float64 `json:"value,omitempty"`  // eq/gt/gte/lt/lte/count/distinct_count
-	Min    *float64 `json:"min,omitempty"`    // range
-	Max    *float64 `json:"max,omitempty"`    // range
-	Member any      `json:"member"` // set_contains/equals (no omitempty: a zero-valued member must survive round-trip)
+	Value  *float64 `json:"value,omitempty"` // eq/gt/gte/lt/lte/count/distinct_count
+	Min    *float64 `json:"min,omitempty"`   // range
+	Max    *float64 `json:"max,omitempty"`   // range
+	Member any      `json:"member"`          // set_contains/equals (no omitempty: a zero-valued member must survive round-trip)
 }
 
 // F is a convenience for constructing predicate bounds in code and tests.

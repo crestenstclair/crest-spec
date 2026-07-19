@@ -82,6 +82,8 @@ type specHandler interface {
 	Next(ctx context.Context, sessionID string) (*specmod.NextResult, error)
 	Context(ctx context.Context, sessionID, resourceID string) (*specmod.ContextResult, error)
 	PrepareContext(ctx context.Context, opts specmod.ContextOptions) (*specmod.ContextResult, error)
+	PrepareWaveContexts(ctx context.Context, opts specmod.WaveContextOptions) (*specmod.WaveContextResult, error)
+	ReportDispatchEvent(ctx context.Context, opts specmod.DispatchEventOptions) (*storemod.DispatchLifecycle, error)
 	InspectContext(ctx context.Context, manifestID, attemptID string) (*storemod.ContextManifest, error)
 	ListContextAttempts(ctx context.Context, limit int) ([]storemod.ContextManifestSummary, error)
 	CompareContexts(ctx context.Context, leftManifestID, rightManifestID string) (*specmod.ContextManifestComparison, error)
@@ -90,13 +92,15 @@ type specHandler interface {
 	ExecutionRoles() []executionpkg.RolePolicy
 	InspectExecution(ctx context.Context, id, attemptID string) (*storemod.ExecutionManifest, error)
 	ListExecutions(ctx context.Context, limit int) ([]storemod.ExecutionManifest, error)
-	RecoverExecutions(ctx context.Context, before time.Time) (int, error)
+	RecoverWorkspaceCommits(ctx context.Context) (int, error)
+	RecoverExecutions(ctx context.Context, dispatchBefore, executionBefore time.Time) (int, error)
 	ListFailures(ctx context.Context, attemptID string, limit int) ([]storemod.FailureClassification, error)
 	ClassifyFailure(ctx context.Context, opts specmod.FailureClassifyOptions) (*storemod.FailureClassification, error)
 	ResolveFailure(ctx context.Context, id, resolution, resolvedByAttempt string) error
 	ListHandoffs(ctx context.Context, attemptID string, limit int) ([]storemod.AttemptHandoff, error)
 	CommitAttempt(ctx context.Context, attemptID string, files []specmod.CommitFile, notes string, metadata specmod.CommitMetadata) (*specmod.CommitResult, error)
 	Finish(ctx context.Context, sessionID string, force bool) (*specmod.FinishResult, error)
+	Abandon(ctx context.Context, sessionID, reason string, invalidateCommitted bool) (*specmod.AbandonResult, error)
 	Resolve(ctx context.Context, sessionID, resourceID, answer string, model string) error
 	Note(ctx context.Context, sessionID, resourceID, content string) error
 	Amend(ctx context.Context, sessionID, resourceID string) error
@@ -194,6 +198,26 @@ type Server struct {
 	dispatch  map[string]handlerFunc
 	toolFns   map[string]toolHandler
 	startTime time.Time
+	build     processBuildIdentity
+
+	startupRecoveryOnce sync.Once
+	recoveryAttemptMu   sync.Mutex
+	recoveryMu          sync.RWMutex
+	recoveryBlocker     *RecoveryBlocker
+}
+
+// RecoveryBlocker is a fail-closed lifecycle-recovery fault that still leaves
+// the MCP diagnostic surface available. In particular, workspace recovery may
+// discover bytes written by neither side of an interrupted commit. CrestSpec
+// must never overwrite that third state, but exiting before initialize would
+// also make the fault impossible to inspect through the framework.
+type RecoveryBlocker struct {
+	Active           bool   `json:"active"`
+	Kind             string `json:"kind"`
+	Stage            string `json:"stage"`
+	Message          string `json:"message"`
+	CorrectiveAction string `json:"corrective_action"`
+	ObservedAt       string `json:"observed_at"`
 }
 
 // New creates a new MCP Server.
@@ -213,6 +237,7 @@ func New(
 		metrics:   NewMetrics(),
 		toolFns:   make(map[string]toolHandler),
 		startTime: time.Now(),
+		build:     currentProcessBuildIdentity(),
 	}
 
 	s.registerTools()
@@ -222,16 +247,7 @@ func New(
 
 // Run starts the stdio transport. It blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	if s.spec != nil && s.cfg != nil && s.cfg.ExecutionTimeout > 0 {
-		before := time.Now().UTC().Add(-s.cfg.ExecutionTimeout)
-		recovered, err := s.spec.RecoverExecutions(ctx, before)
-		if err != nil {
-			return fmt.Errorf("recover abandoned executions: %w", err)
-		}
-		if recovered > 0 {
-			s.log.Info().Int("count", recovered).Msg("recovered abandoned executions")
-		}
-	}
+	s.prepareStartupRecovery(ctx)
 	scanner := bufio.NewScanner(s.stdin)
 	scanner.Buffer(make([]byte, 0, 10<<20), 10<<20)
 
@@ -268,6 +284,112 @@ func (s *Server) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// prepareStartupRecovery runs before request serving in the stdio transport
+// and is also called lazily by initialize/tool dispatch for HTTP safety. A
+// recovery conflict becomes a structured blocker instead of terminating the
+// transport before diagnostics are available.
+func (s *Server) prepareStartupRecovery(ctx context.Context) {
+	s.startupRecoveryOnce.Do(func() {
+		_ = s.recoverLifecycle(ctx)
+	})
+}
+
+func (s *Server) recoverLifecycle(ctx context.Context) error {
+	if s.spec == nil {
+		s.clearRecoveryBlocker()
+		return nil
+	}
+	s.recoveryAttemptMu.Lock()
+	defer s.recoveryAttemptMu.Unlock()
+
+	recovered, err := s.spec.RecoverWorkspaceCommits(ctx)
+	if err != nil {
+		return s.blockRecovery("workspace_commit_recovery", err)
+	}
+	if recovered > 0 {
+		s.log.Info().Int("count", recovered).Msg("recovered interrupted workspace commits")
+	}
+	if s.cfg != nil {
+		dispatchBefore, executionBefore := s.executionRecoveryCutoffs()
+		recovered, err = s.spec.RecoverExecutions(ctx, dispatchBefore, executionBefore)
+		if err != nil {
+			return s.blockRecovery("execution_lifecycle_recovery", err)
+		}
+		if recovered > 0 {
+			s.log.Info().Int("count", recovered).Msg("recovered abandoned executions")
+		}
+	}
+	s.clearRecoveryBlocker()
+	return nil
+}
+
+// ensureWorkspaceRecovery is the mutation/scheduling preflight. It catches a
+// journal that became pending after process startup (for example when an
+// editor raced a commit) before any unrelated state-changing tool can run.
+func (s *Server) ensureWorkspaceRecovery(ctx context.Context) error {
+	if s.spec == nil {
+		return nil
+	}
+	if s.recoveryBlockerSnapshot() != nil {
+		return s.recoverLifecycle(ctx)
+	}
+	s.recoveryAttemptMu.Lock()
+	defer s.recoveryAttemptMu.Unlock()
+	recovered, err := s.spec.RecoverWorkspaceCommits(ctx)
+	if err != nil {
+		return s.blockRecovery("workspace_commit_recovery", err)
+	}
+	if recovered > 0 {
+		s.log.Info().Int("count", recovered).Msg("recovered interrupted workspace commits")
+	}
+	return nil
+}
+
+func (s *Server) executionRecoveryCutoffs() (time.Time, time.Time) {
+	if s.cfg == nil {
+		return time.Time{}, time.Time{}
+	}
+	now := time.Now().UTC()
+	var dispatchBefore, executionBefore time.Time
+	if timeout := s.cfg.EffectiveDispatchTimeout(); timeout > 0 {
+		dispatchBefore = now.Add(-timeout)
+	}
+	if s.cfg.ExecutionTimeout > 0 {
+		executionBefore = now.Add(-s.cfg.ExecutionTimeout)
+	}
+	return dispatchBefore, executionBefore
+}
+
+func (s *Server) blockRecovery(stage string, err error) error {
+	wrapped := fmt.Errorf("%s: %w", stage, err)
+	blocker := &RecoveryBlocker{
+		Active: true, Kind: "recovery_blocked", Stage: stage, Message: err.Error(),
+		CorrectiveAction: "inspect the pending workspace commit and reconcile the divergent file; then retry a state-changing spec tool or restart CrestSpec (third-party bytes will never be overwritten automatically)",
+		ObservedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	s.recoveryMu.Lock()
+	s.recoveryBlocker = blocker
+	s.recoveryMu.Unlock()
+	s.log.Error().Err(wrapped).Msg("lifecycle recovery blocked; diagnostic MCP surface remains available")
+	return wrapped
+}
+
+func (s *Server) clearRecoveryBlocker() {
+	s.recoveryMu.Lock()
+	s.recoveryBlocker = nil
+	s.recoveryMu.Unlock()
+}
+
+func (s *Server) recoveryBlockerSnapshot() *RecoveryBlocker {
+	s.recoveryMu.RLock()
+	defer s.recoveryMu.RUnlock()
+	if s.recoveryBlocker == nil {
+		return nil
+	}
+	copy := *s.recoveryBlocker
+	return &copy
 }
 
 // handleLine parses and dispatches a single JSON-RPC line.

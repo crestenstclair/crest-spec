@@ -228,8 +228,19 @@ func (q *Queries) ListCurrentVerificationEvidence(ctx context.Context, evidenceI
 const listCurrentVerificationEvidenceForProject = `-- name: ListCurrentVerificationEvidenceForProject :many
 SELECT record.id, record.run_id, record.evidence_id, record.source_tree_hash, record.definition_hash, record.classification, record.currency, record.created_at, record.invalidated_at
 FROM verification_evidence_records record
+JOIN validation_runs run ON run.id = record.run_id
+JOIN verification_definitions definition
+  ON definition.snapshot_id = run.definition_snapshot_id AND definition.active = 1
+JOIN verification_definition_targets target
+  ON target.snapshot_id = definition.snapshot_id
+ AND target.target_kind = 'evidence'
+ AND target.target_id = record.evidence_id
 JOIN evidence_requirements requirement ON requirement.id = record.evidence_id
-WHERE requirement.project_name = ? AND requirement.active = 1 AND record.currency = 'current'
+WHERE requirement.project_name = ?
+  AND definition.project_name = requirement.project_name
+  AND requirement.active = 1
+  AND record.currency = 'current'
+  AND record.definition_hash = definition.definition_hash
 ORDER BY record.evidence_id, record.created_at DESC, record.id DESC
 `
 
@@ -638,6 +649,71 @@ SELECT id, run_id, evidence_id, source_tree_hash, definition_hash, classificatio
 
 func (q *Queries) ListVerificationEvidenceByRun(ctx context.Context, runID string) ([]VerificationEvidenceRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listVerificationEvidenceByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VerificationEvidenceRecord
+	for rows.Next() {
+		var i VerificationEvidenceRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.EvidenceID,
+			&i.SourceTreeHash,
+			&i.DefinitionHash,
+			&i.Classification,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markEvidenceWithoutActiveVerificationContractStale = `-- name: MarkEvidenceWithoutActiveVerificationContractStale :many
+UPDATE verification_evidence_records
+SET currency = 'stale', invalidated_at = ?
+WHERE currency = 'current'
+  AND run_id IN (
+      SELECT run.id
+      FROM validation_runs run
+      JOIN verification_definitions known_definition
+        ON known_definition.snapshot_id = run.definition_snapshot_id
+      WHERE known_definition.project_name = ?
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM validation_runs run
+      JOIN verification_definitions active_definition
+        ON active_definition.snapshot_id = run.definition_snapshot_id
+       AND active_definition.active = 1
+      JOIN verification_definition_targets target
+        ON target.snapshot_id = active_definition.snapshot_id
+       AND target.target_kind = 'evidence'
+       AND target.target_id = verification_evidence_records.evidence_id
+      WHERE run.id = verification_evidence_records.run_id
+        AND active_definition.definition_hash = verification_evidence_records.definition_hash
+  )
+RETURNING id, run_id, evidence_id, source_tree_hash, definition_hash, classification, currency, created_at, invalidated_at
+`
+
+type MarkEvidenceWithoutActiveVerificationContractStaleParams struct {
+	InvalidatedAt *string
+	ProjectName   string
+}
+
+func (q *Queries) MarkEvidenceWithoutActiveVerificationContractStale(ctx context.Context, arg MarkEvidenceWithoutActiveVerificationContractStaleParams) ([]VerificationEvidenceRecord, error) {
+	rows, err := q.db.QueryContext(ctx, markEvidenceWithoutActiveVerificationContractStale, arg.InvalidatedAt, arg.ProjectName)
 	if err != nil {
 		return nil, err
 	}

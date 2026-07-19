@@ -25,9 +25,11 @@ boundary, spawned by YOUR host's native sub-agent mechanism.
 This is **backwards on every point**. crest-spec has no sub-agents, no
 workflow runtime, and no task interpreter. If you send it a task description
 and wait for it to "fulfill" the task, nothing happens — there is no tool
-that accepts a task. The host dispatches its OWN sub-agents (one per
-resource), and those sub-agents call crest-spec tools to fetch their prompt
-and submit their output through the gate.
+that accepts a task. The host dispatches its OWN bounded worker pool, prepares
+only as many immutable prompts as it has idle slots by calling
+`spec/context_batch(limit=idle_slots)`, explicitly claims each prepared attempt
+with `dispatch_requested`, and has those workers submit their output through
+the gate.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -35,7 +37,7 @@ and submit their output through the gate.
 │                                              │
 │  Orchestrator loop (a workflow/script YOU    │
 │  run in the host)                            │
-│    │  spawns N native sub-agents per wave    │
+│    │  reuses N bounded native workers        │
 │    ▼                                         │
 │  [generator agent] [generator agent] ...     │
 │        │   ▲              │   ▲              │
@@ -52,7 +54,7 @@ and submit their output through the gate.
 ```
 
 The only commands crest-spec runs are those declared in the specification:
-commit/wave validations (`cargo test`, `make demo-...`) and controlled
+affected-closure validations (`cargo test`, `make demo-...`) and controlled
 behavioral witnesses. These are deterministic verification commands, not
 agents or LLM calls.
 
@@ -106,10 +108,13 @@ Config that matters:
 
 - `CREST_SPEC_SPEC_DIR` — where the CUE spec lives (run the server from the
   target project's root; generated files are written relative to it).
-- `CREST_SPEC_GENERATE_MODEL` — a **label** recorded with commits and mixed
-  into effective hashes. It does not make the engine call any model. Changing
-  it re-plans everything, so keep it stable per project.
-- `CREST_SPEC_EXECUTION_TIMEOUT` — startup recovery threshold for active
+- `CREST_SPEC_GENERATE_MODEL` — a **label** recorded with execution
+  provenance. It does not make the engine call any model, and changing the
+  label alone does not dirty resources.
+- `CREST_SPEC_DISPATCH_TIMEOUT` — recovery threshold for a prepared or
+  assigned context that never reached `execution_start` (default `2m`). The
+  claim is released without consuming a generation retry.
+- `CREST_SPEC_EXECUTION_TIMEOUT` — recovery threshold for registered active
   executions abandoned by a crashed host (default `30m`; `0` disables).
   Recovery records an engine-observed host failure, not a model failure.
 - One server per project directory. The SQLite db lives in `.crest-spec/`.
@@ -121,8 +126,8 @@ is documented in [DASHBOARD.md](DASHBOARD.md).
 
 ## Tool surface (what to call, when, and who calls it)
 
-"Orchestrator" = your top-level loop. "Sub-agent" = a host-native agent you
-spawned for one resource/check.
+"Orchestrator" = your top-level loop. "Sub-agent" = a host-native worker that
+processes one resource/check assignment at a time and may be reused.
 
 ### Authoring & inspection (orchestrator / top-level agent)
 | Tool | Purpose |
@@ -144,19 +149,21 @@ spawned for one resource/check.
 |---|---|
 | `spec/begin` | Start a session: locks, snapshots the plan, seeds per-resource state. Returns `PendingDestroys` — destroys NEVER auto-execute. Options: `target`, `force` (re-serve one resource on purpose). |
 | `spec/confirm_destroys` | Explicit human-gated deletion of the listed resources (files + state + checks). |
-| `spec/next` | The work queue: returns the current wave's resources still needing generation. Call repeatedly; `done:true` ends the loop. |
+| `spec/next` | Work-queue view: returns the current wave's resources still needing generation or a no-worker validation-ready transition. Hosts inspect it before refilling idle workers through capacity-limited `spec/context_batch` calls. |
 | `spec/resolve` | Record triage: attach guidance to a failed resource and reset it for another attempt (UPDATE mode will carry the guidance). |
 | `spec/skip` | Explicitly skip a resource — requires quoting the spec contradiction that justifies it. Not a convenience. |
 | `spec/verify_wave`, `spec/wave_status` | Wave-level gate/status for whole-tree validation between waves. |
 | `spec/finish` | Close the session. **Fail-closed**: named-validation/witness specs require the derived project state to be `complete`; legacy task checks must also be resolved. `force` exists but is a human decision and returns the actual incomplete status/reason/goals. |
 | `spec/unlock` | Break a stale lock after a crash (human/orchestrator recovery). |
 
-### Generation (called BY your generator sub-agents)
+### Generation preparation and execution (orchestrator and generator workers)
 | Tool | Purpose |
 |---|---|
-| `spec/context` | Creates an immutable attempt and returns its `AttemptID`/`ContextManifestID`, budget allocation, ordered selection decisions, system prompt, and task prompt. Context is goal-directed: acceptance, task, resource contract, dependencies, consumers, relevant code, invariants, and retry evidence. In UPDATE mode it includes previous files, `## Previous Errors`, and `## Guidance`. Optional `role`, `budget_tokens`, and `parent_attempt_id` inputs shape the attempt without coupling crest-spec to a provider. |
-| `spec/execution_start` | Required before agent work. Registers `crest-execution-v1`, the exact prepared role/context hash, host/provider/model, redacted settings, tools and permissions, template hashes, system instructions, and host session. Reusing an idempotency key with changed governed inputs fails closed. |
-| `spec/commit` | Submit immutable candidate files by `attempt_id`, with optional duration/token/cost and host commit-reference metadata. Session, resource, model, plan operation, goals, and capabilities are derived from persisted state rather than trusted caller fields. The engine snapshots the candidate, runs declared validations, and atomically accepts or rejects it. |
+| `spec/context` | Prepares an immutable, unclaimed attempt and returns its `AttemptID`/`ContextManifestID`/`DispatchID`, budget allocation, ordered selection decisions, system prompt, and task prompt. Context is goal-directed: acceptance, task, resource contract, dependencies, consumers, relevant code, invariants, and retry evidence. In UPDATE mode it includes previous files, `## Previous Errors`, and `## Guidance`. Optional `role`, `budget_tokens`, and `parent_attempt_id` inputs shape the attempt without coupling crest-spec to a provider. A worker that obtains a retry context must record `dispatch_requested` for its new `DispatchID` before acknowledging or starting it. `NoDispatch=true` is a successful no-model reconciliation: an exact accepted candidate was reinstated after its affected-closure failure was explicitly resolved as misattributed. Do not dispatch it; call `spec/next`. |
+| `spec/context_batch` | With `limit` set to the host's currently idle worker slots, prepares at most that many immutable, unclaimed contexts from the current dependency wave. The safe default is one. Repeated calls replay durable unclaimed attempts and refill newly idle slots instead of prefetching work behind the pool. Contexts marked `Blocked` are reported but must never be dispatched or assigned. `validation_ready` and `validation_wave_index` tell the host to run the closure gate even when no generator is needed. |
+| `spec/dispatch_event` | Mandatory assignment lifecycle. The parent records `dispatch_requested` against a prepared context's `DispatchID` with stable, nonempty `host_session_id` and `worker_id` values before scheduling that worker; this validates the source snapshot and atomically claims the resource by attempt ID. The assigned worker then records `worker_acknowledged` with the same identities before `spec/execution_start`. If delivery or the worker fails before execution registration, report `dispatch_failed` with the exact identities and a concrete reason; CrestSpec atomically abandons/releases only that claim and preserves the retry budget. CrestSpec rejects a second nonterminal assignment to the same worker. If source validation returns `rebuild_context`, do not assign or start the abandoned attempt; obtain a replacement without charging a generation retry. |
+| `spec/execution_start` | Required after acknowledgement and before agent work. Registers `crest-execution-v1`, the exact prepared role/context hash, host/provider/model, redacted settings, tools and permissions, template hashes, system instructions, and host session. Reusing an idempotency key with changed governed inputs fails closed. A `rebuild_context` response means the source snapshot raced after dispatch: fetch, dispatch, and acknowledge a new context rather than retrying the abandoned attempt. |
+| `spec/commit` | Submit immutable candidate files by `attempt_id`, with optional duration/token/cost and host commit-reference metadata. Session, resource, model, plan operation, goals, and capabilities are derived from persisted state rather than trusted caller fields. The engine snapshots and stages the candidate as integration-pending; `spec/verify_wave` later runs the deduplicated affected-closure validation batch. |
 | `spec/execution_report` | Finish an advisory role or explicitly record a cancelled, failed, or timed-out attempt that has no candidate. |
 | `spec/note` | Attach a free-form note to the session/resource (shows up in later context). |
 
@@ -168,7 +175,9 @@ spawned for one resource/check.
 | `spec/context_inspect` | Reconstruct the exact immutable system/task prompts and every included, truncated, or omitted source from SQLite. |
 | `spec/context_compare` | Compare two manifests by source, decision, content hash, allocation, selector, budget, and template changes. |
 
-Context creation and the resource's dispatch transition are one SQLite transaction. If mandatory goal, acceptance, task, system, and resource-contract material exceeds the bounded budget, the attempt is recorded as `context_blocked` and the resource remains pending. Runtime context manifests are never written into the project tree.
+Context preparation and dispatch are separate durable transitions. Preparation persists the immutable attempt, context manifest, and lifecycle row but leaves the session resource unclaimed. `dispatch_requested` validates the prepared source snapshot and atomically binds that attempt to the resource and actual worker. `dispatch_failed` is the compensating pre-execution transition: it compare-and-swaps the exact lifecycle/claim, loses safely to a concurrent execution start, records immutable `host_dispatch_failure` provenance, and releases the slot without a model retry. If the snapshot became stale, CrestSpec abandons it and returns `rebuild_context`; the parent refills an initial slot through `spec/context_batch`, while a retry worker calls `spec/context` again. Neither refresh consumes the generation retry budget. If mandatory goal, acceptance, task, system, and resource-contract material exceeds the bounded budget, the attempt is recorded as `context_blocked` and the resource remains pending. Runtime context manifests are never written into the project tree.
+
+`spec/status` and `spec/wave_status` derive timing from durable lifecycle boundaries: shared batch preparation, per-resource context requested/prepared, dispatch requested, worker acknowledged, execution registered, candidate submitted/disposed, and validation execution. Their timing breakdown reports shared and per-resource context preparation, prepared-to-dispatch queue time, dispatch-to-acknowledgement worker-start time, acknowledged-to-execution instruction/handshake time, model-active work, submission/commit, validation, and any historical execution wall time lacking the current lifecycle. `unattributed_wall_ms` is the portion without sufficient persisted observations; `missing_acknowledgements` exposes incomplete historical reporting and is a protocol failure for a current host. Category wall-time unions can overlap when parallel resources occupy different phases. Session status also reports `worker_pool.unique_workers`, `reused_workers`, `assignments`, and `max_assignments_per_worker` from the mandatory host identities. Scheduling conflicts fail synchronously at `dispatch_requested` and are not counted as assignments.
 
 ### Execution, role, and failure inspection
 
@@ -202,7 +211,7 @@ governance records stored only in SQLite.
 |---|---|
 | `spec/design_commit` | Commit a bounded context's observable contract (behaviors + typed predicates). |
 | `spec/tasks_commit` | Commit per-resource tasks/checks derived from the contract. Structurally validated: prose or expression field names, missing bounds, etc. are rejected HERE, at authoring time. |
-| `spec/verify` | Execute a named CUE witness by `witness_id`. crest-spec runs its real and negative commands against one source tree, parses both through one schema, applies the falsification gate, and stores the full provenance. Caller observations are rejected. An optional compatible `check_id` advances the legacy task ledger. |
+| `spec/verify` | Execute a named CUE witness by `witness_id`. crest-spec runs its real and controlled-negative commands against one source tree, enforces each declared exit status (`0` by default; `negativeExpectedExitCode` for an intentional negative failure), parses both through one schema, applies the falsification gate, and stores full provenance. With an active `session_id`, positive predicate failures route only those predicates' `repairResources` (or the witness-wide fallback for a real process failure). Negative exit/theater failures route only explicit `counterexampleRepairResources`; malformed runs never route repair. Each exact definition/source epoch is durably retry-bounded. Caller observations are rejected. An optional compatible `check_id` advances the legacy task ledger. |
 | `spec/graduate` | Promote a passed legacy task check. Named witness evidence does not require graduation. |
 
 ### Amendments & learnings (optional, orchestrator)
@@ -219,7 +228,7 @@ name a qualifying evaluation winner and pass the promotion flow below.
 1. Capture complete historical attempts with `spec/evaluation_case_from_attempt`, or explicitly curate cases with `spec/evaluation_case_curate`.
 2. Create a dataset, assign cases to training/development/held-out splits, and seal it. Sealing fixes its content identity.
 3. Create immutable baseline/candidate configurations and a run.
-4. Workers claim assignments with `spec/evaluation_assignment_claim`, then use the normal `spec/context` → `spec/execution_start` → candidate/report path. Heartbeat long work; release retryable work; cancel unsupported cases with a reason.
+4. Workers claim evaluation leases with `spec/evaluation_assignment_claim`, then use the normal mandatory generation lifecycle: `spec/context` → `dispatch_requested` → `worker_acknowledged` → `spec/execution_start` → candidate/report. The evaluation lease does not replace the prepared context's dispatch claim. Heartbeat long work; release retryable work; cancel unsupported cases with a reason.
 5. Submit the terminal ordinary `attempt_id` plus verifier-derived goal/integration/behavior/regression/intervention observations. crest-spec derives acceptance, retry, token, cost, duration, and candidate-churn facts from SQLite and overrides conflicting host values.
 6. Finalize the run. Missing, unequal, or insufficient samples remain `inconclusive`; held-out outcomes are not exposed to workers.
 7. Inspect conclusions and raw provenance with `spec/evaluation_runs` or the Evaluations dashboard. A reusable learning change then requires `spec/evaluation_learning_propose`, a human `spec/evaluation_promotion_decide`, and `spec/evaluation_promotion_apply` against the unchanged rollback identity.
@@ -239,30 +248,89 @@ spec/validate                        # after any spec edit
 plan = spec/plan                     # review: is the increment the size you expect?
 begin = spec/begin                   # -> sessionId, PendingDestroys
 if PendingDestroys: STOP, show the human, spec/confirm_destroys only on approval
+workers = create_bounded_slots()     # stable worker_id; spawn first task only after claim
+host_session_id = stable_host_run_id()
+
+prepare_claimed_worker_context(resource_id, worker, optional retry inputs):
+  loop:
+    ctx = spec/context(sessionId, resource_id, optional retry inputs)
+    if ctx.NoDispatch or ctx.Blocked: return ctx
+    requested = spec/dispatch_event(
+      dispatch_requested, ctx.DispatchID,
+      host_session_id, worker.worker_id)
+    if requested says rebuild_context:
+        continue # fetch another context; this is not a generation retry
+    if requested failed: HALT LOUDLY
+    return ctx
 
 loop:
   wave = spec/next(sessionId)
   if wave.done: break
-  for resource in wave.resources (PARALLEL, one sub-agent each):
-      sub-agent:
-        ctx = spec/context(sessionId, resource, role) # immutable attempt + full context
-        run = spec/execution_start(
-          attempt_id=ctx.AttemptID,
-          protocol_version="crest-execution-v1",
-          role=ctx.Role,
-          context_hash=ctx.ContextHash,
-          host/model/settings/tools/templates=actual values)
-        files = <your LLM writes/edits code from ctx>
-        res = spec/commit(attempt_id=ctx.AttemptID, files=files, usage=actual values)
-        if not res.Committed:
+  if wave.validation_ready:
+      gate = spec/verify_wave(sessionId, wave.validation_wave_index)
+      if gate failed: triage, spec/resolve each owner
+      continue
+
+  idle = idle_workers(workers)
+  if not idle: wait for an assigned worker to become terminal; continue
+  batch = spec/context_batch(sessionId, limit=len(idle))
+  if batch.validation_ready:
+      gate = spec/verify_wave(sessionId, batch.validation_wave_index)
+      if gate failed: triage, spec/resolve each owner, continue
+      continue # next batch observes verified completion or reopened repairs
+  if batch.done: break
+  report batch contexts with Blocked=true; never dispatch or assign them
+  for item, worker in zip(unblocked batch.contexts, idle):
+      if item.error or item.context.Blocked: continue
+      requested = spec/dispatch_event(
+        dispatch_requested, item.context.DispatchID,
+        host_session_id, worker.worker_id)
+      if requested says rebuild_context:
+          continue # do not assign; the next capacity-limited batch refreshes it
+      if requested failed: HALT LOUDLY # lifecycle is mandatory
+
+      assign item.context to worker (PARALLEL):
+        ctx = item.context # immutable and now claimed by dispatch_requested
+        loop:
+          ack = spec/dispatch_event(
+            worker_acknowledged, ctx.DispatchID,
+            host_session_id, worker.worker_id)
+          if ack failed:
+              spec/dispatch_event(dispatch_failed, ctx.DispatchID,
+                host_session_id, worker.worker_id, reason=exact failure)
+              return failure # never call execution_start
+          run = spec/execution_start(
+            attempt_id=ctx.AttemptID,
+            protocol_version="crest-execution-v1",
+            role=ctx.Role,
+            context_hash=ctx.ContextHash,
+            host/model/settings/tools/templates=actual values)
+          if run says rebuild_context:
+              ctx = prepare_claimed_worker_context(item.resource_id, worker)
+              if ctx.NoDispatch or ctx.Blocked: return that outcome
+              continue # acknowledge the replacement before execution_start
+          if run failed before registration:
+              spec/dispatch_event(dispatch_failed, ctx.DispatchID,
+                host_session_id, worker.worker_id, reason=exact failure)
+              return failure
+          files = <your LLM writes/edits code from ctx>
+          res = spec/commit(attempt_id=ctx.AttemptID, files=files, usage=actual values)
+          if res.Committed: return terminal success
           read res.Validations and spec/failures
-          request a child context with parent_attempt_id=ctx.AttemptID
-          and the persisted handoff role, then retry (bounded)
-  # wave gate: whole-tree validation
-  if wave gate failed:
+          ctx = prepare_claimed_worker_context(
+            item.resource_id, worker,
+            parent_attempt_id=ctx.AttemptID, role=persisted handoff role)
+          if ctx.NoDispatch or ctx.Blocked: return that outcome
+          # loop acknowledges and starts this new UPDATE-mode attempt
+
+  wait for this batch's assignments to become terminal
+  status = spec/wave_status(sessionId, batch.wave_index)
+  if the wave still has pending resources: continue # refill idle slots
+  gate = spec/verify_wave(sessionId, batch.wave_index) # no dummy worker for fast paths
+  if gate failed:
       triage (a sub-agent reads the errors, attributes them)
       spec/resolve(resource, guidance) for each attributed failure
-      # next spec/next re-serves them in UPDATE mode with your guidance
+      # the next capacity-limited batch re-serves them in UPDATE mode
   if stalled N times on the same resources: HALT LOUDLY. Never auto-skip.
 
 spec/finish(sessionId)               # refuses until governed project completion is satisfied
@@ -290,9 +358,15 @@ the compatible `check_id` to `spec/verify` and call `spec/graduate` afterward.
    `confirm_destroys` executes them.
 5. **Sub-agents return data, not vibes.** The engine's tables are the truth:
    reconcile outcomes with `spec/sql`, never with a sub-agent's self-report.
-6. **Report the actual execution identity.** `CREST_SPEC_GENERATE_MODEL`
-   remains the plan/hash default, while the exact host/provider/model belongs
-   in `spec/execution_start`; `spec/commit` cannot replace that identity.
+6. **Report the actual execution identity.** `CREST_SPEC_GENERATE_MODEL` is a
+   compatibility provenance label and does not participate in incremental
+   resource hashes. The exact host/provider/model belongs in
+   `spec/execution_start`; `spec/commit` cannot replace that identity.
+7. **Dispatch lifecycle is mandatory.** Context preparation never assigns a
+   worker or claims a resource. Record `dispatch_requested` before the parent
+   schedules an assignment, `worker_acknowledged` before execution, and repeat
+   both events for every new retry context. Never synthesize an acknowledgement
+   or fall back to an implicit context-to-execution path.
 
 ## Porting to another host
 
@@ -302,10 +376,13 @@ You need three host-native capabilities; every serious agent CLI has them:
    (stdio MCP for interactive use; HTTP for orchestrator scripts).
 2. **Native sub-agent dispatch** — whatever the host calls "agents",
    "tasks", or "workers". Each generator/verifier sub-agent gets a prompt
-   that says: call `spec/context` (or is handed the context inline), write
-   the code, call `spec/commit`, handle rejection by iterating.
+   that says: acknowledge an already requested prepared assignment, call
+   `spec/execution_start`, write the code, call `spec/commit`, and handle
+   rejection by fetching a new `spec/context` and recording a new
+   `dispatch_requested`/`worker_acknowledged` pair before retrying.
 3. **A driver for the loop above** — a script or the top-level agent itself,
-   holding the session id and pumping `next → dispatch → gate → resolve`.
+   holding the session id and pumping
+   `next → context_batch(limit=idle) → dispatch_requested → assign → gate → resolve`.
 
 What you must NOT build: any bridge that "sends the task to crest-spec" and
 expects orchestration back. The engine will simply answer state queries and

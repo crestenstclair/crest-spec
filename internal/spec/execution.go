@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"time"
 
 	cuepkg "github.com/crestenstclair/crest-spec/internal/cue"
@@ -78,6 +79,9 @@ func (s *Spec) StartExecution(ctx context.Context, opts ExecutionStartOptions) (
 	if manifest.Blocked {
 		return nil, fmt.Errorf("execution start: context attempt is blocked: %s", manifest.BlockedReason)
 	}
+	if manifest.Attempt.Status == "abandoned" {
+		return nil, fmt.Errorf("execution start: corrective_action=rebuild_context; prepared attempt was abandoned before execution registration")
+	}
 	policy, err := execution.LookupRole(manifest.Attempt.Role)
 	if err != nil {
 		return nil, fmt.Errorf("execution start: %w", err)
@@ -95,6 +99,24 @@ func (s *Spec) StartExecution(ctx context.Context, opts ExecutionStartOptions) (
 	action, ok := actionForSession(session, manifest.Attempt.ResourceID)
 	if !ok || action.OperationID != manifest.Attempt.PlanOperationID {
 		return nil, fmt.Errorf("execution start: persisted plan operation is unavailable")
+	}
+	currentPlan, err := s.Plan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("execution start: current plan: %w", err)
+	}
+	if !operationInputsMatchCurrent(action, currentPlan) {
+		reason := "plan inputs changed after context preparation"
+		if err := s.invalidatePreparedContext(ctx, opts.AttemptID, reason, "execution_start_plan_inputs_changed"); err != nil {
+			return nil, fmt.Errorf("execution start: invalidate stale context: %w", err)
+		}
+		return nil, fmt.Errorf("execution start: %s; corrective_action=rebuild_context; the prepared attempt was abandoned", reason)
+	}
+	if err := s.validateSelectedRepositorySources(manifest); err != nil {
+		reason := fmt.Sprintf("repository context changed after preparation: %v", err)
+		if recoveryErr := s.invalidatePreparedContext(ctx, opts.AttemptID, reason, "execution_start_stale_context"); recoveryErr != nil {
+			return nil, fmt.Errorf("execution start: invalidate stale repository context: %w", recoveryErr)
+		}
+		return nil, fmt.Errorf("execution start: %s; corrective_action=rebuild_context; the prepared attempt was abandoned", reason)
 	}
 	return s.store.StartExecution(ctx, store.ExecutionManifest{
 		AttemptID: opts.AttemptID, ContextManifestID: manifest.ID,
@@ -147,7 +169,11 @@ func (s *Spec) ReportExecution(ctx context.Context, opts ExecutionReportOptions)
 		}
 		transition.HandoffTargetRole = permittedFailureHandoff(policy, execution.RouteFailure(category).NextRole)
 	}
-	return s.store.TransitionExecution(ctx, transition)
+	updated, err := s.store.TransitionExecution(ctx, transition)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *Spec) ExecutionRoles() []execution.RolePolicy {
@@ -168,21 +194,36 @@ func (s *Spec) ListExecutions(ctx context.Context, limit int) ([]store.Execution
 	return s.store.ListExecutionManifests(ctx, limit)
 }
 
-// RecoverExecutions marks active host attempts older than the configured
-// policy threshold as timed out. It records infrastructure provenance and
-// deliberately does not infer a model failure from a missing host heartbeat.
-func (s *Spec) RecoverExecutions(ctx context.Context, before time.Time) (int, error) {
-	manifests, err := s.store.ListStaleExecutionManifests(ctx, before)
-	if err != nil {
-		return 0, fmt.Errorf("recover executions: list stale attempts: %w", err)
-	}
+// RecoverExecutions applies separate recovery policies to work that has not
+// registered an execution and work that has. Dispatches are expected to reach
+// execution_start quickly, while a registered model execution may legitimately
+// run much longer. A zero cutoff disables recovery for that lifecycle class.
+func (s *Spec) RecoverExecutions(
+	ctx context.Context,
+	dispatchBefore time.Time,
+	executionBefore time.Time,
+) (int, error) {
 	recovered := 0
+	if !dispatchBefore.IsZero() {
+		preExecution, err := s.store.RecoverStalePreExecutionAttempts(ctx, dispatchBefore)
+		if err != nil {
+			return 0, fmt.Errorf("recover executions: prepared contexts: %w", err)
+		}
+		recovered = len(preExecution)
+	}
+	if executionBefore.IsZero() {
+		return recovered, nil
+	}
+	manifests, err := s.store.ListStaleExecutionManifests(ctx, executionBefore)
+	if err != nil {
+		return recovered, fmt.Errorf("recover executions: list stale attempts: %w", err)
+	}
 	for index := range manifests {
 		manifest := &manifests[index]
-		reason := fmt.Sprintf("host execution exceeded recovery threshold before %s", before.UTC().Format(time.RFC3339Nano))
+		reason := fmt.Sprintf("host execution exceeded recovery threshold before %s", executionBefore.UTC().Format(time.RFC3339Nano))
 		_, err := s.store.TransitionExecution(ctx, store.ExecutionTransition{
 			ExecutionID: manifest.ID, ToStatus: execution.StatusTimedOut, Reason: reason,
-			Details: map[string]any{"recovery_threshold": before.UTC().Format(time.RFC3339Nano)},
+			Details: map[string]any{"recovery_threshold": executionBefore.UTC().Format(time.RFC3339Nano)},
 			Failure: &store.FailureClassificationWrite{
 				Category: execution.FailureHostFailure, Origin: "engine", Confidence: 1,
 				EvidenceSource: "execution_recovery_timeout", EvidenceReference: manifest.ID,
@@ -195,6 +236,22 @@ func (s *Spec) RecoverExecutions(ctx context.Context, before time.Time) (int, er
 		recovered++
 	}
 	return recovered, nil
+}
+
+// invalidatePreparedContext performs the pre-execution stale-context edge. It
+// is intentionally safe when another caller wins: the store owns the CAS and
+// immutable audit transaction, while this caller still returns the original
+// provenance failure instead of starting against stale repository bytes.
+func (s *Spec) invalidatePreparedContext(
+	ctx context.Context,
+	attemptID string,
+	reason string,
+	evidenceSource string,
+) error {
+	_, err := s.store.AbandonPreparedContext(ctx, store.PreparedContextAbandonment{
+		AttemptID: attemptID, Reason: reason, EvidenceSource: evidenceSource,
+	})
+	return err
 }
 
 func (s *Spec) ListFailures(ctx context.Context, attemptID string, limit int) ([]store.FailureClassification, error) {
@@ -294,6 +351,14 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 		return nil, err
 	}
 	defer releaseWorkspace()
+	releaseProject, err := s.projectWorkspace().AcquireCommit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseProject()
+	if _, err := s.recoverWorkspaceCommitsLocked(ctx); err != nil {
+		return nil, fmt.Errorf("commit attempt: recover interrupted workspace commits: %w", err)
+	}
 	executionManifest, err = s.store.GetExecutionManifestByAttempt(ctx, attemptID)
 	if err != nil {
 		return nil, fmt.Errorf("commit attempt: refresh execution: %w", err)
@@ -301,19 +366,35 @@ func (s *Spec) CommitAttempt(ctx context.Context, attemptID string, files []Comm
 	if result, terminal, err := s.terminalCommitResult(ctx, executionManifest, attemptID); terminal || err != nil {
 		return result, err
 	}
-	commit.execution = executionManifest
-	if err := s.submitAndStageCommitCandidate(ctx, commit, normalizedFiles); err != nil {
-		return nil, err
+	if execution.Status(executionManifest.Status).Terminal() {
+		return nil, fmt.Errorf(
+			"commit attempt: execution is %s after interrupted workspace recovery; prepare a fresh context",
+			executionManifest.Status,
+		)
 	}
+	commit.execution = executionManifest
 	if err := s.loadCommitTarget(ctx, commit); err != nil {
 		return nil, err
 	}
-	commit.validations = s.executeCommitValidations(ctx, commit.plan.Registry.Project.Name, commit.resource, validationProvenance{
-		SessionID: contextManifest.Attempt.SessionID, AttemptID: attemptID, ExecutionID: executionManifest.ID,
-	})
-	if failureMessage := firstFailureMessage(commit.validations); failureMessage != "" {
-		return s.rejectCommitCandidate(ctx, commit, failureMessage)
+	if err := s.validateUnrepresentedCandidatePaths(commit.context, commit.resourceID, normalizedFiles); err != nil {
+		reason := fmt.Sprintf("candidate repository context changed after preparation: %v; corrective_action=rebuild_context", err)
+		s.failExecution(ctx, commit.execution, commit.context, execution.FailureStaleContext, reason)
+		return nil, fmt.Errorf("commit attempt: %s", reason)
 	}
+	if err := s.validateGovernedCommitTopologies(normalizedFiles); err != nil {
+		reason := fmt.Sprintf("candidate workspace topology is unsafe: %v", err)
+		s.failExecution(ctx, commit.execution, commit.context, execution.FailureToolFailure, reason)
+		return nil, fmt.Errorf("commit attempt: %s", reason)
+	}
+	if err := s.submitAndStageCommitCandidate(ctx, commit, normalizedFiles); err != nil {
+		return nil, err
+	}
+	// Resource-declared commands are not necessarily isolated: a focused Cargo
+	// test, for example, still compiles every crate consumer. Running it here can
+	// reject a correct provider while planned downstream resources are stale.
+	// Stage the immutable candidate now and run every resource command once in
+	// the affected-closure batch scheduled by VerifyWave.
+	commit.validationDeferred = true
 	return s.acceptCommitCandidate(ctx, commit)
 }
 
@@ -328,6 +409,13 @@ func (s *Spec) terminalCommitResult(ctx context.Context, manifest *store.Executi
 	result := &CommitResult{
 		Committed: manifest.Status == string(execution.StatusAccepted), AttemptID: attemptID,
 		ExecutionID: manifest.ID, CandidateID: candidate.ID,
+	}
+	if contextManifest, contextErr := s.store.GetContextManifestByAttempt(ctx, attemptID); contextErr == nil {
+		if resource, resourceErr := s.store.GetSessionResource(
+			contextManifest.Attempt.SessionID, contextManifest.Attempt.ResourceID,
+		); resourceErr == nil {
+			result.ValidationDeferred = resource.Phase == "integration_pending"
+		}
 	}
 	failures, err := s.store.ListFailureClassificationsByAttempt(ctx, attemptID)
 	if err != nil {
@@ -373,7 +461,16 @@ func (s *Spec) snapshotCommitFiles(files []CommitFile) ([]store.CandidateFile, e
 		} else if _, err := s.fs.ReadFile(path); err != nil {
 			intent = "create"
 		}
+		if err := store.ValidateCandidateRepositoryBytes(file.Path, []byte(content)); err != nil {
+			return nil, fmt.Errorf("snapshot candidate %s: %w", file.Path, err)
+		}
 		result = append(result, store.CandidateFile{Path: filepath.ToSlash(filepath.Clean(file.Path)), Content: content, WriteIntent: intent})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	for index := range result {
+		result[index].ContentHash = hashWorkspaceContent([]byte(result[index].Content))
+		result[index].ByteSize = len([]byte(result[index].Content))
+		result[index].Ordinal = index
 	}
 	return result, nil
 }
@@ -431,8 +528,4 @@ func (s *Spec) failExecution(ctx context.Context, manifest *store.ExecutionManif
 		},
 		HandoffTargetRole: permittedFailureHandoff(policy, route.NextRole),
 	})
-	_ = s.store.UpdateSessionResourceState(
-		contextManifest.Attempt.SessionID, contextManifest.Attempt.ResourceID,
-		string(StateErrored), reason, "", contextManifest.Attempt.RetryNumber, "",
-	)
 }

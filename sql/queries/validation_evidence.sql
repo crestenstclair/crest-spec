@@ -123,9 +123,46 @@ ORDER BY vr.definition_id;
 -- name: ListCurrentVerificationEvidenceForProject :many
 SELECT record.*
 FROM verification_evidence_records record
+JOIN validation_runs run ON run.id = record.run_id
+JOIN verification_definitions definition
+  ON definition.snapshot_id = run.definition_snapshot_id AND definition.active = 1
+JOIN verification_definition_targets target
+  ON target.snapshot_id = definition.snapshot_id
+ AND target.target_kind = 'evidence'
+ AND target.target_id = record.evidence_id
 JOIN evidence_requirements requirement ON requirement.id = record.evidence_id
-WHERE requirement.project_name = ? AND requirement.active = 1 AND record.currency = 'current'
+WHERE requirement.project_name = ?
+  AND definition.project_name = requirement.project_name
+  AND requirement.active = 1
+  AND record.currency = 'current'
+  AND record.definition_hash = definition.definition_hash
 ORDER BY record.evidence_id, record.created_at DESC, record.id DESC;
+
+-- name: MarkEvidenceWithoutActiveVerificationContractStale :many
+UPDATE verification_evidence_records
+SET currency = 'stale', invalidated_at = ?
+WHERE currency = 'current'
+  AND run_id IN (
+      SELECT run.id
+      FROM validation_runs run
+      JOIN verification_definitions known_definition
+        ON known_definition.snapshot_id = run.definition_snapshot_id
+      WHERE known_definition.project_name = ?
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM validation_runs run
+      JOIN verification_definitions active_definition
+        ON active_definition.snapshot_id = run.definition_snapshot_id
+       AND active_definition.active = 1
+      JOIN verification_definition_targets target
+        ON target.snapshot_id = active_definition.snapshot_id
+       AND target.target_kind = 'evidence'
+       AND target.target_id = verification_evidence_records.evidence_id
+      WHERE run.id = verification_evidence_records.run_id
+        AND active_definition.definition_hash = verification_evidence_records.definition_hash
+  )
+RETURNING *;
 
 -- name: MarkVerificationEvidenceStale :many
 UPDATE verification_evidence_records

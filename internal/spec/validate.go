@@ -126,6 +126,24 @@ func CheckAssertions(assertions []cuepkg.Assertion, stdout, stderr string, exitC
 // the retry prompt focused.
 const maxOutputChars = 6000
 
+var nestedExecutableUnavailableDiagnostics = []*regexp.Regexp{
+	// Some wrappers relay only the nested shell diagnostic and omit their own
+	// name entirely (for example "cargo: command not found"). Keep this form
+	// restricted to the canonical command-not-found phrase.
+	regexp.MustCompile(`(?i)^[a-z0-9_./+\-]+:\s*command\s+not\s+found\s*$`),
+	// Shells and build wrappers commonly put the missing command between
+	// colon-delimited fields. A wrapper may normalize the nested shell's 127 to
+	// exit 1 or 2, so the outer exit code alone is not authoritative.
+	regexp.MustCompile(`(?i)^(?:(?:g?make|ninja|env)(?:\[[0-9]+\])?|(?:.*[/\\])?(?:ba|da|z|k)?sh):\s*(?:execvp:\s*)?(?:line\s+[0-9]+:\s*|[0-9]+:\s*)?(?:['"‘][^'"’]+['"’]|[^:\s]+):\s*(?:command\s+not\s+found|not\s+found|no\s+such\s+file\s+or\s+directory)\s*$`),
+	// When a script is interpreted, some shells identify the script rather than
+	// themselves before the line number (for example wrapper: 3: cargo: not
+	// found). Requiring the numeric shell field keeps this distinct from normal
+	// compiler diagnostics.
+	regexp.MustCompile(`(?i)^.+:\s*(?:line\s+)?[0-9]+:\s*[^:\s]+:\s*(?:command\s+not\s+found|not\s+found|no\s+such\s+file\s+or\s+directory)\s*$`),
+	// zsh reverses the missing-command fields compared with POSIX sh/bash.
+	regexp.MustCompile(`(?i)^(?:.*[/\\])?zsh:\s*command\s+not\s+found:\s*[^:\s]+\s*$`),
+}
+
 // truncateOutput keeps the last maxOutputChars of s, prefixing a marker when
 // truncation occurred so the model knows earlier output was elided.
 func truncateOutput(s string) string {
@@ -134,6 +152,22 @@ func truncateOutput(s string) string {
 		return s
 	}
 	return "...[earlier output truncated]...\n" + s[len(s)-maxOutputChars:]
+}
+
+// nestedValidationExecutableUnavailable recognizes diagnostics emitted by a
+// successfully launched wrapper when that wrapper cannot launch one of its
+// own tools. These are validation-environment failures, not evidence against
+// the accepted project source.
+func nestedValidationExecutableUnavailable(stderr string) bool {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		for _, diagnostic := range nestedExecutableUnavailableDiagnostics {
+			if diagnostic.MatchString(line) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd string) ([]ValidationResult, error) {
@@ -148,8 +182,8 @@ func RunValidations(ctx context.Context, validations []cuepkg.Validation, cwd st
 
 // ExecuteValidations runs declared commands through the controlled runner and
 // always returns the provenance record, including launch and timeout failures.
-// It stops after the first non-passing definition to preserve fail-closed wave
-// and resource semantics.
+// Every distinct definition runs so one closure batch can route all independent
+// owners simultaneously instead of discovering one failure per retry wave.
 func ExecuteValidations(ctx context.Context, validations []cuepkg.Validation, cwd string) []ValidationResult {
 	var results []ValidationResult
 
@@ -170,9 +204,18 @@ func ExecuteValidations(ctx context.Context, validations []cuepkg.Validation, cw
 				result.Message = "validation could not run: timed out"
 			}
 			results = append(results, result)
-			break
+			continue
 		}
 		stdout, stderr, exitCode := execution.Stdout, execution.Stderr, execution.ExitCode
+		if exitCode != 0 && nestedValidationExecutableUnavailable(stderr) {
+			result.Classification = "error"
+			result.Message = fmt.Sprintf(
+				"validation could not run: nested executable unavailable (wrapper exit %d):\nstderr: %s",
+				exitCode, truncateOutput(stderr),
+			)
+			results = append(results, result)
+			continue
+		}
 
 		switch v.Kind {
 		case "compiles", "test", "custom":
@@ -220,9 +263,6 @@ func ExecuteValidations(ctx context.Context, validations []cuepkg.Validation, cw
 		}
 		results = append(results, result)
 
-		if len(results) > 0 && !results[len(results)-1].Passed {
-			break
-		}
 	}
 
 	return results

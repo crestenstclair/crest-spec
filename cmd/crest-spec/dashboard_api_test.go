@@ -70,12 +70,29 @@ func TestDashboardTracesGoalThroughPlanAttemptAndEvidence(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, prepared.Blocked, prepared.BlockedReason)
+	const (
+		hostSessionID = "dashboard-e2e-host"
+		workerID      = "dashboard-e2e-worker"
+	)
+	_, err = d.spec.ReportDispatchEvent(ctx, specmod.DispatchEventOptions{
+		Event: "dispatch_requested", DispatchID: prepared.DispatchID,
+		SessionID: begin.SessionID, ResourceID: resourceID,
+		HostSessionID: hostSessionID, WorkerID: workerID,
+	})
+	require.NoError(t, err)
+	_, err = d.spec.ReportDispatchEvent(ctx, specmod.DispatchEventOptions{
+		Event: "worker_acknowledged", DispatchID: prepared.DispatchID,
+		SessionID: begin.SessionID, ResourceID: resourceID,
+		HostSessionID: hostSessionID, WorkerID: workerID,
+	})
+	require.NoError(t, err)
 	execution, err := d.spec.StartExecution(ctx, specmod.ExecutionStartOptions{
 		AttemptID: prepared.AttemptID, ProtocolVersion: executionpkg.ProtocolVersion,
 		IdempotencyKey: "dashboard-e2e-execution", ContextHash: prepared.ContextHash, Role: prepared.Role,
 		HostName: "acceptance-host", HostVersion: "1.0", Provider: "fixture", Model: "fixture-model",
 		TemplateHashes: prepared.TemplateHashes, SystemInstructions: prepared.SystemPrompt,
-		Tools: []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+		Tools:         []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+		HostSessionID: hostSessionID,
 	})
 	require.NoError(t, err)
 	candidate, err := d.store.SubmitCandidate(ctx, execution.ID, []store.CandidateFile{{

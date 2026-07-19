@@ -295,7 +295,7 @@ func TestHistoricalEvaluationCasePropagatesMalformedCanonicalContext(t *testing.
 	st := newContextManifestStore(t, "resource.malformed")
 	ctx := context.Background()
 	manifest := testContextManifest("attempt-malformed", "manifest-malformed", "resource.malformed")
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest, Dispatch: true})
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest})
 	require.NoError(t, err)
 	_, err = st.sqlDB.ExecContext(ctx,
 		`UPDATE context_manifests SET template_hashes_json = '{' WHERE id = ?`,
@@ -313,7 +313,7 @@ func TestHistoricalEvaluationCaseTreatsTypedMissingAttemptAsIneligible(t *testin
 	st := newContextManifestStore(t, "resource.missing-context")
 	ctx := context.Background()
 	manifest := testContextManifest("attempt-missing-context", "manifest-to-delete", "resource.missing-context")
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest, Dispatch: true})
+	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{Manifest: manifest})
 	require.NoError(t, err)
 	_, err = st.sqlDB.ExecContext(ctx, `DELETE FROM context_manifests WHERE id = ?`, manifest.ID)
 	require.NoError(t, err)
@@ -339,10 +339,7 @@ func TestHistoricalEvaluationCaseReferencesCompleteAttemptChain(t *testing.T) {
 			Targets: []IntentVerificationTarget{{Kind: "resource", ID: "resource.synth"}},
 		}},
 	}))
-	_, err := st.CreateContextManifest(ctx, ContextManifestWrite{
-		Manifest: testContextManifest("attempt-1", "manifest-1", "resource.synth"), Dispatch: true,
-	})
-	require.NoError(t, err)
+	prepareAndClaimTestContext(t, st, testContextManifest("attempt-1", "manifest-1", "resource.synth"))
 	executionInput := testExecutionManifest()
 	executionInput.GoalIDs = []string{"goal.play"}
 	executionInput.CapabilityIDs = []string{"capability.play"}
@@ -356,7 +353,7 @@ func TestHistoricalEvaluationCaseReferencesCompleteAttemptChain(t *testing.T) {
 	require.NoError(t, err)
 	_, err = st.FinalizeCandidate(ctx, CandidateDisposition{
 		ExecutionID: started.ID, Accepted: true, Reason: "passed",
-		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", Model: "model"},
+		Resource: &Resource{ID: "resource.synth", Kind: "asset", DeclarationHash: "decl", EffectiveHash: "effective", GenerationInputHash: "generation", DependencyContractHash: "dependencies", Model: "model"},
 		Files: []GeneratedFile{{
 			Path: "synth.go", ResourceID: "resource.synth", ContentHash: candidate.Files[0].ContentHash,
 			PromptHash: started.ContextHash, Model: "model",

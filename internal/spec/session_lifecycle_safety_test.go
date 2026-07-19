@@ -235,6 +235,12 @@ func TestFinishPropagatesFinalizationFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, state := newTestSpecWithSession(t)
+			require.NoError(t, s.store.UpdateSessionResourceState(
+				state.sessionID, state.resourceID, string(StateCommitted), "", "", 1, "",
+			))
+			require.NoError(t, s.store.UpdateSessionResourcePhase(
+				state.sessionID, state.resourceID, "verified", 1,
+			))
 			faults := &lifecycleFaultStore{specStore: s.store}
 			tt.configure(faults)
 			s.store = faults
@@ -259,6 +265,9 @@ func TestVerifyWaveFailsWhenSessionResourcesCannotBeRead(t *testing.T) {
 
 func TestVerifyWaveFailsWhenPlanCannotBeBuilt(t *testing.T) {
 	s, state := newTestSpecWithSession(t)
+	require.NoError(t, s.store.UpdateSessionResourceState(
+		state.sessionID, state.resourceID, string(StateCommitted), "", "", 1, "",
+	))
 	s.store = &lifecycleFaultStore{specStore: s.store, listResourcesErr: errors.New("resource inventory unavailable")}
 
 	result := s.VerifyWave(context.Background(), state.sessionID, 0)
@@ -268,16 +277,19 @@ func TestVerifyWaveFailsWhenPlanCannotBeBuilt(t *testing.T) {
 	require.Contains(t, result.Errors[len(result.Errors)-1].Message, "resource inventory unavailable")
 }
 
-func TestVerifyWaveFailsWhenVerificationCommandCannotLaunch(t *testing.T) {
+func TestVerifyWaveFailsBeforeCommandsWhenProjectTreeIsUnavailable(t *testing.T) {
 	s, state := newTestSpecWithSession(t)
+	require.NoError(t, s.store.UpdateSessionResourceState(
+		state.sessionID, state.resourceID, string(StateCommitted), "", "", 1, "",
+	))
 	s.cfg.TypeCheckCommand = "true"
 	s.cfg.SpecDir = filepath.Join(t.TempDir(), "missing", "spec")
 
 	result := s.VerifyWave(context.Background(), state.sessionID, 0)
 	require.False(t, result.Passed)
 	require.NotEmpty(t, result.Errors)
-	require.Equal(t, "type_check", result.Errors[0].Kind)
-	require.Contains(t, result.Errors[0].Message, "could not run")
+	require.Equal(t, "plan", result.Errors[0].Kind)
+	require.Contains(t, result.Errors[0].Message, "load project validations")
 }
 
 const lifecycleProjectValidationCUE = commitTestSpecCUE + `
@@ -289,6 +301,9 @@ func TestVerifyWaveFailsWhenCompletionRefreshCannotPersist(t *testing.T) {
 	s.store = &lifecycleFaultStore{specStore: s.store, applyCompletionErr: errors.New("completion projection unavailable")}
 	sr, err := s.store.GetSessionResource(state.sessionID, state.resourceID)
 	require.NoError(t, err)
+	require.NoError(t, s.store.UpdateSessionResourceState(
+		state.sessionID, state.resourceID, string(StateCommitted), "", "", 1, "",
+	))
 
 	result := s.VerifyWave(context.Background(), state.sessionID, sr.WaveIndex)
 	require.False(t, result.Passed)

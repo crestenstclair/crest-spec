@@ -115,7 +115,7 @@ func (q *Queries) GetGeneratedFiles(ctx context.Context, resourceID string) ([]G
 }
 
 const getResource = `-- name: GetResource :one
-SELECT id, kind, context_name, declaration_hash, effective_hash, model, settled_at FROM resources WHERE id = ?
+SELECT id, kind, context_name, declaration_hash, effective_hash, model, settled_at, generation_input_hash, exported_contract_hash, dependency_contract_hash, code_declaration_hash, verification_contract_hash FROM resources WHERE id = ?
 `
 
 // Resource state
@@ -130,12 +130,17 @@ func (q *Queries) GetResource(ctx context.Context, id string) (Resource, error) 
 		&i.EffectiveHash,
 		&i.Model,
 		&i.SettledAt,
+		&i.GenerationInputHash,
+		&i.ExportedContractHash,
+		&i.DependencyContractHash,
+		&i.CodeDeclarationHash,
+		&i.VerificationContractHash,
 	)
 	return i, err
 }
 
 const listResources = `-- name: ListResources :many
-SELECT id, kind, context_name, declaration_hash, effective_hash, model, settled_at FROM resources ORDER BY id
+SELECT id, kind, context_name, declaration_hash, effective_hash, model, settled_at, generation_input_hash, exported_contract_hash, dependency_contract_hash, code_declaration_hash, verification_contract_hash FROM resources ORDER BY id
 `
 
 func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
@@ -155,6 +160,11 @@ func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
 			&i.EffectiveHash,
 			&i.Model,
 			&i.SettledAt,
+			&i.GenerationInputHash,
+			&i.ExportedContractHash,
+			&i.DependencyContractHash,
+			&i.CodeDeclarationHash,
+			&i.VerificationContractHash,
 		); err != nil {
 			return nil, err
 		}
@@ -219,25 +229,39 @@ func (q *Queries) SetGeneratedFile(ctx context.Context, arg SetGeneratedFilePara
 }
 
 const setResource = `-- name: SetResource :exec
-INSERT INTO resources (id, kind, context_name, declaration_hash, effective_hash, model, settled_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO resources (
+    id, kind, context_name, declaration_hash, effective_hash,
+    generation_input_hash, exported_contract_hash, dependency_contract_hash,
+    code_declaration_hash, verification_contract_hash, model, settled_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     kind = excluded.kind,
     context_name = excluded.context_name,
     declaration_hash = excluded.declaration_hash,
     effective_hash = excluded.effective_hash,
+    generation_input_hash = excluded.generation_input_hash,
+    exported_contract_hash = excluded.exported_contract_hash,
+    dependency_contract_hash = excluded.dependency_contract_hash,
+    code_declaration_hash = excluded.code_declaration_hash,
+    verification_contract_hash = excluded.verification_contract_hash,
     model = excluded.model,
     settled_at = excluded.settled_at
 `
 
 type SetResourceParams struct {
-	ID              string
-	Kind            string
-	ContextName     *string
-	DeclarationHash string
-	EffectiveHash   string
-	Model           *string
-	SettledAt       string
+	ID                       string
+	Kind                     string
+	ContextName              *string
+	DeclarationHash          string
+	EffectiveHash            string
+	GenerationInputHash      string
+	ExportedContractHash     string
+	DependencyContractHash   string
+	CodeDeclarationHash      string
+	VerificationContractHash string
+	Model                    *string
+	SettledAt                string
 }
 
 func (q *Queries) SetResource(ctx context.Context, arg SetResourceParams) error {
@@ -247,6 +271,11 @@ func (q *Queries) SetResource(ctx context.Context, arg SetResourceParams) error 
 		arg.ContextName,
 		arg.DeclarationHash,
 		arg.EffectiveHash,
+		arg.GenerationInputHash,
+		arg.ExportedContractHash,
+		arg.DependencyContractHash,
+		arg.CodeDeclarationHash,
+		arg.VerificationContractHash,
 		arg.Model,
 		arg.SettledAt,
 	)

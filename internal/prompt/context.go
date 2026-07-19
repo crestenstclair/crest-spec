@@ -7,11 +7,12 @@ import (
 )
 
 type RuntimeContext struct {
-	ModuleTree      string
-	ModuleFiles     map[string]string // path → content of existing module declaration files (lib.rs, mod.rs, __init__.py, etc.)
-	DependencyFiles map[string]string
-	AgentNotes      map[string]string
-	Learnings       []string
+	ModuleTree          string
+	ModuleFiles         map[string]string // path → content of existing module declaration files (lib.rs, mod.rs, __init__.py, etc.)
+	DependencyFiles     map[string]string
+	DependencyFilePaths map[string]string
+	AgentNotes          map[string]string
+	Learnings           []string
 	// DesignContract is the observable contract committed for this resource's
 	// bounded context (spec/design_commit) — the behaviors the context must
 	// exhibit, which the generated code will be verified against.

@@ -40,7 +40,15 @@ func (s *Spec) loadGenerationRuntimeContext(
 	if rejectedCandidate, candidateErr := s.store.GetLatestRejectedCandidate(ctx, sessionID, resource.ID); candidateErr == nil {
 		runtimeContext.ExistingFiles = make(map[string]string, len(rejectedCandidate.Files))
 		for _, file := range rejectedCandidate.Files {
-			runtimeContext.ExistingFiles[file.Path] = file.Content
+			path, pathErr := s.projectFilePath(file.Path)
+			if pathErr != nil {
+				continue
+			}
+			content, readErr := s.fs.ReadFile(path)
+			if readErr != nil {
+				continue
+			}
+			runtimeContext.ExistingFiles[file.Path] = string(content)
 		}
 	}
 	if sessionResource != nil && sessionResource.LastError != "" {
@@ -98,7 +106,7 @@ func coreContextSource(input contextCandidateInput) []contextmanifest.Candidate 
 }
 
 func acceptanceContextSource(input contextCandidateInput) []contextmanifest.Candidate {
-	acceptance := targetAcceptanceContext(input.action, input.registry.Project)
+	acceptance := targetAcceptanceContext(input.action, input.registry)
 	candidate := contextmanifest.Candidate{
 		Kind: "acceptance", Title: "Behavioral Acceptance and Evidence", SourceKind: "project_specification",
 		SourceID: input.resource.ID + ":acceptance", Priority: contextmanifest.PriorityAcceptance,
@@ -157,7 +165,12 @@ func (s *Spec) architectureContextSource(input contextCandidateInput) []contextm
 func runtimeImplementationContextSource(input contextCandidateInput) []contextmanifest.Candidate {
 	var candidates []contextmanifest.Candidate
 	for dependencyID, content := range input.runtime.DependencyFiles {
-		candidates = append(candidates, codeCandidate("dependency_code", "Dependency implementation: "+dependencyID, dependencyID, "", content, contextmanifest.PriorityDependency, "accepted dependency implementation provides concrete types and interfaces"))
+		candidates = append(candidates, codeCandidate(
+			"dependency_code", "Dependency implementation: "+dependencyID,
+			dependencyID, input.runtime.DependencyFilePaths[dependencyID], content,
+			contextmanifest.PriorityDependency,
+			"accepted dependency implementation provides concrete types and interfaces",
+		))
 	}
 	for dependencyID, note := range input.runtime.AgentNotes {
 		candidates = append(candidates, contextmanifest.Candidate{
@@ -175,7 +188,21 @@ func runtimeImplementationContextSource(input contextCandidateInput) []contextma
 		})
 	}
 	for path, content := range input.runtime.ExistingFiles {
-		candidates = append(candidates, codeCandidate("owned_code", "Existing Generated File: "+path, input.resource.ID, path, updateModeContent(path, content, input.runtime.ChangesRequired), contextmanifest.PriorityCode, "current owned implementation enables minimal-diff update and retry"))
+		presentation := updateModeContent(path, content, input.runtime.ChangesRequired)
+		candidate := codeCandidate(
+			"owned_code",
+			"Existing Generated File: "+path,
+			input.resource.ID+":"+filepath.ToSlash(path),
+			path,
+			presentation,
+			contextmanifest.PriorityCode,
+			"complete current owned implementation is required for a safe minimal-diff update or retry",
+		)
+		candidate.ProvenanceHash = contextmanifest.Hash(content)
+		candidate.ProvenanceBytes = len([]byte(content))
+		candidate.Mandatory = true
+		candidate.Truncatable = false
+		candidates = append(candidates, candidate)
 	}
 	for path, content := range input.runtime.ModuleFiles {
 		candidates = append(candidates, codeCandidate("module_configuration", "Module or Build Configuration: "+path, path, path, content, contextmanifest.PriorityCode, "module and build declarations may require additive integration changes"))
@@ -314,21 +341,16 @@ func projectGoalContext(action planpkg.PlannedAction, registry *cuepkg.Registry,
 	})
 }
 
-func targetAcceptanceContext(action planpkg.PlannedAction, project *cuepkg.Project) string {
-	result := make(map[string]any)
-	for _, capabilityID := range action.Capabilities {
-		capability, exists := project.Capabilities[strings.TrimPrefix(capabilityID, "capability.")]
-		if !exists || len(capability.Acceptance) == 0 {
-			continue
-		}
-		result[capabilityID] = map[string]any{
-			"description": capability.Description, "acceptance": capability.Acceptance,
-		}
-	}
-	if len(result) == 0 {
+func targetAcceptanceContext(action planpkg.PlannedAction, registry *cuepkg.Registry) string {
+	contract := registry.BehavioralContractForResource(action.ResourceID)
+	if contract.Empty() {
 		return ""
 	}
-	return contextJSON(result)
+	return contextJSON(map[string]any{
+		"resource":                  action.ResourceID,
+		"behavioral_contract":       contract,
+		"implementation_obligation": "Implement and validate the exact linked witness observations through production paths; self-report and a weaker proxy are not substitutes.",
+	})
 }
 
 func directConsumerIDs(resourceID string, registry *cuepkg.Registry) []string {
@@ -381,6 +403,35 @@ func updateModeContent(path, content, changes string) string {
 		builder.WriteString("\nCHANGES TO MAKE\n\n" + changes)
 	}
 	return builder.String()
+}
+
+// parseUpdateModeContent reverses only the presentation envelope produced by
+// updateModeContent. The last fence is intentional: legacy worktrees may
+// already contain an envelope, so the raw source can itself contain fences.
+func parseUpdateModeContent(content string) (path, source string, ok bool) {
+	const (
+		prefix        = "UPDATE MODE: preserve the existing implementation and make the smallest change that satisfies the task.\n\nFile: "
+		opening       = "\n\n```\n"
+		closing       = "\n```\n"
+		changesMarker = "\nCHANGES TO MAKE\n\n"
+	)
+	if !strings.HasPrefix(content, prefix) {
+		return "", "", false
+	}
+	rest := content[len(prefix):]
+	openingIndex := strings.Index(rest, opening)
+	if openingIndex <= 0 {
+		return "", "", false
+	}
+	path = rest[:openingIndex]
+	framed := rest[openingIndex+len(opening):]
+	for closingIndex := strings.LastIndex(framed, closing); closingIndex >= 0; closingIndex = strings.LastIndex(framed[:closingIndex], closing) {
+		suffix := framed[closingIndex+len(closing):]
+		if suffix == "" || strings.HasPrefix(suffix, changesMarker) {
+			return path, framed[:closingIndex], true
+		}
+	}
+	return "", "", false
 }
 
 func (s *Spec) referenceCandidates(references []string) []contextmanifest.Candidate {

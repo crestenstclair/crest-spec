@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "snapshot": false,
+  "mcp": {
+    "crest-spec": {
+      "type": "local",
+      "command": [
+        "/Users/crestenstclair/workspace/crest-spec/bin/crest-spec"
+      ],
+      "enabled": true,
+      "timeout": 1800000,
+      "environment": {
+        "CREST_SPEC_SPEC_DIR": "/Users/crestenstclair/workspace/crest-synth/spec",
+        "CREST_SPEC_GENERATE_MODEL": "openrouter-gpt-5.6-sol",
+        "CREST_SPEC_MAX_RETRIES": "3",
+        "CREST_SPEC_WAVE_MAX_RETRIES": "2",
+        "CREST_SPEC_DISPATCH_TIMEOUT": "2m"
+      }
+    }
+  }
+}

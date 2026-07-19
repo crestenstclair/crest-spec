@@ -36,13 +36,18 @@ type Lock struct {
 
 // Resource is the store's domain type for a resource state record.
 type Resource struct {
-	ID              string
-	Kind            string
-	ContextName     string
-	DeclarationHash string
-	EffectiveHash   string
-	Model           string
-	SettledAt       time.Time
+	ID                       string
+	Kind                     string
+	ContextName              string
+	DeclarationHash          string
+	EffectiveHash            string
+	GenerationInputHash      string
+	ExportedContractHash     string
+	DependencyContractHash   string
+	CodeDeclarationHash      string
+	VerificationContractHash string
+	Model                    string
+	SettledAt                time.Time
 }
 
 // GeneratedFile is the store's domain type for a generated file record.
@@ -457,13 +462,18 @@ func (s *Store) GetLock() (*Lock, error) {
 
 func dbResourceToResource(r db.Resource) Resource {
 	return Resource{
-		ID:              r.ID,
-		Kind:            r.Kind,
-		ContextName:     stringVal(r.ContextName),
-		DeclarationHash: r.DeclarationHash,
-		EffectiveHash:   r.EffectiveHash,
-		Model:           stringVal(r.Model),
-		SettledAt:       parseTime(r.SettledAt),
+		ID:                       r.ID,
+		Kind:                     r.Kind,
+		ContextName:              stringVal(r.ContextName),
+		DeclarationHash:          r.DeclarationHash,
+		EffectiveHash:            r.EffectiveHash,
+		GenerationInputHash:      r.GenerationInputHash,
+		ExportedContractHash:     r.ExportedContractHash,
+		DependencyContractHash:   r.DependencyContractHash,
+		CodeDeclarationHash:      r.CodeDeclarationHash,
+		VerificationContractHash: r.VerificationContractHash,
+		Model:                    stringVal(r.Model),
+		SettledAt:                parseTime(r.SettledAt),
 	}
 }
 
@@ -521,13 +531,18 @@ func (s *Store) SetResource(r Resource) error {
 		model = &r.Model
 	}
 	return s.queries.SetResource(context.Background(), db.SetResourceParams{
-		ID:              r.ID,
-		Kind:            r.Kind,
-		ContextName:     contextName,
-		DeclarationHash: r.DeclarationHash,
-		EffectiveHash:   r.EffectiveHash,
-		Model:           model,
-		SettledAt:       r.SettledAt.UTC().Format(time.RFC3339Nano),
+		ID:                       r.ID,
+		Kind:                     r.Kind,
+		ContextName:              contextName,
+		DeclarationHash:          r.DeclarationHash,
+		EffectiveHash:            r.EffectiveHash,
+		GenerationInputHash:      r.GenerationInputHash,
+		ExportedContractHash:     r.ExportedContractHash,
+		DependencyContractHash:   r.DependencyContractHash,
+		CodeDeclarationHash:      r.CodeDeclarationHash,
+		VerificationContractHash: r.VerificationContractHash,
+		Model:                    model,
+		SettledAt:                r.SettledAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -1046,6 +1061,11 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		{"DELETE FROM invariant_checks WHERE checked_at < ?", []any{ts}},
 		{"DELETE FROM apply_actions WHERE started_at < ?", []any{ts}},
 		{"DELETE FROM agent_notes WHERE created_at < ?", []any{ts}},
+		// Dispatch lifecycles reference generation attempts. Compact them before
+		// pruning context-only attempts so the new provenance foreign key cannot
+		// turn an explicit vacuum into a constraint failure.
+		{"DELETE FROM dispatch_lifecycles WHERE created_at < ?", []any{ts}},
+		{"DELETE FROM context_batches WHERE created_at < ?", []any{ts}},
 		{"DELETE FROM session_resources WHERE updated_at < ?", []any{ts}},
 		{retainedAttemptAncestors + `
 		DELETE FROM context_sections WHERE manifest_id IN (
@@ -1066,6 +1086,7 @@ func (s *Store) Vacuum(before time.Time) (int, error) {
 		  AND NOT EXISTS (SELECT 1 FROM context_sections WHERE content_blob = content_blobs.hash)
 		  AND NOT EXISTS (SELECT 1 FROM execution_manifests WHERE system_instructions_blob = content_blobs.hash)
 		  AND NOT EXISTS (SELECT 1 FROM candidate_files WHERE content_blob = content_blobs.hash)
+		  AND NOT EXISTS (SELECT 1 FROM workspace_commit_journal_files WHERE original_content_blob = content_blobs.hash OR candidate_content_blob = content_blobs.hash)
 		  AND NOT EXISTS (SELECT 1 FROM failure_classifications WHERE evidence_blob = content_blobs.hash)
 		  AND NOT EXISTS (SELECT 1 FROM validation_executions WHERE stdout_blob = content_blobs.hash OR stderr_blob = content_blobs.hash)
 		  AND NOT EXISTS (SELECT 1 FROM validation_artifacts WHERE content_blob = content_blobs.hash)

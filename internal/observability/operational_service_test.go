@@ -19,27 +19,42 @@ func seedOperationalAttempt(t *testing.T, st *store.Store, sessionID, applyID, r
 	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, st.UpsertSessionResource(store.SessionResource{SessionID: sessionID, ResourceID: resourceID, State: "pending", MaxRetries: 3}))
-	manifest, err := st.CreateContextManifest(ctx, store.ContextManifestWrite{Dispatch: true, Manifest: store.ContextManifest{
-		ID: "context-" + attemptID,
-		Attempt: store.GenerationAttempt{
-			ID: attemptID, SessionID: sessionID, ApplyID: applyID, ResourceID: resourceID,
-			PlanOperationID: "modify:" + resourceID, Role: "resource_implementer", RolePolicyVersion: executionpkg.RolePolicyVersion,
-		},
-		SelectorVersion: contextmanifest.SelectorVersion, EstimatorVersion: contextmanifest.EstimatorVersion,
-		SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: 4096, EstimatedTokens: 4,
-		OriginalBytes: 12, SelectedBytes: 12, TemplateHashes: map[string]string{"task": "template-v1"},
-		SystemPrompt: "governed system", RenderedPrompt: "implement task", ContextHash: contextmanifest.Hash("context-" + attemptID),
-		Sections: []store.ContextManifestSection{{
-			ID: "section-" + attemptID, Kind: "task", Title: "Task", SourceKind: "plan_operation", SourceID: "modify:" + resourceID,
-			Priority: int(contextmanifest.PriorityTask), Mandatory: true, Decision: string(contextmanifest.Included),
-			Reason: "the operation is mandatory", OriginalHash: contextmanifest.Hash("implement task"),
-			OriginalBytes: 12, SelectedBytes: 12, EstimatedTokens: 4, Content: "implement task",
-		}},
-	}})
+	lifecycle, err := st.RequestContext(ctx, store.DispatchRequest{
+		SessionID: sessionID, ResourceID: resourceID,
+	})
+	require.NoError(t, err)
+	manifest, err := st.CreateContextManifest(ctx, store.ContextManifestWrite{
+		DispatchLifecycleID: lifecycle.ID,
+		Manifest: store.ContextManifest{
+			ID: "context-" + attemptID,
+			Attempt: store.GenerationAttempt{
+				ID: attemptID, SessionID: sessionID, ApplyID: applyID, ResourceID: resourceID,
+				PlanOperationID: "modify:" + resourceID, Role: "resource_implementer", RolePolicyVersion: executionpkg.RolePolicyVersion,
+			},
+			SelectorVersion: contextmanifest.SelectorVersion, EstimatorVersion: contextmanifest.EstimatorVersion,
+			SelectionStrategy: "goal-directed-priority-v1", BudgetTokens: 4096, EstimatedTokens: 4,
+			OriginalBytes: 12, SelectedBytes: 12, TemplateHashes: map[string]string{"task": "template-v1"},
+			SystemPrompt: "governed system", RenderedPrompt: "implement task", ContextHash: contextmanifest.Hash("context-" + attemptID),
+			Sections: []store.ContextManifestSection{{
+				ID: "section-" + attemptID, Kind: "task", Title: "Task", SourceKind: "plan_operation", SourceID: "modify:" + resourceID,
+				Priority: int(contextmanifest.PriorityTask), Mandatory: true, Decision: string(contextmanifest.Included),
+				Reason: "the operation is mandatory", OriginalHash: contextmanifest.Hash("implement task"),
+				OriginalBytes: 12, SelectedBytes: 12, EstimatedTokens: 4, Content: "implement task",
+			}},
+		}})
 	require.NoError(t, err)
 	if !withExecution {
 		return
 	}
+	const hostSessionID = "operational-fixture-host"
+	dispatch := store.DispatchRequest{
+		ID: lifecycle.ID, SessionID: sessionID, ResourceID: resourceID,
+		HostSessionID: hostSessionID, WorkerID: "worker-" + attemptID,
+	}
+	_, err = st.RequestDispatch(ctx, dispatch)
+	require.NoError(t, err)
+	_, err = st.AcknowledgeDispatch(ctx, dispatch)
+	require.NoError(t, err)
 	execution, err := st.StartExecution(ctx, store.ExecutionManifest{
 		AttemptID: attemptID, ContextManifestID: manifest.ID, ProtocolVersion: executionpkg.ProtocolVersion,
 		IdempotencyKey: "execution-" + attemptID, PlanOperationID: "modify:" + resourceID,
@@ -47,7 +62,8 @@ func seedOperationalAttempt(t *testing.T, st *store.Store, sessionID, applyID, r
 		ContextPolicy: "resource-implementation-v1", HostName: "fixture-host", HostVersion: "1.0",
 		Provider: "fixture", Model: "fixture-model", ContextHash: manifest.ContextHash,
 		TemplateHashes: map[string]string{"task": "template-v1"}, SystemInstructions: "governed system",
-		Tools: []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+		Tools:         []store.ExecutionTool{{Name: "filesystem", Permission: "project"}},
+		HostSessionID: hostSessionID,
 	})
 	require.NoError(t, err)
 	_, err = st.SubmitCandidate(ctx, execution.ID, []store.CandidateFile{{Path: "src/generated.go", Content: "package generated\n", WriteIntent: "modify"}})

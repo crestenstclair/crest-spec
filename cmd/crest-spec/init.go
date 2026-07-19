@@ -171,6 +171,7 @@ func opencodeInitFiles(binaryPath string) []initFile {
 func claudeCodeInitFiles(binaryPath string) []initFile {
 	return []initFile{
 		{path: ".mcp.json", content: claudeMCPConfig(binaryPath)},
+		{path: ".claude/skills/apply-crest-spec/SKILL.md", content: claudeApplySkill()},
 	}
 }
 
@@ -184,7 +185,8 @@ func opencodeConfig(binaryPath string) string {
       "cwd": ".",
       "environment": {
         "CREST_SPEC_SPEC_DIR": "./spec",
-        "CREST_SPEC_GENERATE_MODEL": "opencode-stable"
+        "CREST_SPEC_GENERATE_MODEL": "opencode-stable",
+        "CREST_SPEC_DISPATCH_TIMEOUT": "2m"
       },
       "enabled": true,
       "timeout": 30000
@@ -206,12 +208,36 @@ func claudeMCPConfig(binaryPath string) string {
       "command": %q,
       "env": {
         "CREST_SPEC_SPEC_DIR": "./spec",
-        "CREST_SPEC_GENERATE_MODEL": "claude-sonnet-5"
+        "CREST_SPEC_GENERATE_MODEL": "claude-sonnet-5",
+        "CREST_SPEC_DISPATCH_TIMEOUT": "2m"
       }
     }
   }
 }
 `, binaryPath)
+}
+
+func claudeApplySkill() string {
+	return `---
+name: apply-crest-spec
+description: Apply or reconcile this project's crest-spec with a time-first, governed worker pool.
+---
+
+# Apply crest-spec with Claude Code
+
+CrestSpec is the passive state and validation engine. Claude Code owns all LLM dispatch; never ask CrestSpec to spawn agents or write implementation code outside spec/commit.
+
+1. Run spec/validate, spec/plan, then spec/begin. Stop for explicit approval of any PendingDestroys.
+2. Create a bounded pool of generator subagents once and retain their identities. Reassign idle workers sequential resources across dependency waves instead of starting a fresh agent for every resource.
+3. Whenever workers are idle, call spec/context_batch with limit equal to the currently idle worker slots. It prepares at most that many immutable contexts but does not claim them. Repeated calls refill the pool; never prefetch beyond immediate capacity. Report per-item errors and blocked contexts without dispatching them. Choose an idle worker for each unblocked item, call spec/dispatch_event dispatch_requested with its DispatchID and stable, nonempty worker_id and host_session_id values, and give the item as prepared_context to that worker only after the event succeeds. If dispatch returns rebuild_context, do not assign the abandoned stale attempt; refill the slot through context_batch. This refresh does not consume a generation retry. The worker immediately records worker_acknowledged with the same identities. If assignment delivery or the worker fails before execution registration, call dispatch_failed with those exact identities and a concrete reason so the claim is released immediately without consuming a retry. A prepared initial attempt must then go directly to spec/execution_start; do not call spec/context again for it.
+4. Every assignment registers its own actual host/model/tools/settings/context identity through crest-execution-v1 and submits only through spec/commit. For an UPDATE-mode retry, the worker calls spec/context, then records dispatch_requested for that new DispatchID before worker_acknowledged and spec/execution_start. If dispatch or execution_start returns rebuild_context, the worker calls spec/context again and dispatches the replacement without charging a model retry. Lifecycle calls are mandatory; stop the assignment on any other lifecycle error and report dispatch_failed when no execution was registered rather than leaving a claim or relying on implicit dispatch.
+5. Reconcile the complete wave from CrestSpec state and call spec/verify_wave. Deferred validation advances to the next context_batch.
+6. When context_batch returns validation_ready=true, call spec/verify_wave with validation_wave_index even if there are no contexts. Optimistic or reused resources require no dummy worker but still require closure validation.
+7. Attribute a failed closure gate to its owners, call spec/resolve with concrete guidance, and reuse the existing workers for repairs. Halt loudly at retry limits; never auto-skip or force finish.
+8. Run required declared witnesses through spec/verify and call spec/finish without force.
+
+Worker count is bounded by host capacity and current wave width. A worker processes only one assignment at a time and clears all resource-specific context before reuse. CrestSpec never owns or counts the worker processes; its immutable dispatch, attempt, and execution manifests are the source of truth.
+`
 }
 
 func crestOrchestratorAgent() string {
@@ -236,15 +262,15 @@ Run the canonical loop:
 1. Call spec/validate.
 2. Call spec/plan and inspect whether the increment is expected.
 3. Call spec/begin. If PendingDestroys is non-empty, stop and ask the user before spec/confirm_destroys.
-4. Repeatedly call spec/next.
-5. For each resource in the current wave, dispatch one crest-generator subagent concurrently and wait for the wave's subagents to return.
+4. Create a bounded set of crest-generator subagents and retain their identities for reuse across waves.
+5. Whenever the pool has idle workers, call spec/context_batch with limit equal to the number of idle worker slots. It prepares at most that many contexts without claiming them; repeated calls refill newly idle slots. Never prefetch contexts beyond immediate capacity. Report errors and blocked contexts without assigning them. Choose an idle worker for every unblocked returned context, record spec/dispatch_event dispatch_requested with its DispatchID and stable, nonempty worker_id and host_session_id values, then assign it only after that event succeeds; reuse workers for later resources only after their prior assignments are terminal. If dispatch returns rebuild_context, do not assign that stale abandoned attempt; refill the slot through context_batch without charging a generation retry. The worker must record worker_acknowledged before spec/execution_start. If delivery or a worker fails before execution registration, call dispatch_failed with the exact identities and reason, then refill the released slot. CrestSpec rejects overlapping assignments.
 6. Reconcile outcomes against crest-spec state, using spec/sql when needed.
 7. Run spec/verify_wave after committed resources.
 8. If validation fails, dispatch crest-triage and call spec/resolve with concrete guidance.
 9. Halt loudly on repeated non-convergence. Do not auto-skip.
-10. Call spec/finish only when the engine permits it. Do not force without user approval.
+10. If context_batch returns validation_ready=true, call spec/verify_wave with validation_wave_index even when there were no generator assignments. Then call spec/finish only when the engine permits it. Do not force without user approval.
 
-Concurrency is required for speed: resources returned by the same spec/next wave are independent enough to generate in parallel. Dispatch all eligible current-wave resource agents together, then reconcile after they return. Do not start a second crest-spec session while a wave is running.
+Concurrency is required for speed: assign eligible contexts from each capacity-limited spec/context_batch concurrently. A prepared context is not a claim or worker reservation, so prepare only what idle workers can start promptly. Keep one assignment per worker, account for every returned context, and preserve a distinct execution identity for every attempt. Treat a missing DispatchID or failed dispatch lifecycle event as a hard orchestration error; never use implicit dispatch. Do not start a second crest-spec session while a wave is running.
 
 Never ask crest-spec to perform a task. Use its tools as state, prompt, commit, verification, and ledger operations.
 `
@@ -260,18 +286,19 @@ permission:
   edit: allow
   bash: ask
 ---
-You generate exactly one crest-spec resource.
+You generate exactly one assigned crest-spec resource at a time. The orchestrator may reuse this worker for a later assignment; clear resource-specific context between assignments.
 
-Inputs from the orchestrator must include session_id, resource_id, model_label, and max_attempts.
+Inputs from the orchestrator must include session_id, resource_id, prepared_context when available, worker_id, host_session_id, model_label, and max_attempts. Before assigning a prepared_context, the orchestrator must successfully record dispatch_requested for it.
 
 Loop until committed or attempts are exhausted:
-1. Call spec/context with the session_id and resource_id.
-2. Treat Role, SystemPrompt, and Prompt as authoritative. Honor invariants as hard constraints.
-3. Before generating, call spec/execution_start with protocol crest-execution-v1, AttemptID, ContextHash, TemplateHashes, SystemPrompt, host_name "opencode", the exact model/settings/tools/permissions, and an idempotency key derived from AttemptID.
-4. If context contains previous files, Previous Errors, Guidance, or a role handoff, edit the previous attempt in the returned role. Do not restart from scratch.
-5. Produce only the files requested by the prompt.
-6. Call spec/commit with attempt_id, files, and a short note. Session, resource, and model are derived from SQLite.
-7. If Committed is false, read Validations and FailureCategory, fetch fresh spec/context, and follow its corrective role handoff.
+1. Use prepared_context for the initial attempt when supplied. Otherwise call spec/context with the session_id and resource_id. Never request a duplicate initial context for a prepared attempt.
+2. If the context has NoDispatch=true, return candidate_reinstated without recording dispatch or acknowledgement and have the parent call spec/next. If it has Blocked=true, return context_blocked without dispatch.
+3. For an initial prepared_context, the orchestrator already recorded dispatch_requested. For any context this worker fetched through spec/context, including every retry, call spec/dispatch_event dispatch_requested with its DispatchID, worker_id, and host_session_id. Then call spec/dispatch_event worker_acknowledged with the same DispatchID and identities. If dispatch_requested returns rebuild_context for a worker-fetched context, do not acknowledge or start that stale abandoned attempt; call spec/context again and dispatch its new DispatchID without charging a generation retry. If a live failure prevents execution registration after claim, call dispatch_failed with the exact identities and a concrete reason before stopping; implicit dispatch is forbidden.
+4. Treat Role, SystemPrompt, and Prompt as authoritative. Honor invariants as hard constraints. Before generating, call spec/execution_start with protocol crest-execution-v1, AttemptID, ContextHash, TemplateHashes, SystemPrompt, host_name "opencode", the exact model/settings/tools/permissions, and an idempotency key derived from AttemptID. If execution_start returns rebuild_context, fetch a new spec/context and repeat dispatch_requested then worker_acknowledged before starting it, without charging a generation retry. For another start rejection that registered no execution, call dispatch_failed before returning.
+5. If context contains previous files, Previous Errors, Guidance, or a role handoff, edit the previous attempt in the returned role. Do not restart from scratch.
+6. Produce only the files requested by the prompt.
+7. Call spec/commit with attempt_id, files, and a short note. Session, resource, and model are derived from SQLite.
+8. If Committed is false, read Validations and FailureCategory, fetch fresh spec/context, and repeat the dispatch-request/acknowledgement lifecycle for that new DispatchID before following its corrective role handoff.
 
 Return structured data: resource_id, outcome, attempts, error, files.
 `
@@ -362,6 +389,6 @@ Apply the current crest-spec using the canonical host-side loop from docs/AGENT_
 
 User arguments: $ARGUMENTS
 
-Use the crest-spec MCP tools. Validate, plan, begin, dispatch native OpenCode subagents concurrently per wave, commit through the engine gate, verify waves, resolve with guidance, and finish only when the engine allows it. Surface destructive changes, stalls, unresolved checks, and force/skip decisions to the user.
+Use the crest-spec MCP tools. Validate, plan, begin, and refill the bounded reusable OpenCode worker pool by calling spec/context_batch with limit equal to currently idle worker slots. Explicitly record dispatch_requested before assigning each unclaimed prepared context. Require worker_acknowledged before execution_start, including a fresh dispatch request for every retry context. If assignment delivery or a worker fails before execution registration, immediately report dispatch_failed with the exact identities and reason so CrestSpec releases the claim without consuming a retry. Commit through the engine gate, verify waves including validation-ready waves with no generator work, resolve with guidance, and finish only when the engine allows it. Preserve a distinct execution identity for every worker assignment; never use implicit dispatch. Surface destructive changes, stalls, unresolved checks, and force/skip decisions to the user.
 `
 }

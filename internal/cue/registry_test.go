@@ -109,6 +109,89 @@ func TestNewRegistry_ReportsMissingCapabilitiesWithoutRejectingProject(t *testin
 	require.Equal(t, []string{"capability.run_example"}, reg.MissingCapabilities)
 }
 
+func TestNewRegistryValidatesWitnessRepairResources(t *testing.T) {
+	newProject := func() *Project {
+		project := validIntentProject()
+		project.Contexts = map[string]Context{"Example": {
+			Purpose: "exercise witness repair ownership",
+			ValueObjects: map[string]ValueObject{
+				"Observed": {Description: "the observed value"},
+				"Repair":   {Description: "the exact repair owner"},
+			},
+		}}
+		project.Witnesses = map[string]Witness{"behavior": {
+			Scope: "goal", Goal: "goal.complete_example",
+			Resources:                     []string{"valueObject.Example.Observed", "valueObject.Example.Repair"},
+			RepairResources:               []string{"valueObject.Example.Repair"},
+			CounterexampleRepairResources: []string{"valueObject.Example.Repair"},
+			Command:                       []string{"sh", "real.sh"}, NegativeCommand: []string{"sh", "negative.sh"},
+			Observation: ObservationDeclaration{Kind: "json_stdout", Marker: "CREST_OBSERVATION ", Schema: map[string]string{"worked": "bool"}},
+			Predicates: []WitnessPredicate{{
+				Field: "worked", Op: "eq", Value: true,
+				RepairResources: []string{"valueObject.Example.Repair"},
+			}},
+		}}
+		return project
+	}
+
+	t.Run("accepts canonical subset", func(t *testing.T) {
+		registry, err := NewRegistry(newProject())
+		require.NoError(t, err)
+		require.Equal(t,
+			[]string{"valueObject.Example.Repair"},
+			registry.Project.Witnesses["behavior"].RepairResources,
+		)
+		require.Equal(t,
+			[]string{"valueObject.Example.Repair"},
+			registry.Project.Witnesses["behavior"].Predicates[0].RepairResources,
+		)
+	})
+
+	t.Run("rejects unknown canonical resource", func(t *testing.T) {
+		project := newProject()
+		witness := project.Witnesses["behavior"]
+		witness.RepairResources = []string{"valueObject.Example.Missing"}
+		project.Witnesses["behavior"] = witness
+
+		_, err := NewRegistry(project)
+		require.ErrorContains(t, err,
+			`project.witnesses.behavior.repairResources references unknown ID "valueObject.Example.Missing"`)
+	})
+
+	t.Run("rejects resource outside observed set", func(t *testing.T) {
+		project := newProject()
+		witness := project.Witnesses["behavior"]
+		witness.Resources = []string{"valueObject.Example.Observed"}
+		project.Witnesses["behavior"] = witness
+
+		_, err := NewRegistry(project)
+		require.ErrorContains(t, err,
+			`project.witnesses.behavior.repairResources must be a subset of project.witnesses.behavior.resources; "valueObject.Example.Repair" is not observed`)
+	})
+
+	t.Run("rejects predicate owner outside witness repair set", func(t *testing.T) {
+		project := newProject()
+		witness := project.Witnesses["behavior"]
+		witness.Predicates[0].RepairResources = []string{"valueObject.Example.Observed"}
+		project.Witnesses["behavior"] = witness
+
+		_, err := NewRegistry(project)
+		require.ErrorContains(t, err,
+			`project.witnesses.behavior.predicates[0].repairResources must be a subset of project.witnesses.behavior.repairResources; "valueObject.Example.Observed" is not a witness repair owner`)
+	})
+
+	t.Run("rejects counterexample owner outside witness repair set", func(t *testing.T) {
+		project := newProject()
+		witness := project.Witnesses["behavior"]
+		witness.CounterexampleRepairResources = []string{"valueObject.Example.Observed"}
+		project.Witnesses["behavior"] = witness
+
+		_, err := NewRegistry(project)
+		require.ErrorContains(t, err,
+			`project.witnesses.behavior.counterexampleRepairResources must be a subset of project.witnesses.behavior.resources and project.witnesses.behavior.repairResources; "valueObject.Example.Observed" is not an observed repair owner`)
+	})
+}
+
 func TestNewRegistry_RejectsInvalidContributionsAndProfiles(t *testing.T) {
 	p := validIntentProject()
 	p.Contexts = map[string]Context{"Example": {

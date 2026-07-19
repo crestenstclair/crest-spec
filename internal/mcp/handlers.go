@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/crestenstclair/crest-spec/internal/execution"
@@ -12,6 +13,16 @@ import (
 
 // handleInitialize returns the MCP protocol initialization response.
 func (s *Server) handleInitialize(ctx context.Context, id any, params json.RawMessage) jsonRPCResponse {
+	s.prepareStartupRecovery(ctx)
+	serverInfo := map[string]any{
+		"name":             "crest-spec",
+		"version":          "0.1.0",
+		"buildFingerprint": s.build.SHA256,
+		"processStartedAt": s.startTime.UTC().Format(time.RFC3339Nano),
+	}
+	if blocker := s.recoveryBlockerSnapshot(); blocker != nil {
+		serverInfo["recoveryBlocker"] = blocker
+	}
 	return jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -29,10 +40,7 @@ func (s *Server) handleInitialize(ctx context.Context, id any, params json.RawMe
 					},
 				},
 			},
-			"serverInfo": map[string]any{
-				"name":    "crest-spec",
-				"version": "0.1.0",
-			},
+			"serverInfo": serverInfo,
 			"instructions": `crest-spec is a declarative code generation system. The MCP server is a pure
 spec state engine — it never calls an LLM and never spawns subprocesses.
 YOU (Claude Code) are the orchestrator and run all generation with your own
@@ -115,6 +123,21 @@ func (s *Server) handleToolCall(ctx context.Context, id any, params json.RawMess
 			Result:  errorResult("unknown tool: " + tcp.Name),
 		}
 	}
+	if strings.HasPrefix(tcp.Name, "spec/") {
+		if stale, reason := s.build.stale(); stale {
+			result := errorResult(reason + "; restart the CrestSpec MCP server before continuing so framework and database behavior cannot diverge")
+			s.metrics.Record(tcp.Name, 0, errors.New("stale crest-spec server binary"))
+			return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
+		}
+		s.prepareStartupRecovery(ctx)
+		if !recoveryDiagnosticTool(tcp.Name) {
+			if err := s.ensureWorkspaceRecovery(ctx); err != nil {
+				result := recoveryBlockedToolResult(tcp.Name, s.recoveryBlockerSnapshot())
+				s.metrics.Record(tcp.Name, 0, err)
+				return jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
+			}
+		}
+	}
 
 	start := time.Now()
 	result := handler(ctx, tcp.Arguments)
@@ -128,6 +151,33 @@ func (s *Server) handleToolCall(ctx context.Context, id any, params json.RawMess
 		ID:      id,
 		Result:  result,
 	}
+}
+
+func recoveryDiagnosticTool(name string) bool {
+	switch name {
+	case "spec/status", "spec/sql":
+		return true
+	default:
+		return false
+	}
+}
+
+func recoveryBlockedToolResult(tool string, blocker *RecoveryBlocker) toolResult {
+	if blocker == nil {
+		blocker = &RecoveryBlocker{
+			Active: true, Kind: "recovery_blocked", Stage: "unknown",
+			Message:          "lifecycle recovery did not complete",
+			CorrectiveAction: "inspect spec/status and retry after the recovery blocker is resolved",
+			ObservedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		}
+	}
+	result := jsonResult(map[string]any{
+		"error":            "recovery_blocked",
+		"tool":             tool,
+		"recovery_blocker": blocker,
+	})
+	result.IsError = true
+	return result
 }
 
 // handleResourcesList returns the list of available MCP resources.

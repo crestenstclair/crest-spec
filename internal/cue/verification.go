@@ -155,6 +155,9 @@ func validateWitnessDefinition(errs *[]string, path string, witness Witness, goa
 	if equalStringSlices(witness.Command, witness.NegativeCommand) {
 		*errs = append(*errs, path+".negativeCommand must differ from command")
 	}
+	if witness.NegativeExpectedExitCode < 0 || witness.NegativeExpectedExitCode > 255 {
+		*errs = append(*errs, path+".negativeExpectedExitCode must be between 0 and 255")
+	}
 	validateExecutionPolicy(errs, path, witness.WorkingDirectory, witness.Timeout, witness.Environment, witness.Artifacts)
 	if witness.Observation.Kind != "json_stdout" {
 		*errs = append(*errs, path+`.observation.kind must be "json_stdout"`)

@@ -1,23 +1,25 @@
 export const meta = {
   name: 'spec-generate',
   description: 'Drive a crest-spec generation session with behavioral verification: design → tasks → generate → verify',
-  whenToUse: 'After spec_begin has produced a session. Pass {sessionId, model?, maxRetries?} as args.',
+  whenToUse: 'After spec_begin has produced a session. Pass {sessionId, model?, maxRetries?, maxWorkers?} as args.',
   phases: [
     { title: 'Design', detail: 'derive observable contracts per bounded context in parallel' },
     { title: 'Tasks', detail: 'decompose context contracts into resource tasks with behavioral checks in parallel' },
-    { title: 'Wave', detail: 'one generator agent per resource, retry loop inside the agent' },
+    { title: 'Wave', detail: 'bounded autonomous warm workers pull and process multiple resources per pool pass' },
     { title: 'Verify', detail: 'independent verifier agents run witness harnesses per behavioral check; failures cycle back into generation' },
     { title: 'Triage', detail: 'resolve or skip resources still failing after retries' },
   ],
 }
 
-// args: { sessionId: string, model?: string, maxRetries?: number }
+// args: { sessionId: string, model?: string, maxRetries?: number, maxWorkers?: number }
 // Tolerate args arriving as a JSON-encoded string (harness serialization quirk).
 const input = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const sessionId = input.sessionId
 if (!sessionId) throw new Error('spec-generate requires args.sessionId (run spec_begin first)')
 const model = input.model || 'sonnet'          // NEVER haiku
 const maxRetries = input.maxRetries ?? 3
+const maxWorkers = Math.max(1, Math.floor(input.maxWorkers ?? 4))
+const hostSessionId = `claude-workflow:${sessionId}`
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +28,8 @@ const WAVE_SCHEMA = {
   properties: {
     done: { type: 'boolean' },
     wave_index: { type: 'number' },
+    validation_ready: { type: 'boolean' },
+    validation_wave_index: { type: 'number' },
     resources: {
       type: 'array',
       items: {
@@ -42,16 +46,26 @@ const WAVE_SCHEMA = {
   required: ['done'],
 }
 
-const OUTCOME_SCHEMA = {
+const WORKER_OUTCOME_SCHEMA = {
   type: 'object',
   properties: {
-    resource_id: { type: 'string' },
-    outcome: { type: 'string', enum: ['committed', 'rejected', 'skipped', 'error'] },
-    attempts: { type: 'number' },
-    error: { type: 'string' },
-    files: { type: 'array', items: { type: 'string' } },
+    worker_id: { type: 'string' },
+    outcomes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          resource_id: { type: 'string' },
+          outcome: { type: 'string', enum: ['committed', 'rejected', 'skipped', 'error'] },
+          attempts: { type: 'number' },
+          error: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['resource_id', 'outcome'],
+      },
+    },
   },
-  required: ['resource_id', 'outcome'],
+  required: ['worker_id', 'outcomes'],
 }
 
 const VERIFY_SCHEMA = {
@@ -217,64 +231,27 @@ Pick the field name and op so the witness can emit that field with the matching 
 5. Return: {resource_id: "${resourceId}", committed: true/false, task_count: N, check_count: N, error: "<if any>"}.`
 }
 
-function generatorPrompt(resourceId, waveIndex) {
-  return `You are a crest-spec generation sub-agent for resource "${resourceId}" (session ${sessionId}, wave ${waveIndex}).
+function warmWorkerPrompt(workerId, waveIndex) {
+  return `You are persistent crest-spec generator pool slot "${workerId}" for host run "${hostSessionId}" (session ${sessionId}, target wave ${waveIndex}). Reuse this same conversation for MULTIPLE sequential resource assignments. Clear resource-specific assumptions after each terminal outcome.
 
-Load the crest-spec MCP tools first:
-ToolSearch "select:mcp__crest-spec__spec_context,mcp__crest-spec__spec_execution_start,mcp__crest-spec__spec_commit"
+Load these tools first:
+ToolSearch "select:mcp__crest-spec__spec_context_batch,mcp__crest-spec__spec_context,mcp__crest-spec__spec_dispatch_event,mcp__crest-spec__spec_execution_start,mcp__crest-spec__spec_commit"
 
-Then run this loop (at most ${maxRetries + 1} attempts):
-1. Call spec_context with {session_id: "${sessionId}", resource_id: "${resourceId}"}.
-   It returns AttemptID, ContextHash, Role, RolePolicyVersion, ContextPolicy,
-   TemplateHashes, SystemPrompt, Prompt, and Invariants (each invariant is
-   {text, rationale}). Treat SystemPrompt as your role and follow Prompt
-   exactly — it contains the mission, the resource declaration, dependencies,
-   the bounded context's design contract, existing files (UPDATE mode), and —
-   on retries — the sections "## Previous Errors" and "## Guidance".
-2. BEFORE generating, call spec_execution_start exactly once with:
-   {
-     attempt_id: Context.AttemptID,
-     protocol_version: "crest-execution-v1",
-     idempotency_key: "claude-code:" + Context.AttemptID,
-     context_hash: Context.ContextHash,
-     role: Context.Role,
-     host_name: "claude-code",
-     host_version: "workflow-v1",
-     provider: "anthropic",
-     model: "${model}",
-     inference_config: {model_alias: "${model}"},
-     agent_config: {role: Context.Role, role_policy_version: Context.RolePolicyVersion,
-                    context_policy: Context.ContextPolicy, workflow: "spec-generate"},
-     tools: [{name: "crest-spec-mcp", permission: "context,execution_start,commit"}],
-     template_hashes: Context.TemplateHashes,
-     system_instructions: Context.SystemPrompt,
-     host_session_id: "${sessionId}"
-   }.
-   Do not generate or commit if registration fails. Work as Context.Role; a
-   retry may hand the resource to minimal_diff_repair or another specialist.
-3. On a retry the context serves your PREVIOUS ATTEMPT'S files in UPDATE
-   mode alongside "## Previous Errors". ITERATE: keep the working code and
-   make the minimal edit that fixes that specific failure — never rewrite
-   the resource from scratch over a minor bug.
-4. Author the files the prompt asks for (full file contents, correct paths
-   relative to the project root). Honor every invariant as a hard constraint —
-   verification is independent (behavioral checks), so a violation WILL be
-   caught after commit and cost a full regeneration. Follow the prompt's
-   folder structure and style rules. Do NOT create files the prompt doesn't
-   call for. Don't sweat formatting — the wave gate normalizes it
-   automatically; your job is the design, not the whitespace.
-5. Call spec_commit with {attempt_id: Context.AttemptID,
-   files: [{path, content}], notes: <one-line design note>}. Commit through
-   spec_commit rather than writing into the project tree with your own file
-   tools — that keeps the loop's state and feedback coherent.
-6. If the result has Committed=true → stop, report outcome "committed".
-   If Committed=false → read result.Validations for the failure, go back to
-   step 1 (the new context carries the failure) and fix the actual problem.
-7. If still rejected after ${maxRetries + 1} attempts, report outcome
-   "rejected" with the final error message. Do not call spec_skip yourself.
+POOL LOOP:
+1. Call spec_context_batch with {session_id: "${sessionId}", limit: 1}. If done=true, validation_ready=true, there are no contexts, or wave_index differs from ${waveIndex}, stop and return accumulated outcomes. A context for a later wave remains unclaimed and will be replayed; do not dispatch it.
+2. Take the single item. If item.error is nonempty, record an error outcome and stop fail-closed. If Context.NoDispatch=true, record that resource as committed with attempts=0 (an exact candidate was reinstated) and refill. If Context.Blocked=true, record an error outcome and stop. Do not dispatch either case.
+3. Before inspecting or following Context.Prompt, call spec_dispatch_event with event="dispatch_requested", Context.DispatchID, session_id, resource_id, host_session_id="${hostSessionId}", worker_id="${workerId}". This atomically claims the prepared attempt for this real pool slot. If and only if another pool slot clearly won this same claim, discard the item and repoll; any other lifecycle error is fatal. If the response says rebuild_context, repoll without charging an attempt.
+4. Call spec_dispatch_event again with event="worker_acknowledged" and exactly the same dispatch/session/resource/host/worker identities. If acknowledgement or any other host/tool failure prevents execution_start after a successful claim, immediately call spec_dispatch_event with event="dispatch_failed", the same identities, and a nonempty concrete reason; then append an error outcome and refill. Never use dispatch_failed for a candidate rejection.
+5. Call spec_execution_start exactly once with Context.AttemptID, protocol_version="crest-execution-v1", idempotency_key="claude-code:" + Context.AttemptID, Context.ContextHash, Context.Role, host_name="claude-code", host_version="workflow-v2-warm-pool", provider="anthropic", model="${model}", inference_config={model_alias:"${model}"}, agent_config={role:Context.Role, role_policy_version:Context.RolePolicyVersion, context_policy:Context.ContextPolicy, workflow:"spec-generate", worker_id:"${workerId}"}, tools=[{name:"crest-spec-mcp", permission:"context_batch,context,dispatch_event,execution_start,commit"}], Context.TemplateHashes, Context.SystemPrompt, and host_session_id="${hostSessionId}". If it says rebuild_context, call spec_context for this resource and perform a NEW dispatch_requested → worker_acknowledged → execution_start lifecycle without charging a generation attempt. For any other pre-execution failure, record dispatch_failed before returning the slot to the pool.
+6. Treat Role, SystemPrompt, Prompt, and Invariants as authoritative. Author only the requested full file contents in memory. Never write generated files directly. UPDATE-mode retries preserve the prior files and make the smallest correction for Previous Errors and Guidance.
+7. Call spec_commit with {attempt_id: Context.AttemptID, files:[{path,content}], notes:<one-line note>}. If committed, append a committed outcome and return to step 1 for another resource.
+8. If rejected, read all Validations, then call spec_context with {session_id:"${sessionId}", resource_id, parent_attempt_id:Context.AttemptID}. For every returned retry Context, use a NEW DispatchID and repeat dispatch_requested → worker_acknowledged → execution_start before generating. rebuild_context refreshes do not consume the ${maxRetries}-execution budget. Stop the resource after ${maxRetries} actual generation executions and append a rejected outcome, then refill.
 
-Your final message is parsed as data: report resource_id, outcome, attempts,
-error (last validation message, if any), and the file paths you committed.`
+Never use implicit lifecycle events, never reuse an AttemptID or DispatchID, never overlap two assignments on this worker ID, and never call spec_skip. Return {worker_id:"${workerId}", outcomes:[{resource_id,outcome,attempts,error,files}, ...]}.`
+}
+
+function validationReadyPrompt(waveIndex) {
+  return `ToolSearch "select:mcp__crest-spec__spec_verify_wave,mcp__crest-spec__spec_resolve,mcp__crest-spec__spec_sql". Call spec_verify_wave with {session_id:"${sessionId}", wave_index:${waveIndex}}. If it fails, attribute every diagnostic to the resource that owns the named file using generated_files via spec_sql, then call spec_resolve once per actual owner with all of that owner's diagnostics. Never trust a loose ResourceID heuristic and never resolve an unattributed error. Return {passed,resolved,unattributed}.`
 }
 
 function verifierPrompt(resourceId, checkId, behavior, checkJson) {
@@ -507,10 +484,23 @@ const MAX_EMPTY_POLLS = 8
 
 while (true) {
   const wave = await agent(
-    `Load the crest-spec MCP tools (ToolSearch "select:mcp__crest-spec__spec_next"), call spec_next with {session_id: "${sessionId}"}, and return its result: done, wave_index, and resources (resource_id, attempts, last_error — last_error comes from each resource's Error.Message if set).`,
+    `Load the crest-spec MCP tools (ToolSearch "select:mcp__crest-spec__spec_next"), call spec_next with {session_id: "${sessionId}"}, and return its result: done, wave_index, validation_ready, validation_wave_index, and resources (resource_id, attempts, last_error — last_error comes from each resource's Error.Message if set).`,
     { label: 'spec_next', phase: 'Wave', schema: WAVE_SCHEMA },
   )
-  if (!wave || wave.done) break
+  if (!wave) break
+  if (wave.validation_ready) {
+    const validationWave = wave.validation_wave_index ?? wave.wave_index
+    const verify = await agent(validationReadyPrompt(validationWave), {
+      label: `verify:validation-ready-${validationWave}`, phase: 'Verify', schema: VERIFY_SCHEMA,
+    })
+    if (!verify || (verify.passed === false && (verify.resolved || []).length === 0)) {
+      unresolved.push({ resource_id: `wave-${validationWave}`, attempts: 0, last_error: 'closure validation failed without an attributed owner; halted fail-closed' })
+      break
+    }
+    if (verify.passed === false) triaged.push({ resource_id: `wave-${validationWave}`, action: verify })
+    continue
+  }
+  if (wave.done) break
   const resources = (wave.resources || []).filter(Boolean)
   if (resources.length === 0) {
     emptyPolls++
@@ -539,14 +529,21 @@ while (true) {
   waveCount++
   log(`Wave ${wave.wave_index}: ${resources.length} resource(s)`)
 
-  const outcomes = await parallel(resources.map(r => () =>
-    agent(generatorPrompt(r.resource_id, wave.wave_index), {
-      label: `gen:${r.resource_id}`,
+  // Claude Dynamic Workflows do not expose an in-run follow-up/resume handle.
+  // Each agent below is therefore a real autonomous warm slot for this pool
+  // pass: it pulls, claims, and completes multiple sequential resources before
+  // returning. We do not emulate reuse with fresh per-resource agents.
+  const poolWidth = Math.min(maxWorkers, resources.length)
+  const workerRuns = await parallel(Array.from({ length: poolWidth }, (_, slot) => () => {
+    const workerId = `claude-worker-${slot}`
+    return agent(warmWorkerPrompt(workerId, wave.wave_index), {
+      label: `gen-pool:${workerId}`,
       phase: 'Wave',
       model,
-      schema: OUTCOME_SCHEMA,
+      schema: WORKER_OUTCOME_SCHEMA,
     })
-  ))
+  }))
+  const outcomes = workerRuns.filter(Boolean).flatMap(run => (run.outcomes || []).filter(Boolean))
 
   // ── Behavioral VERIFY pass ─────────────────────────────────────────────────
   // For each resource that committed, list its pending behavioral checks and run

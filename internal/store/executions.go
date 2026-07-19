@@ -125,15 +125,17 @@ type CandidateDisposition struct {
 }
 
 type CandidateSet struct {
-	ID                string
-	ExecutionID       string
-	AttemptID         string
-	CandidateHash     string
-	Status            string
-	DispositionReason string
-	CreatedAt         time.Time
-	DisposedAt        *time.Time
-	Files             []CandidateFile
+	ID                     string
+	ExecutionID            string
+	AttemptID              string
+	CandidateHash          string
+	GenerationInputHash    string
+	DependencyContractHash string
+	Status                 string
+	DispositionReason      string
+	CreatedAt              time.Time
+	DisposedAt             *time.Time
+	Files                  []CandidateFile
 }
 
 type CandidateFile struct {
@@ -244,6 +246,22 @@ func (s *Store) StartExecution(ctx context.Context, manifest ExecutionManifest) 
 	if attempt.Status != "context_prepared" {
 		return nil, fmt.Errorf("start execution: attempt %s has status %s", attempt.ID, attempt.Status)
 	}
+	lifecycle, err := q.GetDispatchLifecycleByAttempt(ctx, &attempt.ID)
+	if err != nil {
+		return nil, fmt.Errorf("start execution: prepared dispatch lifecycle: %w", mapNotFound(err))
+	}
+	if lifecycle.DispatchRequestedAt == "" || lifecycle.WorkerAcknowledgedAt == "" {
+		return nil, fmt.Errorf("start execution: dispatch_requested and worker_acknowledged are required before execution")
+	}
+	resource, err := q.GetSessionResource(ctx, db.GetSessionResourceParams{
+		SessionID: attempt.SessionID, ResourceID: attempt.ResourceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start execution: session resource: %w", mapNotFound(err))
+	}
+	if resource.State != "dispatched" || stringVal(resource.JobID) != attempt.ID {
+		return nil, fmt.Errorf("start execution: prepared attempt does not own the dispatched session resource")
+	}
 	if contextRow.ContextHash != manifest.ContextHash {
 		return nil, fmt.Errorf("start execution: context hash mismatch")
 	}
@@ -303,6 +321,23 @@ func (s *Store) StartExecution(ctx context.Context, manifest ExecutionManifest) 
 		"attempt_id": manifest.AttemptID, "role": manifest.Role, "protocol_version": manifest.ProtocolVersion,
 	}, timestamp); err != nil {
 		return nil, fmt.Errorf("start execution: event: %w", err)
+	}
+	marked, err := q.MarkDispatchExecutionRegistered(ctx, db.MarkDispatchExecutionRegisteredParams{
+		ExecutionRegisteredAt: timestamp, HostSessionID: manifest.HostSessionID,
+		UpdatedAt: timestamp, AttemptID: &manifest.AttemptID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start execution: dispatch lifecycle: %w", err)
+	}
+	if marked == 0 {
+		// Direct store embedders predating dispatch telemetry can legitimately
+		// have no lifecycle row. A bound row that refused the update, however,
+		// is an immutable host identity conflict and must fail the transaction.
+		if _, lookupErr := q.GetDispatchLifecycleByAttempt(ctx, &manifest.AttemptID); lookupErr == nil {
+			return nil, fmt.Errorf("start execution: dispatch lifecycle identity conflicts with the prepared context")
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return nil, fmt.Errorf("start execution: inspect dispatch lifecycle: %w", lookupErr)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("start execution: commit: %w", err)
@@ -511,6 +546,11 @@ func (s *Store) SubmitCandidate(ctx context.Context, executionID string, files [
 	}, timestamp); err != nil {
 		return nil, fmt.Errorf("submit candidate: event: %w", err)
 	}
+	if _, err := q.MarkDispatchCandidateSubmitted(ctx, db.MarkDispatchCandidateSubmittedParams{
+		CandidateSubmittedAt: timestamp, UpdatedAt: timestamp, AttemptID: &candidate.AttemptID,
+	}); err != nil {
+		return nil, fmt.Errorf("submit candidate: dispatch lifecycle: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("submit candidate: commit: %w", err)
 	}
@@ -533,6 +573,9 @@ func prepareCandidate(attemptID, executionID string, files []CandidateFile) (Can
 		}
 		seen[clean] = true
 		file.Path = clean
+		if err := ValidateCandidateRepositoryBytes(clean, []byte(file.Content)); err != nil {
+			return CandidateSet{}, fmt.Errorf("submit candidate: %w", err)
+		}
 		if file.WriteIntent == "" {
 			file.WriteIntent = "modify"
 		}
@@ -573,6 +616,19 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if input.ToStatus == execution.StatusAccepted {
+		candidate, candidateErr := q.GetCandidateSetByExecution(ctx, row.ID)
+		if candidateErr != nil {
+			return nil, fmt.Errorf("transition execution: accepted candidate: %w", mapNotFound(candidateErr))
+		}
+		candidateFiles, filesErr := q.ListCandidateFiles(ctx, candidate.ID)
+		if filesErr != nil {
+			return nil, fmt.Errorf("transition execution: accepted candidate files: %w", filesErr)
+		}
+		if validationErr := validateStoredCandidateRepositoryBytes(ctx, q, candidateFiles); validationErr != nil {
+			return nil, fmt.Errorf("transition execution: %w", validationErr)
+		}
+	}
 	timestamp := now()
 	var completedAt *string
 	if input.ToStatus.Terminal() {
@@ -637,6 +693,21 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 			return nil, fmt.Errorf("transition execution: abandon attempt: affected=%d: %w", changed, updateErr)
 		}
 	}
+	if input.ToStatus == execution.StatusAccepted {
+		if _, err := q.MarkDispatchCandidateAccepted(ctx, db.MarkDispatchCandidateAcceptedParams{
+			CandidateAcceptedAt: timestamp, UpdatedAt: timestamp, AttemptID: &row.AttemptID,
+		}); err != nil {
+			return nil, fmt.Errorf("transition execution: dispatch acceptance: %w", err)
+		}
+	} else if input.ToStatus == execution.StatusRejected ||
+		((input.ToStatus == execution.StatusCancelled || input.ToStatus == execution.StatusFailed || input.ToStatus == execution.StatusTimedOut) &&
+			(from == execution.StatusCandidateSubmitted || from == execution.StatusValidating)) {
+		if _, err := q.MarkDispatchCandidateRejected(ctx, db.MarkDispatchCandidateRejectedParams{
+			CandidateRejectedAt: timestamp, UpdatedAt: timestamp, AttemptID: &row.AttemptID,
+		}); err != nil {
+			return nil, fmt.Errorf("transition execution: dispatch rejection: %w", err)
+		}
+	}
 
 	var failure *FailureClassification
 	if input.Failure != nil {
@@ -658,6 +729,32 @@ func (s *Store) TransitionExecution(ctx context.Context, input ExecutionTransiti
 			Reason: input.Reason, ExpectedOutcome: "resolve " + input.Reason, FailureID: failureID,
 		}, timestamp); err != nil {
 			return nil, fmt.Errorf("transition execution: handoff: %w", err)
+		}
+	}
+	if input.ToStatus == execution.StatusCompleted || input.ToStatus == execution.StatusCancelled ||
+		input.ToStatus == execution.StatusFailed || input.ToStatus == execution.StatusTimedOut {
+		attempt, attemptErr := q.GetGenerationAttempt(ctx, row.AttemptID)
+		if attemptErr != nil {
+			return nil, fmt.Errorf("transition execution: release claim attempt: %w", attemptErr)
+		}
+		nextState := "errored"
+		nextPhase := "execution_failed"
+		switch input.ToStatus {
+		case execution.StatusCompleted:
+			nextState = "pending"
+			nextPhase = "execution_completed"
+		case execution.StatusTimedOut:
+			nextState = "timed_out"
+			nextPhase = "execution_timed_out"
+		case execution.StatusCancelled:
+			nextPhase = "execution_cancelled"
+		}
+		if _, releaseErr := q.ReleaseTerminalExecutionClaim(ctx, db.ReleaseTerminalExecutionClaimParams{
+			NextState: nextState, NextPhase: nextPhase, LastError: stringPtr(input.Reason),
+			UpdatedAt: timestamp, InputSessionID: attempt.SessionID, InputResourceID: attempt.ResourceID,
+			AttemptID: &attempt.ID,
+		}); releaseErr != nil {
+			return nil, fmt.Errorf("transition execution: release exact claim: %w", releaseErr)
 		}
 	}
 	eventKind := "execution_" + string(input.ToStatus)
@@ -847,6 +944,7 @@ func (s *Store) GetLatestRejectedCandidate(ctx context.Context, sessionID, resou
 func (s *Store) hydrateCandidateSet(ctx context.Context, row db.CandidateSet) (*CandidateSet, error) {
 	candidate := CandidateSet{
 		ID: row.ID, ExecutionID: row.ExecutionID, AttemptID: row.AttemptID, CandidateHash: row.CandidateHash,
+		GenerationInputHash: row.GenerationInputHash, DependencyContractHash: row.DependencyContractHash,
 		Status: row.Status, DispositionReason: row.DispositionReason, CreatedAt: parseTime(row.CreatedAt),
 		DisposedAt: parseOptionalTime(row.DisposedAt),
 	}

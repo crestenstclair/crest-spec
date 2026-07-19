@@ -41,6 +41,12 @@ func (m *memFS) WriteFile(path string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
+func (m *memFS) WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
+	return m.WriteFile(path, data, perm)
+}
+
+func (m *memFS) Chmod(path string, mode fs.FileMode) error { return nil }
+
 func (m *memFS) MkdirAll(path string, perm fs.FileMode) error {
 	m.dirs[path] = true
 	return nil
@@ -107,6 +113,8 @@ func (m *memFS) Stat(path string) (fs.FileInfo, error) {
 	}
 	return nil, os.ErrNotExist
 }
+
+func (m *memFS) Lstat(path string) (fs.FileInfo, error) { return m.Stat(path) }
 
 type memDirEntry struct {
 	name string

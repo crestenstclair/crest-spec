@@ -54,6 +54,7 @@ type specStore interface {
 	GetSession(id string) (*store.Session, error)
 	GetActiveSession() (*store.Session, error)
 	UpdateSession(id, status string, currentWave int) error
+	AbandonSession(ctx context.Context, sessionID, reason string, invalidateCommitted bool) (*store.SessionAbandonResult, error)
 	SetNote(resourceID, applyID, content string) error
 	GetNote(resourceID, applyID string) (string, error)
 	ListNotes(applyID string) ([]store.AgentNote, error)
@@ -63,7 +64,21 @@ type specStore interface {
 	ListSessionResourcesByWave(sessionID string, wave int) ([]store.SessionResource, error)
 	UpdateSessionResourceState(sessionID, resourceID, state, lastError, lastOutput string, attempts int, jobID string) error
 	UpdateSessionResourcePhase(sessionID, resourceID, phase string, attempts int) error
+	ReopenSessionResources(ctx context.Context, sessionID string, resourceIDs []string, reason string) (int, error)
+	RouteClosureValidationFailures(ctx context.Context, input store.ClosureValidationFailureRoutingInput) (*store.ClosureValidationFailureRoutingResult, error)
+	RouteBehavioralWitnessFailure(ctx context.Context, input store.BehavioralWitnessRepairRoutingInput) (*store.BehavioralWitnessRepairRoutingResult, error)
+	ActiveBehavioralWitnessRepairExhaustion(ctx context.Context, sessionID, resourceID string) (*store.BehavioralWitnessRepairExhaustion, error)
+	ReinstateAcceptedSessionResource(ctx context.Context, input store.AcceptedCandidateReinstatement) (bool, error)
 	SetSessionResourceDispatched(sessionID, resourceID string) error
+	RequestDispatch(ctx context.Context, input store.DispatchRequest) (*store.DispatchLifecycle, error)
+	AcknowledgeDispatch(ctx context.Context, input store.DispatchRequest) (*store.DispatchLifecycle, error)
+	FailDispatch(ctx context.Context, input store.DispatchFailure) (*store.DispatchLifecycle, error)
+	RequestContext(ctx context.Context, input store.DispatchRequest) (*store.DispatchLifecycle, error)
+	GetDispatchLifecycle(ctx context.Context, id string) (*store.DispatchLifecycle, error)
+	ListDispatchLifecyclesBySession(ctx context.Context, sessionID string) ([]store.DispatchLifecycle, error)
+	StartContextBatch(ctx context.Context, sessionID string, waveIndex int) (*store.ContextBatch, error)
+	FinishContextBatch(ctx context.Context, id string, failed bool) (*store.ContextBatch, error)
+	ListContextBatchesBySession(ctx context.Context, sessionID string) ([]store.ContextBatch, error)
 	CreateContextManifest(ctx context.Context, input store.ContextManifestWrite) (*store.ContextManifest, error)
 	GetContextManifest(ctx context.Context, id string) (*store.ContextManifest, error)
 	GetContextManifestByAttempt(ctx context.Context, attemptID string) (*store.ContextManifest, error)
@@ -71,12 +86,24 @@ type specStore interface {
 	ListContextManifestSummaries(ctx context.Context, limit int) ([]store.ContextManifestSummary, error)
 	ListGenerationAttemptsBySession(ctx context.Context, sessionID string) ([]store.GenerationAttempt, error)
 	ListGenerationAttemptsByResource(ctx context.Context, resourceID string, limit int) ([]store.GenerationAttempt, error)
+	RecoverStalePreExecutionAttempts(ctx context.Context, before time.Time) ([]store.PreparedContextRecovery, error)
+	AbandonPreparedContext(ctx context.Context, input store.PreparedContextAbandonment) (*store.PreparedContextRecovery, error)
+	CountExecutionAttempts(ctx context.Context, sessionID, resourceID string) (int, error)
+	CountRepairEpochExecutionAttempts(ctx context.Context, sessionID, resourceID string) (int, error)
+	CountAffectedClosureRepairCycles(ctx context.Context, sessionID, resourceID string) (int, error)
+	MaxAffectedClosureRepairCycles(ctx context.Context, sessionID string) (int, error)
 	StartExecution(ctx context.Context, manifest store.ExecutionManifest) (*store.ExecutionManifest, error)
 	GetExecutionManifest(ctx context.Context, id string) (*store.ExecutionManifest, error)
 	GetExecutionManifestByAttempt(ctx context.Context, attemptID string) (*store.ExecutionManifest, error)
 	ListExecutionManifests(ctx context.Context, limit int) ([]store.ExecutionManifest, error)
 	ListStaleExecutionManifests(ctx context.Context, before time.Time) ([]store.ExecutionManifest, error)
 	SubmitCandidate(ctx context.Context, executionID string, files []store.CandidateFile) (*store.CandidateSet, error)
+	PrepareWorkspaceCommitJournal(ctx context.Context, input store.WorkspaceCommitJournalInput) (*store.WorkspaceCommitJournal, error)
+	BindWorkspaceCommitCandidate(ctx context.Context, journalID, candidateID string) error
+	GetWorkspaceCommitJournal(ctx context.Context, id string) (*store.WorkspaceCommitJournal, error)
+	ListPendingWorkspaceCommitJournals(ctx context.Context) ([]store.WorkspaceCommitJournal, error)
+	MarkWorkspaceCommitApplied(ctx context.Context, id string) error
+	ResolveWorkspaceCommitJournal(ctx context.Context, id, status, resolution string) error
 	TransitionExecution(ctx context.Context, input store.ExecutionTransition) (*store.ExecutionManifest, error)
 	FinalizeCandidate(ctx context.Context, input store.CandidateDisposition) (*store.ExecutionManifest, error)
 	GetCandidateSetByAttempt(ctx context.Context, attemptID string) (*store.CandidateSet, error)
@@ -164,6 +191,9 @@ type Spec struct {
 	project   projectworkspace.Project
 	commits   *projectworkspace.Coordinator
 	reflector *evolve.Reflector
+	// workspaceCommitFailpoint is nil in production. Focused restart tests use
+	// it to model abrupt death at process boundaries where no defer executes.
+	workspaceCommitFailpoint func(stage string)
 }
 
 func New(st specStore, fs fileSystem, cfg *config.Config) *Spec {
@@ -470,13 +500,21 @@ func (s *Spec) appendLearnedTemplate(path, block string) error {
 }
 
 type PlanResult struct {
-	Actions  []planpkg.PlannedAction
-	Registry *cuepkg.Registry
-	Graph    *graphpkg.Graph
-	Waves    [][]string
-	Hashes   map[string]string
-	Mode     string
-	Slices   []planpkg.CapabilitySlice
+	Actions                          []planpkg.PlannedAction
+	Registry                         *cuepkg.Registry
+	Graph                            *graphpkg.Graph
+	Waves                            [][]string
+	Hashes                           map[string]string
+	DeclarationHashes                map[string]string
+	CodeDeclarationHashes            map[string]string
+	GenerationInputHashes            map[string]string
+	LegacyGenerationInputHashesV2    map[string]string
+	VerificationContractHashes       map[string]string
+	ExportedContractHashes           map[string]string
+	DependencyContractHashes         map[string]string
+	LegacyDependencyContractHashesV2 map[string]string
+	Mode                             string
+	Slices                           []planpkg.CapabilitySlice
 }
 
 func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
@@ -501,6 +539,14 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		mode = project.Meta.Mode
 	}
 	hashes := graphpkg.ComputeEffectiveHashes(registry.Resources, g, model, mode)
+	declarationHashes := graphpkg.ComputeDeclarationHashes(registry.Resources)
+	codeDeclarationHashes := graphpkg.ComputeCodeDeclarationHashes(registry.Resources)
+	generationInputHashes := graphpkg.ComputeGenerationInputHashes(registry.Resources, registry.Project)
+	legacyGenerationInputHashesV2 := graphpkg.ComputeLegacyGenerationInputHashesV2(registry.Resources, registry.Project)
+	verificationContractHashes := graphpkg.ComputeVerificationContractHashes(registry.Resources)
+	exportedContractHashes := graphpkg.ComputeExportedContractHashes(registry.Resources)
+	dependencyContractHashes := graphpkg.ComputeDependencyContractHashes(registry.Resources, exportedContractHashes)
+	legacyDependencyContractHashesV2 := graphpkg.ComputeLegacyDependencyContractHashesV2(registry.Resources)
 
 	planner := planpkg.NewInWorkspace(s.store, s.fs, s.projectWorkspace())
 	actions, err := planner.Plan(ctx, registry, g, model, mode)
@@ -518,13 +564,28 @@ func (s *Spec) Plan(ctx context.Context) (*PlanResult, error) {
 		waveStrings[i] = wave
 	}
 
-	return &PlanResult{
-		Actions:  actions,
-		Registry: registry,
-		Graph:    g,
-		Waves:    waveStrings,
-		Hashes:   hashes,
-		Mode:     mode,
-		Slices:   planpkg.BuildCapabilitySlices(actions, registry),
-	}, nil
+	result := &PlanResult{
+		Actions:                          actions,
+		Registry:                         registry,
+		Graph:                            g,
+		Waves:                            waveStrings,
+		Hashes:                           hashes,
+		DeclarationHashes:                declarationHashes,
+		CodeDeclarationHashes:            codeDeclarationHashes,
+		GenerationInputHashes:            generationInputHashes,
+		LegacyGenerationInputHashesV2:    legacyGenerationInputHashesV2,
+		VerificationContractHashes:       verificationContractHashes,
+		ExportedContractHashes:           exportedContractHashes,
+		DependencyContractHashes:         dependencyContractHashes,
+		LegacyDependencyContractHashesV2: legacyDependencyContractHashesV2,
+		Mode:                             mode,
+		Slices:                           planpkg.BuildCapabilitySlices(actions, registry),
+	}
+	if err := s.annotateReusableCandidates(ctx, result); err != nil {
+		return nil, err
+	}
+	s.requireClosureValidationForFastPaths(result)
+	// Candidate reuse changes execution strategy, not capability impact.
+	result.Slices = planpkg.BuildCapabilitySlices(result.Actions, registry)
+	return result, nil
 }

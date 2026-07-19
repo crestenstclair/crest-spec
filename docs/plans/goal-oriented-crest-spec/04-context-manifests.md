@@ -181,7 +181,7 @@ Hosts may continue consuming concatenated `system_prompt` and `prompt` fields du
 
 ## Implementation record
 
-- `context-selector-v1` provides canonical candidate ordering, role-aware bounded budgets, mandatory reservations, deterministic estimation, truncation markers, content/source deduplication, omission reasons, and stable hashes.
+- `context-selector-v2` provides canonical candidate ordering, role-aware bounded budgets, mandatory reservations, deterministic estimation, truncation markers, content/source deduplication, omission reasons, stable hashes, and distinct raw-source provenance for presentation-wrapped context.
 - `spec/context` is attempt-oriented. It returns attempt/manifest identifiers and structured sections while preserving the legacy rendered system and task prompts for existing hosts.
 - Migration `020_context_manifests.sql` adds normalized attempts, manifests, sections, and content-addressed blobs to the existing SQLite database. Manifest persistence and resource dispatch commit or roll back together.
 - Goal, acceptance, exact task, resource/system contract, dependencies, reverse consumers, design, owned/dependency/consumer code, module/build configuration, retry failures, guidance, learnings, and conventions have typed candidates. Unsupported call-site and git-diff plugins are explicit omissions rather than invisible failures.

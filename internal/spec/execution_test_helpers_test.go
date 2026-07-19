@@ -22,6 +22,19 @@ func commitTestAttempt(
 	t.Helper()
 	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: sessionID, ResourceID: resourceID})
 	require.NoError(t, err)
+	workerID := "test-worker-" + uuid.NewString()
+	_, err = s.ReportDispatchEvent(ctx, DispatchEventOptions{
+		Event: "dispatch_requested", DispatchID: prepared.DispatchID,
+		SessionID: sessionID, ResourceID: resourceID,
+		HostSessionID: "spec-test-host", WorkerID: workerID,
+	})
+	require.NoError(t, err)
+	_, err = s.ReportDispatchEvent(ctx, DispatchEventOptions{
+		Event: "worker_acknowledged", DispatchID: prepared.DispatchID,
+		SessionID: sessionID, ResourceID: resourceID,
+		HostSessionID: "spec-test-host", WorkerID: workerID,
+	})
+	require.NoError(t, err)
 	if model == "" {
 		model = "test-model"
 	}

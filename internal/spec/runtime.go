@@ -25,6 +25,7 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 	}
 
 	depFiles := make(map[string]string)
+	depFilePaths := make(map[string]string)
 	for _, dep := range resource.Dependencies {
 		files, err := s.store.GetGeneratedFiles(dep.TargetID)
 		if err != nil {
@@ -43,11 +44,13 @@ func (s *Spec) buildRuntimeContext(resource cuepkg.Resource, registry *cuepkg.Re
 				continue
 			}
 			depFiles[dep.TargetID] = string(data)
+			depFilePaths[dep.TargetID] = f.Path
 			break
 		}
 	}
 	if len(depFiles) > 0 {
 		ctx.DependencyFiles = depFiles
+		ctx.DependencyFilePaths = depFilePaths
 	}
 
 	if applyID != "" {
@@ -173,7 +176,8 @@ func collectFilesInDir(fs fileSystem, dir, baseDir string, patterns []string, fi
 			if err != nil {
 				continue
 			}
-			if content := strings.TrimSpace(string(data)); content != "" {
+			content := string(data)
+			if strings.TrimSpace(content) != "" {
 				relPath, _ := filepath.Rel(filepath.Dir(baseDir), fullPath)
 				files[relPath] = content
 			}
@@ -199,8 +203,8 @@ func collectModuleFilesRecursive(fs fileSystem, baseDir, dir string, patterns []
 				if err != nil {
 					continue
 				}
-				content := strings.TrimSpace(string(data))
-				if content != "" {
+				content := string(data)
+				if strings.TrimSpace(content) != "" {
 					relPath, _ := filepath.Rel(filepath.Dir(baseDir), fullPath)
 					files[relPath] = content
 				}

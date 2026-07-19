@@ -81,5 +81,6 @@ SELECT * FROM context_sections WHERE manifest_id = ? ORDER BY ordinal;
 
 -- name: SetSessionResourceDispatchedTx :execrows
 UPDATE session_resources
-SET state = 'dispatched', phase = 'queued', dispatched_at = ?, updated_at = ?
-WHERE session_id = ? AND resource_id = ?;
+SET state = 'dispatched', phase = 'queued', job_id = ?, dispatched_at = ?, updated_at = ?
+WHERE session_id = ? AND resource_id = ?
+  AND state IN ('pending', 'rejected', 'errored', 'timed_out', 'blocked');

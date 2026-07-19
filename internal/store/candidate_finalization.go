@@ -49,14 +49,15 @@ func (s *Store) FinalizeCandidate(ctx context.Context, input CandidateDispositio
 }
 
 type candidateFinalizationState struct {
-	manifest       db.ExecutionManifest
-	attempt        db.GenerationAttempt
-	candidate      db.CandidateSet
-	candidateFiles []db.CandidateFile
-	outcome        candidateFinalizationOutcome
-	timestamp      string
-	progressJSON   string
-	progressHash   string
+	manifest         db.ExecutionManifest
+	attempt          db.GenerationAttempt
+	candidate        db.CandidateSet
+	candidateFiles   []db.CandidateFile
+	consumedAttempts int64
+	outcome          candidateFinalizationOutcome
+	timestamp        string
+	progressJSON     string
+	progressHash     string
 }
 
 type candidateFinalizationOutcome struct {
@@ -87,6 +88,29 @@ func prepareCandidateFinalization(
 	if err != nil {
 		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: attempt: %w", err)
 	}
+	sessionResource, err := q.GetSessionResource(ctx, db.GetSessionResourceParams{
+		SessionID:  attempt.SessionID,
+		ResourceID: attempt.ResourceID,
+	})
+	if err != nil {
+		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: session resource: %w", mapNotFound(err))
+	}
+	if sessionResource.State != "dispatched" || stringVal(sessionResource.JobID) != attempt.ID {
+		return candidateFinalizationState{}, fmt.Errorf(
+			"finalize candidate: attempt %s no longer owns dispatched resource %s",
+			attempt.ID,
+			attempt.ResourceID,
+		)
+	}
+	consumedAttempts, err := q.CountExecutionAttemptsBySessionResource(ctx, db.CountExecutionAttemptsBySessionResourceParams{
+		InputSessionID: attempt.SessionID, InputResourceID: attempt.ResourceID,
+	})
+	if err != nil {
+		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: count execution attempts: %w", err)
+	}
+	if consumedAttempts < 1 {
+		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: current execution is absent from retry accounting")
+	}
 	candidate, err := q.GetCandidateSetByExecution(ctx, manifest.ID)
 	if err != nil {
 		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: candidate: %w", mapNotFound(err))
@@ -96,6 +120,9 @@ func prepareCandidateFinalization(
 		return candidateFinalizationState{}, fmt.Errorf("finalize candidate: files: %w", err)
 	}
 	if input.Accepted {
+		if err := validateStoredCandidateRepositoryBytes(ctx, q, candidateFiles); err != nil {
+			return candidateFinalizationState{}, fmt.Errorf("finalize candidate: %w", err)
+		}
 		if input.Resource == nil || input.Resource.ID != attempt.ResourceID {
 			return candidateFinalizationState{}, fmt.Errorf("finalize candidate: accepted disposition requires the attempt resource")
 		}
@@ -112,14 +139,15 @@ func prepareCandidateFinalization(
 		}
 	}
 	return candidateFinalizationState{
-		manifest:       manifest,
-		attempt:        attempt,
-		candidate:      candidate,
-		candidateFiles: candidateFiles,
-		outcome:        candidateOutcome(input.Accepted),
-		timestamp:      now(),
-		progressJSON:   progressJSON,
-		progressHash:   progressHash,
+		manifest:         manifest,
+		attempt:          attempt,
+		candidate:        candidate,
+		candidateFiles:   candidateFiles,
+		consumedAttempts: consumedAttempts,
+		outcome:          candidateOutcome(input.Accepted),
+		timestamp:        now(),
+		progressJSON:     progressJSON,
+		progressHash:     progressHash,
 	}, nil
 }
 
@@ -171,6 +199,18 @@ func persistCandidateTerminalState(
 	if err != nil || changed != 1 {
 		return fmt.Errorf("finalize candidate: attempt disposition: affected=%d: %w", changed, err)
 	}
+	if input.Accepted {
+		_, err = q.MarkDispatchCandidateAccepted(ctx, db.MarkDispatchCandidateAcceptedParams{
+			CandidateAcceptedAt: state.timestamp, UpdatedAt: state.timestamp, AttemptID: &state.attempt.ID,
+		})
+	} else {
+		_, err = q.MarkDispatchCandidateRejected(ctx, db.MarkDispatchCandidateRejectedParams{
+			CandidateRejectedAt: state.timestamp, UpdatedAt: state.timestamp, AttemptID: &state.attempt.ID,
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("finalize candidate: dispatch lifecycle: %w", err)
+	}
 	return nil
 }
 
@@ -184,11 +224,26 @@ func persistAcceptedCandidate(
 	if err := q.SetResource(ctx, db.SetResourceParams{
 		ID: resource.ID, Kind: resource.Kind, ContextName: stringPtr(resource.ContextName),
 		DeclarationHash: resource.DeclarationHash, EffectiveHash: resource.EffectiveHash,
-		Model: stringPtr(resource.Model), SettledAt: state.timestamp,
+		GenerationInputHash: resource.GenerationInputHash, ExportedContractHash: resource.ExportedContractHash,
+		DependencyContractHash:   resource.DependencyContractHash,
+		CodeDeclarationHash:      resource.CodeDeclarationHash,
+		VerificationContractHash: resource.VerificationContractHash,
+		Model:                    stringPtr(resource.Model), SettledAt: state.timestamp,
 	}); err != nil {
 		return fmt.Errorf("finalize candidate: resource: %w", err)
 	}
-	if err := replaceAcceptedFileOwnership(ctx, q, state, input.Files); err != nil {
+	if resource.GenerationInputHash == "" || resource.DependencyContractHash == "" {
+		return fmt.Errorf("finalize candidate: accepted candidate input fingerprints are required")
+	}
+	stamped, err := q.StampAcceptedCandidateInputs(ctx, db.StampAcceptedCandidateInputsParams{
+		GenerationInputHash:    resource.GenerationInputHash,
+		DependencyContractHash: resource.DependencyContractHash,
+		ID:                     state.candidate.ID,
+	})
+	if err != nil || stamped != 1 {
+		return fmt.Errorf("finalize candidate: stamp governed candidate inputs: affected=%d: %w", stamped, err)
+	}
+	if err := mergeAcceptedFileOwnership(ctx, q, state, input.Files); err != nil {
 		return err
 	}
 	if err := acceptCandidateFiles(ctx, q, state); err != nil {
@@ -208,7 +263,7 @@ func persistAcceptedCandidate(
 	return resolveAcceptedRetryFailures(ctx, q, state.attempt, state.timestamp)
 }
 
-func replaceAcceptedFileOwnership(
+func mergeAcceptedFileOwnership(
 	ctx context.Context,
 	q *db.Queries,
 	state candidateFinalizationState,
@@ -216,9 +271,6 @@ func replaceAcceptedFileOwnership(
 ) error {
 	if len(files) == 0 {
 		return nil
-	}
-	if err := q.DeleteGeneratedFiles(ctx, state.attempt.ResourceID); err != nil {
-		return fmt.Errorf("finalize candidate: replace file ownership: %w", err)
 	}
 	for _, file := range files {
 		if err := q.SetGeneratedFile(ctx, db.SetGeneratedFileParams{
@@ -343,10 +395,28 @@ func persistCandidateOutcomeProjections(
 		lastError = input.Reason
 	}
 	if err := q.UpdateSessionResourceState(ctx, db.UpdateSessionResourceStateParams{
-		State: state.outcome.sessionState, LastError: stringPtr(lastError), Attempts: int64(input.Attempts),
+		State: state.outcome.sessionState, LastError: stringPtr(lastError), Attempts: state.consumedAttempts,
 		UpdatedAt: state.timestamp, SessionID: state.attempt.SessionID, ResourceID: state.attempt.ResourceID,
 	}); err != nil {
 		return fmt.Errorf("finalize candidate: session resource: %w", err)
+	}
+	phase := "integration_pending"
+	if !input.Accepted {
+		phase = "candidate_rejected"
+	}
+	if err := q.UpdateSessionResourcePhase(ctx, db.UpdateSessionResourcePhaseParams{
+		Phase: phase, Attempts: state.consumedAttempts, UpdatedAt: state.timestamp,
+		SessionID: state.attempt.SessionID, ResourceID: state.attempt.ResourceID,
+	}); err != nil {
+		return fmt.Errorf("finalize candidate: session resource phase: %w", err)
+	}
+	// Any terminal candidate disposition supersedes the previously projected
+	// exhausted candidate. Keeping that link would let later recovery confuse
+	// an old closure failure with the current resource state.
+	if err := q.ClearSessionResourceExhaustionFailure(ctx, db.ClearSessionResourceExhaustionFailureParams{
+		SessionID: state.attempt.SessionID, ResourceID: state.attempt.ResourceID,
+	}); err != nil {
+		return fmt.Errorf("finalize candidate: clear exhaustion provenance: %w", err)
 	}
 
 	actionID := uuid.NewString()
@@ -370,7 +440,7 @@ func persistCandidateOutcomeProjections(
 		ID: uuid.NewString(), ApplyID: stringPtr(state.attempt.ApplyID), ResourceID: state.attempt.ResourceID,
 		PromptHash: state.manifest.ContextHash, Model: state.manifest.Model,
 		Outcome: &state.outcome.candidateDisposition, RejectionReason: rejectionReason,
-		RetryCount: state.attempt.RetryNumber - 1, DurationMs: &input.DurationMS,
+		RetryCount: state.consumedAttempts - 1, DurationMs: &input.DurationMS,
 		InputTokens: &input.InputTokens, OutputTokens: &input.OutputTokens,
 		CostUsd: &input.CostUSD, CreatedAt: state.timestamp, ExecutionID: &state.manifest.ID,
 	}); err != nil {

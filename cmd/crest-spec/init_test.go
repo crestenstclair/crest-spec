@@ -73,6 +73,7 @@ func TestBuildInitFilesForAllHosts(t *testing.T) {
 	for _, path := range []string{
 		"opencode.json",
 		".mcp.json",
+		".claude/skills/apply-crest-spec/SKILL.md",
 		".codex/config.toml",
 		".codex/agents/crest-generator.toml",
 		".agents/skills/apply-crest-spec/SKILL.md",
@@ -102,12 +103,15 @@ func TestBuildCodexInitFilesAreValidAndGoverned(t *testing.T) {
 		"[mcp_servers.crest-spec]",
 		"required = true",
 		"tool_timeout_sec = 1800",
-		"[mcp_servers.crest-spec.tools.\"spec/confirm_destroys\"]",
+		"default_tools_approval_mode = \"approve\"",
 		"CREST_SPEC_SPEC_DIR = \"./spec\"",
 	} {
 		if !strings.Contains(config, fragment) {
 			t.Fatalf("Codex config missing %q:\n%s", fragment, config)
 		}
+	}
+	if strings.Contains(config, `approval_mode = "prompt"`) {
+		t.Fatalf("generated Codex config unexpectedly prompts for MCP tools:\n%s", config)
 	}
 
 	for _, path := range []string{
@@ -132,12 +136,81 @@ func TestBuildCodexInitFilesAreValidAndGoverned(t *testing.T) {
 	for _, fragment := range []string{
 		"apply this crest-spec",
 		"explicitly requires native Codex subagents",
+		"spec/context_batch",
+		"limit equal to the number of currently idle worker slots",
+		"remain unclaimed until dispatch_requested succeeds",
+		"spawn the worker only after that event succeeds",
+		"deliver a follow-up assignment to the retained agent identity",
+		"If dispatch returns rebuild_context",
+		"refill the slot with spec/context_batch",
+		"worker must record worker_acknowledged with the same identities as its first lifecycle action",
+		"worker must record dispatch_requested for the new DispatchID before worker_acknowledged",
+		"call spec/dispatch_event dispatch_failed with the same DispatchID and identities",
+		"never rely on implicit dispatch",
+		"Blocked=true",
+		"reuse it for sequential assignments across waves",
 		"spec/execution_start",
 		"spec/confirm_destroys",
 		"spec/verification_inspect",
 	} {
 		if !strings.Contains(skill, fragment) {
 			t.Fatalf("Codex skill missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"claims every currently eligible",
+		"immutable claimed attempt",
+		"Legacy hosts may omit",
+	} {
+		if strings.Contains(skill, forbidden) {
+			t.Fatalf("Codex skill contains obsolete lifecycle guidance %q", forbidden)
+		}
+	}
+
+	generator := contents[".codex/agents/crest-generator.toml"]
+	for _, fragment := range []string{
+		"parent must successfully record dispatch_requested before assigning an initial prepared_context",
+		"For a context this worker obtained from spec/context, call spec/dispatch_event dispatch_requested",
+		"Then call spec/dispatch_event worker_acknowledged with the same DispatchID and identities",
+		"If dispatch_requested returns rebuild_context for a worker-fetched context",
+		"If execution_start returns rebuild_context",
+		"call dispatch_failed with the same identities and a concrete reason",
+		"For any other lifecycle error, stop without calling spec/execution_start",
+		"repeat the dispatch-request/acknowledgement sequence for that new DispatchID",
+		"only the files whose bytes actually need to change",
+		"Omit unchanged context and ownership files from the candidate",
+	} {
+		if !strings.Contains(generator, fragment) {
+			t.Fatalf("Codex generator missing %q", fragment)
+		}
+	}
+}
+
+func TestBuildClaudeInitIncludesReusableWorkerGuidance(t *testing.T) {
+	files, err := buildInitFiles("claude-code", "/tmp/crest-spec")
+	if err != nil {
+		t.Fatalf("build Claude init: %v", err)
+	}
+	contents := map[string]string{}
+	for _, file := range files {
+		contents[file.path] = file.content
+	}
+	skill := contents[".claude/skills/apply-crest-spec/SKILL.md"]
+	for _, fragment := range []string{
+		"spec/context_batch",
+		"limit equal to the currently idle worker slots",
+		"does not claim them",
+		"only after the event succeeds",
+		"blocked contexts without dispatching them",
+		"retain their identities",
+		"validation_ready=true",
+		"Every assignment registers its own actual host/model/tools/settings/context identity",
+		"records dispatch_requested for that new DispatchID before worker_acknowledged",
+		"If dispatch or execution_start returns rebuild_context",
+		"Lifecycle calls are mandatory",
+	} {
+		if !strings.Contains(skill, fragment) {
+			t.Fatalf("Claude skill missing %q:\n%s", fragment, skill)
 		}
 	}
 }
@@ -173,8 +246,37 @@ func TestRunInitWritesOpenCodeBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read orchestrator: %v", err)
 	}
-	if !strings.Contains(string(orchestrator), "dispatch one crest-generator subagent concurrently") {
-		t.Fatalf("orchestrator prompt does not require concurrent wave dispatch")
+	if !strings.Contains(string(orchestrator), "retain their identities for reuse across waves") ||
+		!strings.Contains(string(orchestrator), "spec/context_batch") ||
+		!strings.Contains(string(orchestrator), "limit equal to the number of idle worker slots") ||
+		!strings.Contains(string(orchestrator), "prepares at most that many contexts without claiming them") ||
+		!strings.Contains(string(orchestrator), "never use implicit dispatch") {
+		t.Fatalf("orchestrator prompt does not require bounded reusable wave workers")
+	}
+	generator, err := os.ReadFile(filepath.Join(".opencode", "agents", "crest-generator.md"))
+	if err != nil {
+		t.Fatalf("read generator: %v", err)
+	}
+	for _, fragment := range []string{
+		"orchestrator must successfully record dispatch_requested",
+		"including every retry, call spec/dispatch_event dispatch_requested",
+		"Then call spec/dispatch_event worker_acknowledged",
+		"If dispatch_requested returns rebuild_context",
+		"If execution_start returns rebuild_context",
+		"implicit dispatch is forbidden",
+	} {
+		if !strings.Contains(string(generator), fragment) {
+			t.Fatalf("generator prompt missing mandatory lifecycle guidance %q", fragment)
+		}
+	}
+	command, err := os.ReadFile(filepath.Join(".opencode", "commands", "apply-crest-spec.md"))
+	if err != nil {
+		t.Fatalf("read command: %v", err)
+	}
+	if !strings.Contains(string(command), "limit equal to currently idle worker slots") ||
+		!strings.Contains(string(command), "dispatch_requested before assigning") ||
+		!strings.Contains(string(command), "Require worker_acknowledged before execution_start") {
+		t.Fatalf("apply command is missing capacity or lifecycle guidance")
 	}
 	if !strings.Contains(out.String(), "restart your agent host") {
 		t.Fatalf("output did not mention restart: %s", out.String())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/crestenstclair/crest-spec/internal/config"
+	"github.com/crestenstclair/crest-spec/internal/contextmanifest"
 	"github.com/crestenstclair/crest-spec/internal/execution"
 	"github.com/crestenstclair/crest-spec/internal/store"
 )
@@ -84,10 +86,10 @@ func newTestSpecWithSessionCUE(t *testing.T, specCUE string) (*Spec, commitTestS
 	return s, commitTestSession{sessionID: begin.SessionID, resourceID: next.Resources[0].ResourceID}
 }
 
-// A validation that cannot LAUNCH (missing binary, bad path) must reject the
-// commit, not skip the gate. This pins the fail-closed contract: an unrunnable
-// gate is a failed gate.
-func TestCommitRejectsWhenValidationCannotRun(t *testing.T) {
+// A validation that cannot launch remains fail-closed at the scheduled batch
+// gate, but it is an infrastructure blocker rather than evidence that the
+// accepted source candidate needs another model execution.
+func TestBatchValidationKeepsCandidateWhenValidationCannotRun(t *testing.T) {
 	const cueWithBrokenValidation = `package crestsynth
 
 project: name: "rt"
@@ -103,11 +105,26 @@ project: contexts: Audio: valueObjects: Tone: {
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
 		"claude-sonnet-4-6")
 	require.NoError(t, err)
-	require.False(t, res.Committed,
-		"a validation that cannot run must reject the commit (fail closed), not skip the gate")
-	require.NotEmpty(t, res.Validations, "the rejection must carry a validation result explaining the launch failure")
-	require.False(t, res.Validations[0].Passed)
-	require.Contains(t, res.Validations[0].Message, "could not run")
+	require.True(t, res.Committed)
+	require.True(t, res.ValidationDeferred)
+	sr, err := s.store.GetSessionResource(st.sessionID, st.resourceID)
+	require.NoError(t, err)
+	acceptedAttempts := sr.Attempts
+	verified := s.VerifyWave(context.Background(), st.sessionID, sr.WaveIndex)
+	require.False(t, verified.Passed, "an unrunnable scheduled gate must fail closed")
+	require.NotEmpty(t, verified.Errors)
+	require.Contains(t, verified.Errors[0].Message, "could not run")
+	require.Equal(t, "validation_infrastructure", verified.Errors[0].Kind)
+	require.Empty(t, verified.ReopenedResources)
+	preserved, err := s.store.GetSessionResource(st.sessionID, st.resourceID)
+	require.NoError(t, err)
+	require.Equal(t, string(StateCommitted), preserved.State)
+	require.Equal(t, "integration_failed", preserved.Phase)
+	require.Equal(t, acceptedAttempts, preserved.Attempts)
+	next, err := s.Next(context.Background(), st.sessionID)
+	require.NoError(t, err)
+	require.True(t, next.ValidationReady)
+	require.Empty(t, next.Resources)
 }
 
 func TestCommitRecordsGenerationOutcome(t *testing.T) {
@@ -137,10 +154,13 @@ func TestConcurrentCommitReplayConvergesOnOneCandidate(t *testing.T) {
 	ctx := context.Background()
 	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
 	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
 	_, err = s.StartExecution(ctx, ExecutionStartOptions{
 		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
 		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
-		HostName: "spec-test", Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
 		SystemInstructions: prepared.SystemPrompt,
 	})
 	require.NoError(t, err)
@@ -177,6 +197,334 @@ func TestConcurrentCommitReplayConvergesOnOneCandidate(t *testing.T) {
 		}
 		require.Equal(t, candidateID, result.CandidateID)
 	}
+}
+
+func TestCommitRejectsCUEChangedAfterContextBeforeWritingCandidate(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	prepared, err := s.PrepareContext(ctx, ContextOptions{
+		SessionID: state.sessionID, ResourceID: state.resourceID,
+	})
+	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+
+	specPath := filepath.Join(s.cfg.SpecDir, "spec.cue")
+	contents, err := os.ReadFile(specPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		specPath,
+		[]byte(strings.Replace(string(contents), `from: "f64"`, `from: "string"`, 1)),
+		0o644,
+	))
+
+	outputPath := "generated/stale.go"
+	result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{{
+		Path: outputPath, Content: "package generated\n",
+	}}, "", CommitMetadata{})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "plan inputs changed after context preparation")
+	require.ErrorContains(t, err, "rebuild_context")
+	_, statErr := os.Stat(filepath.Join(filepath.Dir(s.cfg.SpecDir), outputPath))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "stale context must not write workspace files")
+	_, candidateErr := s.store.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+	require.Error(t, candidateErr, "stale context must fail before candidate submission")
+}
+
+func TestCommitRejectsRepositorySourceChangedAfterContext(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	outputPath := filepath.Join("generated", uuid.NewString()+".go")
+	projectPath := filepath.Join(filepath.Dir(s.cfg.SpecDir), outputPath)
+	_, err := commitTestAttempt(t, s, ctx, state.sessionID, state.resourceID, []CommitFile{{
+		Path: outputPath, Content: "package generated\n\nconst Value = 1\n",
+	}}, "", "test-model")
+	require.NoError(t, err)
+	_, err = s.store.ReopenSessionResources(ctx, state.sessionID, []string{state.resourceID}, "repair requested")
+	require.NoError(t, err)
+
+	prepared, err := s.PrepareContext(ctx, ContextOptions{
+		SessionID: state.sessionID, ResourceID: state.resourceID,
+	})
+	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+	manualEdit := "package generated\n\nconst Value = 2\n"
+	require.NoError(t, os.WriteFile(projectPath, []byte(manualEdit), 0o644))
+
+	result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{{
+		Path: outputPath, Content: "package generated\n\nconst Value = 3\n",
+	}}, "", CommitMetadata{})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "repository context changed after preparation")
+	require.ErrorContains(t, err, "rebuild_context")
+	contents, readErr := os.ReadFile(projectPath)
+	require.NoError(t, readErr)
+	require.Equal(t, manualEdit, string(contents), "stale worker must not overwrite the newer repository edit")
+}
+
+func TestValidateSelectedRepositorySourcesUsesExactModuleConfigurationBytes(t *testing.T) {
+	root := t.TempDir()
+	s := &Spec{fs: OSFileSystem{}, cfg: &config.Config{SpecDir: filepath.Join(root, "spec")}}
+	const rawManifest = "\n[package]\nname = \"crest-synth\"\n\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Cargo.toml"), []byte(rawManifest), 0o644))
+	manifest := &store.ContextManifest{Sections: []store.ContextManifestSection{{
+		Kind: "module_configuration", SourceKind: "repository_file", SourcePath: "Cargo.toml",
+		Decision: string(contextmanifest.Included), OriginalHash: contextmanifest.Hash(rawManifest), Content: rawManifest,
+	}}}
+
+	require.NoError(t, s.validateSelectedRepositorySources(manifest))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Cargo.toml"), []byte(strings.TrimSpace(rawManifest)), 0o644))
+	require.ErrorContains(t, s.validateSelectedRepositorySources(manifest), "no longer matches the repository source")
+}
+
+func TestValidateSelectedRepositorySourcesResumesLegacyNestedOwnedCodeContext(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		innerChanges string
+		outerChanges string
+	}{
+		{name: "outer changes", outerChanges: "remove the accidental envelope"},
+		{name: "inner changes", innerChanges: "the envelope previously carried this repair"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &Spec{fs: OSFileSystem{}, cfg: &config.Config{SpecDir: filepath.Join(root, "spec")}}
+			rawRepositoryBytes := updateModeContent("src/lib.rs", "pub fn render() {}\n", test.innerChanges)
+			legacyPresentation := updateModeContent("src/lib.rs", rawRepositoryBytes, test.outerChanges)
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "src", "lib.rs"), []byte(rawRepositoryBytes), 0o644))
+			manifest := &store.ContextManifest{Sections: []store.ContextManifestSection{{
+				Kind: "owned_code", SourceKind: "repository_file", SourcePath: "src/lib.rs",
+				Decision: string(contextmanifest.Included), OriginalHash: contextmanifest.Hash(legacyPresentation), Content: legacyPresentation,
+			}}}
+
+			require.NoError(t, s.validateSelectedRepositorySources(manifest),
+				"legacy active attempts must compare the exact nested raw bytes rather than an inner fence")
+		})
+	}
+}
+
+func TestCommitRejectsUpdateModeEnvelopeBeforeCandidatePersistence(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
+	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+	const outputPath = "generated/enveloped.go"
+
+	result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{{
+		Path: outputPath, Content: updateModeContent(outputPath, "package generated\n", ""),
+	}}, "", CommitMetadata{})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "submit only exact raw repository bytes")
+	_, candidateErr := s.store.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+	require.Error(t, candidateErr, "presentation envelopes must never enter candidate storage")
+	_, statErr := os.Stat(filepath.Join(filepath.Dir(s.cfg.SpecDir), outputPath))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "presentation envelopes must never enter the workspace")
+}
+
+func TestCommitRejectsClaimOfExistingUpdateModeEnvelopeBeforeCandidatePersistence(t *testing.T) {
+	rustSpec := strings.Replace(commitTestSpecCUE, `language: "go"`, `language: "rust"`, 1)
+	s, state := newTestSpecWithSessionCUE(t, rustSpec)
+	ctx := context.Background()
+	const outputPath = "src/mod.rs"
+	projectPath := filepath.Join(filepath.Dir(s.cfg.SpecDir), outputPath)
+	envelope := updateModeContent(outputPath, "package generated\n", "")
+	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
+	require.NoError(t, os.WriteFile(projectPath, []byte(envelope), 0o644))
+	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
+	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+
+	result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{{Path: outputPath}}, "", CommitMetadata{})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "submit only exact raw repository bytes")
+	_, candidateErr := s.store.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+	require.Error(t, candidateErr, "claiming a corrupt file must not copy its envelope into candidate storage")
+	content, readErr := os.ReadFile(projectPath)
+	require.NoError(t, readErr)
+	require.Equal(t, envelope, string(content), "governance rejection must leave the existing file untouched for repair")
+}
+
+func TestCommitRejectsRustfmtPathBannerBatchAtomicallyAndAllowsCleanResubmission(t *testing.T) {
+	s, state := newTestSpecWithSession(t)
+	ctx := context.Background()
+	prepared, err := s.PrepareContext(ctx, ContextOptions{SessionID: state.sessionID, ResourceID: state.resourceID})
+	require.NoError(t, err)
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+	)
+	started, err := s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
+
+	const (
+		firstPath  = "generated/first.go"
+		secondPath = "generated/second.go"
+		firstRaw   = "package generated\n\nconst First = true\n"
+		secondRaw  = "package generated\n\nconst Second = true"
+	)
+	projectRoot := filepath.Dir(s.cfg.SpecDir)
+	malformedSecond := filepath.Join(projectRoot, filepath.FromSlash(secondPath)) + ":\n\n" + secondRaw
+
+	result, err := s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{
+		{Path: firstPath, Content: firstRaw},
+		{Path: secondPath, Content: malformedSecond},
+	}, "", CommitMetadata{})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "absolute-path formatter banner")
+	require.ErrorContains(t, err, "submit only exact raw repository bytes")
+	_, candidateErr := s.store.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+	require.Error(t, candidateErr, "one malformed file must reject the complete immutable candidate")
+	pendingJournals, journalErr := s.store.ListPendingWorkspaceCommitJournals(ctx)
+	require.NoError(t, journalErr)
+	require.Empty(t, pendingJournals, "candidate bytes must be validated before journal preparation")
+	for _, path := range []string{firstPath, secondPath} {
+		_, statErr := os.Stat(filepath.Join(projectRoot, filepath.FromSlash(path)))
+		require.ErrorIs(t, statErr, os.ErrNotExist, "no file in a rejected batch may be materialized")
+	}
+	stillExecuting, err := s.store.GetExecutionManifest(ctx, started.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(execution.StatusExecuting), stillExecuting.Status)
+
+	result, err = s.CommitAttempt(ctx, prepared.AttemptID, []CommitFile{
+		{Path: firstPath, Content: firstRaw},
+		{Path: secondPath, Content: secondRaw},
+	}, "", CommitMetadata{})
+	require.NoError(t, err, "presentation rejection must not consume the attempt")
+	require.True(t, result.Committed)
+	for path, expected := range map[string]string{firstPath: firstRaw, secondPath: secondRaw} {
+		content, readErr := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(path)))
+		require.NoError(t, readErr)
+		require.Equal(t, expected, string(content), "clean resubmission must preserve exact raw bytes")
+	}
+}
+
+func TestWriteWorkspaceCommitCandidateRejectsMalformedBatchBeforeFirstWrite(t *testing.T) {
+	root := t.TempDir()
+	s := &Spec{fs: OSFileSystem{}, cfg: &config.Config{SpecDir: filepath.Join(root, "spec")}}
+	const firstRaw = "package generated\n"
+	malformed := filepath.Join(root, "src", "second.go") + ":\n\npackage generated\n"
+	journal := &store.WorkspaceCommitJournal{Files: []store.WorkspaceCommitJournalFile{
+		{Path: "src/first.go", CandidateContent: []byte(firstRaw), CandidateMode: 0o644, WriteIntent: "create"},
+		{Path: "src/second.go", CandidateContent: []byte(malformed), CandidateMode: 0o644, WriteIntent: "create"},
+	}}
+
+	err := s.writeWorkspaceCommitCandidate(journal)
+	require.ErrorContains(t, err, "absolute-path formatter banner")
+	for _, path := range []string{"src/first.go", "src/second.go"} {
+		_, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+		require.ErrorIs(t, statErr, os.ErrNotExist, "all candidate files must be validated before the first workspace write")
+	}
+
+	err = s.applyAcceptedWorkspaceJournal(journal)
+	require.ErrorContains(t, err, "absolute-path formatter banner")
+	for _, path := range []string{"src/first.go", "src/second.go"} {
+		_, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+		require.ErrorIs(t, statErr, os.ErrNotExist, "recovery must not roll forward a legacy malformed accepted journal")
+	}
+}
+
+func TestStartExecutionAcceptsUnmodifiedRawRustModuleContexts(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	root := t.TempDir()
+	specDir := filepath.Join(root, "spec")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0o755))
+	require.NoError(t, os.MkdirAll(specDir, 0o755))
+	rustCUE := strings.Replace(withTestIntent(commitTestSpecCUE), `language: "go"`, `language: "rust"`, 1)
+	require.NoError(t, os.WriteFile(filepath.Join(specDir, "spec.cue"), []byte(rustCUE), 0o644))
+	const (
+		rawManifest = "\n[package]\nname = \"raw-context-test\"\nversion = \"0.1.0\"\n\n"
+		rawModule   = "\npub mod tone;\n\n"
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Cargo.toml"), []byte(rawManifest), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "mod.rs"), []byte(rawModule), 0o644))
+	s := New(st, OSFileSystem{}, &config.Config{SpecDir: specDir, GenerateModel: "test-model", MaxRetries: 3})
+	begin, err := s.Begin(ctx, BeginOpts{})
+	require.NoError(t, err)
+	next, err := s.Next(ctx, begin.SessionID)
+	require.NoError(t, err)
+	require.NotEmpty(t, next.Resources)
+	resourceID := next.Resources[0].ResourceID
+	_, err = commitTestAttempt(t, s, ctx, begin.SessionID, resourceID, []CommitFile{{
+		Path: filepath.Join("src", "mod.rs"), Content: rawModule,
+	}}, "", "test-model")
+	require.NoError(t, err)
+	_, err = s.store.ReopenSessionResources(ctx, begin.SessionID, []string{resourceID}, "exercise owned-code provenance")
+	require.NoError(t, err)
+	prepared, err := s.PrepareContext(ctx, ContextOptions{
+		SessionID: begin.SessionID, ResourceID: resourceID,
+	})
+	require.NoError(t, err)
+
+	sections := make(map[string]contextmanifest.Section)
+	for _, section := range prepared.Sections {
+		if section.Kind == "module_configuration" || section.Kind == "owned_code" {
+			sections[section.Kind+"\x00"+section.SourcePath] = section
+		}
+	}
+	manifestSection := sections["module_configuration\x00Cargo.toml"]
+	moduleSection := sections["module_configuration\x00"+filepath.Join("src", "mod.rs")]
+	ownedSection := sections["owned_code\x00"+filepath.Join("src", "mod.rs")]
+	require.Equal(t, rawManifest, manifestSection.Content)
+	require.Equal(t, contextmanifest.Hash(rawManifest), manifestSection.OriginalHash)
+	require.Equal(t, rawModule, moduleSection.Content)
+	require.Equal(t, contextmanifest.Hash(rawModule), moduleSection.OriginalHash)
+	require.Contains(t, ownedSection.Content, "UPDATE MODE")
+	require.Equal(t, contextmanifest.Hash(rawModule), ownedSection.OriginalHash,
+		"owned-code provenance and module provenance must hash the same raw repository bytes")
+	lifecycle := dispatchAndAcknowledgePreparedContext(
+		t, s, ctx, prepared, begin.SessionID, resourceID, "", "",
+	)
+	_, err = s.StartExecution(ctx, ExecutionStartOptions{
+		AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
+		IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
+		HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+		SystemInstructions: prepared.SystemPrompt,
+	})
+	require.NoError(t, err)
 }
 
 type commitSessionOverrideStore struct {
@@ -224,10 +572,13 @@ func TestCommitFailsClosedOnInvalidCanonicalSessionState(t *testing.T) {
 				SessionID: state.sessionID, ResourceID: state.resourceID,
 			})
 			require.NoError(t, err)
+			lifecycle := dispatchAndAcknowledgePreparedContext(
+				t, s, ctx, prepared, state.sessionID, state.resourceID, "", "",
+			)
 			_, err = s.StartExecution(ctx, ExecutionStartOptions{
 				AttemptID: prepared.AttemptID, ProtocolVersion: execution.ProtocolVersion,
 				IdempotencyKey: uuid.NewString(), ContextHash: prepared.ContextHash,
-				HostName: "spec-test", Model: "test-model", TemplateHashes: prepared.TemplateHashes,
+				HostName: "spec-test", HostSessionID: lifecycle.HostSessionID, Model: "test-model", TemplateHashes: prepared.TemplateHashes,
 				SystemInstructions: prepared.SystemPrompt,
 			})
 			require.NoError(t, err)
@@ -243,15 +594,19 @@ func TestCommitFailsClosedOnInvalidCanonicalSessionState(t *testing.T) {
 			manifest, err := canonical.GetExecutionManifestByAttempt(ctx, prepared.AttemptID)
 			require.NoError(t, err)
 			require.Equal(t, string(execution.StatusFailed), manifest.Status)
-			candidate, err := canonical.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
-			require.NoError(t, err)
-			require.Equal(t, "rejected", candidate.Status,
-				"invalid canonical session state must reject the staged candidate")
+			candidate, candidateErr := canonical.GetCandidateSetByAttempt(ctx, prepared.AttemptID)
+			if tt.name == "planned action is missing" {
+				require.Error(t, candidateErr, "invalid plan identity must fail before candidate submission")
+			} else {
+				require.NoError(t, candidateErr)
+				require.Equal(t, "rejected", candidate.Status,
+					"invalid canonical hash state must reject the staged candidate")
+			}
 		})
 	}
 }
 
-func TestCommitRejectedGenerationOutcomeRoundTrips(t *testing.T) {
+func TestDeferredValidationPreservesAcceptedCandidateAndReopensResource(t *testing.T) {
 	const cueWithFailingValidation = `package crestsynth
 
 project: name: "rt"
@@ -263,15 +618,21 @@ project: contexts: Audio: valueObjects: Tone: {
 }
 `
 	s, st := newTestSpecWithSessionCUE(t, cueWithFailingValidation)
-	_, err := commitTestAttempt(t, s, context.Background(), st.sessionID, st.resourceID,
+	commit, err := commitTestAttempt(t, s, context.Background(), st.sessionID, st.resourceID,
 		[]CommitFile{{Path: filepath.Join(t.TempDir(), "a.go"), Content: "package out\n"}}, "",
 		"claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
+	sr, err := s.store.GetSessionResource(st.sessionID, st.resourceID)
+	require.NoError(t, err)
+	verified := s.VerifyWave(context.Background(), st.sessionID, sr.WaveIndex)
+	require.False(t, verified.Passed)
+	require.Equal(t, []string{st.resourceID}, verified.ReopenedResources)
 	gens, _ := s.store.ListGenerations(st.resourceID, 10)
 	if len(gens) == 0 {
-		t.Fatal("expected a generation record from rejected commit")
+		t.Fatal("expected a generation record from staged commit")
 	}
-	require.Equal(t, "rejected", gens[0].Outcome, "rejected generation must record outcome 'rejected'")
+	require.True(t, commit.ValidationDeferred)
+	require.Equal(t, "accepted", gens[0].Outcome, "immutable candidate acceptance is preserved while its resource is reopened")
 }

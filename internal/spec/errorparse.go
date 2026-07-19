@@ -8,6 +8,10 @@ import (
 var errorPatterns = []*regexp.Regexp{
 	// Go: ./internal/spec/session.go:42:5: undefined: foo
 	regexp.MustCompile(`(?m)^\.?/?([^\s:]+\.go):(\d+):`),
+	// rustfmt: Diff in /workspace/src/lib.rs:42:
+	regexp.MustCompile(`(?m)^Diff in ([^\r\n]+\.rs):(\d+):`),
+	// Rust test panic: thread 'name' panicked at src/lib.rs:42:5:
+	regexp.MustCompile(`(?m)^thread .* panicked at ([^\r\n]+\.rs):(\d+):(\d+):`),
 	// Rust: error[E0433]: ... --> src/Synth/Voice.rs:42:5
 	regexp.MustCompile(`(?m)--> ([^\s:]+\.rs):(\d+):`),
 	// TypeScript: src/components/App.tsx(42,5): error TS2304
