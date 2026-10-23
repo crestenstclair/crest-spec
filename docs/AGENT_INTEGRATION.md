@@ -233,11 +233,20 @@ expects orchestration back. The engine will simply answer state queries and
 gate commits — if nobody on the host side spawns generators, no code is ever
 written.
 
+Host adapters live under `docs/hosts/` and must preserve this contract:
+
+- `docs/hosts/claude-code.md` — the current reference implementation.
+- `docs/hosts/opencode.md` — OpenCode MCP, subagent, command, and permission templates.
+
 Reference implementations (Claude Code Workflow scripts, directly portable
 as pseudocode): `.claude/workflows/spec-generate.js` in this repo and the
 HTTP-transport drivers in `crest-synth/.crest-spec/*-http.js`
 (`spec-generate-http.js`, `spec-behavioral-http.js`, `spec-reauthor-http.js`,
 `spec-verify-pending-http.js`).
+
+A host adapter may add config, agents, commands, skills, or scripts for that
+host. It must not add a crest-spec generation CLI, LLM client, workflow runtime,
+or sub-agent dispatcher.
 
 ## Anti-patterns (all observed live, all fatal)
 

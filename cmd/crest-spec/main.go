@@ -47,6 +47,7 @@ func showHelp() bool {
 			fmt.Fprintln(os.Stderr, "Or connect via MCP: spec/begin → spec/next → spec/context → spec/commit → spec/finish")
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "Commands:")
+			fmt.Fprintln(os.Stderr, "  init [--agent name] [--force]  bootstrap agent-host integration files")
 			fmt.Fprintln(os.Stderr, "  dashboard [--addr :8080]       start web dashboard for monitoring sessions")
 			fmt.Fprintln(os.Stderr, "  state list                     print all resources in state")
 			fmt.Fprintln(os.Stderr, "  state rm <resourceId>          remove a resource from state")
@@ -68,6 +69,8 @@ func runSubcommand() bool {
 	switch os.Args[1] {
 	case "adopt":
 		cmdAdopt()
+	case "init":
+		cmdInit(os.Args[2:])
 	case "dashboard":
 		flags := parseFlags(os.Args[2:])
 		cmdDashboard(flags)
