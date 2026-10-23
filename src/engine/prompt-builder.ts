@@ -55,7 +55,14 @@ export class PromptBuilder implements IPromptBuilder {
     lines.push("Group files by resource within the bounded context: `src/{ContextName}/{ResourceName}/`.");
     lines.push("Do NOT use architectural layer sub-folders like Domain/, Application/, Infrastructure/.");
     lines.push("Tests mirror the same structure: `tests/{ContextName}/{ResourceName}/`.");
-    lines.push("Example: `src/Composition/Phrase/Phrase.cs`, `src/Composition/Phrase/IPhraseRepository.cs`, `tests/Composition/Phrase/PhraseTests.cs`");
+    if (lang === "rust") {
+      lines.push("For Rust: context and resource directory names use the EXACT casing declared in the module tree (lib.rs / mod.rs).");
+      lines.push("Use the module tree injected below to determine the correct casing for `use` paths and file paths.");
+      lines.push("Example: if lib.rs declares `pub mod kernel;`, the directory is `src/kernel/` and `use` paths start with `crate::kernel::`.");
+      lines.push("Do NOT use `core::error::Error` (unstable `error_in_core` feature). Use `std::error::Error` or implement Display + Debug manually.");
+    } else {
+      lines.push("Example: `src/Composition/Phrase/Phrase.cs`, `src/Composition/Phrase/IPhraseRepository.cs`, `tests/Composition/Phrase/PhraseTests.cs`");
+    }
 
     lines.push("");
     lines.push("## SOLID principles (mandatory)");
