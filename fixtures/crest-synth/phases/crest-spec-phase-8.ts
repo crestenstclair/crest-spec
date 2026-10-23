@@ -193,3 +193,21 @@ presetsCtx.asset("PresetsMod", {
   description: "src/Presets/mod.rs module declarations for Presets context",
   prompts: ["File path: src/Presets/mod.rs", "Declare modules for: PresetId, PresetMetadata, Preset, PresetBank, Setup, PresetCodec, PresetBrowser, PresetRepository"],
 });
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 8 GUI test: display Preset and Setup debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 8 test'",
+    "Heading: 'Phase 8: Presets — Save/Load'",
+    "Create instances of Preset with PresetMetadata, PresetBank with a few preset IDs",
+    "Create a Setup instance showing the full session snapshot structure",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

@@ -91,3 +91,38 @@ export interface AgentNoteRecord {
   content: string;
   created_at: string;
 }
+
+export type SubAgentState =
+  | "pending"
+  | "dispatched"
+  | "completed"
+  | "committed"
+  | "blocked"
+  | "errored"
+  | "timed_out"
+  | "rejected";
+
+export interface AgentResourceStateRecord {
+  apply_id: number;
+  resource_id: string;
+  state: SubAgentState;
+  context_json: string | null;
+  validation_passed: number | null;
+  validation_errors: string | null;
+  updated_at: string;
+}
+
+export interface BlockedContext {
+  reason: string;
+  blockedOn?: string;
+  question?: string;
+  retryable: boolean;
+}
+
+export interface ErrorContext {
+  errorKind: "compile" | "invariant" | "runtime" | "parse" | "unknown";
+  message: string;
+  files?: string[];
+  retryCount: number;
+  maxRetries: number;
+}

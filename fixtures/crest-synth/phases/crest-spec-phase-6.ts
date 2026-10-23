@@ -181,3 +181,21 @@ sampleLib.asset("SampleLibraryMod", {
   description: "src/SampleLibrary/mod.rs module declarations for SampleLibrary context",
   prompts: ["File path: src/SampleLibrary/mod.rs", "Declare modules for: SampleSetId, SampleMetadata, KeyVelocityRange, InterpolationMode, SampleSet, SampleZone, SampleLoader, SampleInterpolator, SampleSetRepository"],
 });
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 6 GUI test: display SampleSet and sample zone debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 6 test'",
+    "Heading: 'Phase 6: SampleLibrary — Sample Playback'",
+    "Create instances of SampleSet, SampleMetadata, KeyVelocityRange, InterpolationMode",
+    "Show a sample set with 2-3 zones mapped to different key/velocity ranges",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

@@ -195,3 +195,91 @@ patchCtx.asset("PatchMod", {
     "Declare modules for: MpeZone, ChannelSubscription, VoicePoolConfig, Patch, PatchId, ChannelDispatcher, PatchMixer, GlobalMixer, PatchRepository",
   ],
 });
+
+// ── Cargo Manifest (override) ──────────────────────────
+// Phase 4 adds midly for MIDI file parsing in test examples.
+
+app.asset("RootCargoToml", {
+  kind: "cargo-manifest",
+  description: "Root Cargo.toml for the crest-synth project",
+  prompts: [
+    "Package name: crest-synth, version 0.1.0",
+    "Dependencies: cpal (audio output — cross-platform via CoreAudio/WASAPI/ALSA)",
+    "Include [[bin]] section: name = \"crest-synth\", path = \"src/main.rs\"",
+    "Dev-dependencies: eframe = \"0.29\" (for GUI test examples), midly (for MIDI file parsing in examples)",
+  ],
+});
+
+// ── Build Makefile (override) ──────────────────────────
+// Phase 4 adds test-midi target.
+
+app.asset("BuildMakefile", {
+  kind: "makefile",
+  description: "Build automation for the crest-synth project",
+  prompts: [
+    "Default target: build",
+    "test: cargo test",
+    "check: cargo check",
+    "clean: cargo clean",
+    "run: cargo run",
+    "test-gui: cargo run --example test_gui",
+    "test-midi: cargo run --example midi_playback",
+  ],
+});
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 4 GUI test: display Patch and channel subscription debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 4 test'",
+    "Heading: 'Phase 4: Patch — Multi-Patch Channel Dispatch'",
+    "Create instances of Patch, ChannelSubscription, ChannelAddress, VoicePoolConfig, GlobalMixer from Patch context",
+    "Show a list of 2-3 patches with different channel subscriptions",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});
+
+// ── MIDI Playback Test ─────────────────────────────────
+// Plays "Corridors of Time" from Chrono Trigger through the multi-channel
+// patch engine with voice allocation and cpal output.
+
+app.asset("MidiPlaybackTest", {
+  kind: "rust-gui-test",
+  description: "MIDI file playback test: parse and play Chrono Trigger through multi-channel engine",
+  prompts: [
+    "File path: examples/midi_playback.rs",
+    "Window title: 'crest-synth MIDI playback'",
+    "Heading: 'MIDI Playback — Corridors of Time'",
+    "Parse the MIDI file at midi/Corridors of Time - Chrono Trigger.mid using the midly crate",
+    "Create a Patch per MIDI channel found in the file, each subscribed to its channel via ChannelSubscription",
+    "Walk the MIDI events in temporal order: dispatch NoteOn/NoteOff through ChannelDispatcher to the appropriate patches",
+    "Each patch uses its own VoiceAllocator and the Synth engine to render audio",
+    "Mix all patch outputs through PatchMixer and GlobalMixer",
+    "Render in 256-sample blocks at 44100 Hz",
+    "Support two modes via command-line args:",
+    "  --wav: render the full song to midi-test.wav using a pure-Rust WAV writer, then exit",
+    "  (default): play through CpalAudioOutput in real time",
+    "In GUI mode, show an egui window with: current playback time, active voice count per channel, and total voices",
+    "The GUI should update each frame and close when playback finishes",
+    "Print track names and channel count to stdout at startup",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "midi_playback"] },
+    {
+      kind: "integration",
+      command: ["cargo", "run", "--example", "midi_playback", "--", "--wav"],
+      description: "renders Chrono Trigger MIDI to WAV",
+      assertions: [
+        { kind: "exit_code", expected: 0 },
+        { kind: "file_exists", path: "midi-test.wav" },
+        { kind: "file_not_empty", path: "midi-test.wav" },
+      ],
+    },
+  ],
+});

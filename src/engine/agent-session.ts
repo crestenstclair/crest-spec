@@ -7,6 +7,7 @@ import type { IPromptBuilder } from "./prompt-builder.js";
 import type { IResourceValidator, ValidationResult } from "./resource-validator.js";
 import type { IResourceRegistry } from "../registry/resource-registry.js";
 import type { PlannedAction } from "../planner/plan.js";
+import type { SubAgentState, BlockedContext, ErrorContext } from "../state/types.js";
 
 export interface BeginResult {
   applyId: number;
@@ -28,6 +29,7 @@ export interface ContextResult {
   prompt: string;
   dependencyNotes: Record<string, string[]>;
   dispatchInstructions: string;
+  validations: import("../types.js").ValidationDeclaration[];
 }
 
 export interface NoteResult {
@@ -49,6 +51,27 @@ export interface FinishResult {
   modified: number;
   destroyed: number;
   failed: number;
+}
+
+export interface DispatchResult {
+  resourceId: string;
+  state: "dispatched";
+}
+
+export interface ResourceStatus {
+  resourceId: string;
+  state: SubAgentState;
+  action: string;
+  reason: string;
+  context?: BlockedContext | ErrorContext;
+}
+
+export interface WaveStatusResult {
+  wave: number;
+  resources: ResourceStatus[];
+  summary: Record<SubAgentState, number>;
+  done: boolean;
+  needsAttention: ResourceStatus[];
 }
 
 export class AgentSession {
@@ -105,6 +128,10 @@ export class AgentSession {
       created_at: new Date().toISOString(),
     });
 
+    for (const action of generates) {
+      this.state.setResourceState(applyRecord.id, action.resourceId, "pending");
+    }
+
     return {
       applyId: applyRecord.id,
       plan: planSummary,
@@ -115,10 +142,7 @@ export class AgentSession {
   }
 
   next(): NextResult {
-    const session = this.state.getActiveAgentSession();
-    if (!session) {
-      throw new Error("No active agent session. Run 'agent begin' first.");
-    }
+    const session = this.requireSession();
 
     const waves: string[][] = JSON.parse(session.waves_json);
     const committedActions = this.state.getApplyActions(session.apply_id);
@@ -151,10 +175,7 @@ export class AgentSession {
   }
 
   context(resourceId: string, registry: IResourceRegistry): ContextResult {
-    const session = this.state.getActiveAgentSession();
-    if (!session) {
-      throw new Error("No active agent session. Run 'agent begin' first.");
-    }
+    this.requireSession();
 
     const resource = registry.getById(resourceId);
     if (!resource) {
@@ -191,14 +212,12 @@ export class AgentSession {
       prompt,
       dependencyNotes,
       dispatchInstructions: AgentSession.dispatchInstructions(resourceId),
+      validations: resource.validations ?? [],
     };
   }
 
   note(resourceId: string, content: string): NoteResult {
-    const session = this.state.getActiveAgentSession();
-    if (!session) {
-      throw new Error("No active agent session. Run 'agent begin' first.");
-    }
+    const session = this.requireSession();
 
     const noteId = this.state.addAgentNote({
       resource_id: resourceId,
@@ -216,9 +235,30 @@ export class AgentSession {
     filesOnDisk: Map<string, string>,
     outputDir: string,
   ): CommitResult {
-    const session = this.state.getActiveAgentSession();
-    if (!session) {
-      throw new Error("No active agent session. Run 'agent begin' first.");
+    const session = this.requireSession();
+
+    const resourceState = this.state.getResourceState(session.apply_id, resourceId);
+
+    if (resourceState?.validation_passed === 0) {
+      const errors = resourceState.validation_errors
+        ? JSON.parse(resourceState.validation_errors)
+        : ["validation failed"];
+      throw new Error(
+        `Cannot commit ${resourceId}: validation failed. ` +
+        `Use 'agent block' or 'agent error' to report the failure, then re-dispatch after resolving.\n` +
+        `Errors: ${JSON.stringify(errors)}`,
+      );
+    }
+
+    if (resourceState?.validation_passed === null || resourceState?.validation_passed === undefined) {
+      const resource = registry.getById(resourceId);
+      const hasValidations = resource?.validations && resource.validations.length > 0;
+      if (hasValidations) {
+        throw new Error(
+          `Cannot commit ${resourceId}: validation has not been run. ` +
+          `Run 'agent validate ${resourceId}' first.`,
+        );
+      }
     }
 
     const planActions: PlannedAction[] = JSON.parse(session.plan_json);
@@ -265,6 +305,7 @@ export class AgentSession {
     }
 
     this.state.recordAction(session.apply_id, resourceId, action.action, "success");
+    this.state.setResourceState(session.apply_id, resourceId, "committed");
 
     return { resourceId, committed: true, filesRecorded };
   }
@@ -274,7 +315,10 @@ export class AgentSession {
     files: Map<string, string>,
     registry: IResourceRegistry,
   ): ValidationResult {
-    return this.validator.validate(resourceId, files, registry);
+    const session = this.requireSession();
+    const result = this.validator.validate(resourceId, files, registry);
+    this.state.setValidationResult(session.apply_id, resourceId, result.passed, result.errors);
+    return result;
   }
 
   async validateAsync(
@@ -282,7 +326,116 @@ export class AgentSession {
     files: Map<string, string>,
     registry: IResourceRegistry,
   ): Promise<ValidationResult> {
-    return this.validator.validateAsync(resourceId, files, registry);
+    const session = this.requireSession();
+    const result = await this.validator.validateAsync(resourceId, files, registry);
+    this.state.setValidationResult(session.apply_id, resourceId, result.passed, result.errors);
+    return result;
+  }
+
+  dispatch(resourceId: string): DispatchResult {
+    const session = this.requireSession();
+    this.state.setResourceState(session.apply_id, resourceId, "dispatched");
+    return { resourceId, state: "dispatched" };
+  }
+
+  complete(resourceId: string): { resourceId: string; state: "completed" } {
+    const session = this.requireSession();
+    this.state.setResourceState(session.apply_id, resourceId, "completed");
+    return { resourceId, state: "completed" };
+  }
+
+  block(resourceId: string, context: BlockedContext): { resourceId: string; state: "blocked" } {
+    const session = this.requireSession();
+    this.state.setResourceState(session.apply_id, resourceId, "blocked", JSON.stringify(context));
+    return { resourceId, state: "blocked" };
+  }
+
+  error(resourceId: string, context: ErrorContext): { resourceId: string; state: "errored" } {
+    const session = this.requireSession();
+    this.state.setResourceState(session.apply_id, resourceId, "errored", JSON.stringify(context));
+    return { resourceId, state: "errored" };
+  }
+
+  timeout(resourceId: string): { resourceId: string; state: "timed_out" } {
+    const session = this.requireSession();
+    this.state.setResourceState(session.apply_id, resourceId, "timed_out");
+    return { resourceId, state: "timed_out" };
+  }
+
+  reject(resourceId: string, errors: string[]): { resourceId: string; state: "rejected" } {
+    const session = this.requireSession();
+    this.state.setResourceState(
+      session.apply_id,
+      resourceId,
+      "rejected",
+      JSON.stringify({ errors }),
+    );
+    return { resourceId, state: "rejected" };
+  }
+
+  status(): WaveStatusResult {
+    const session = this.requireSession();
+    const waves: string[][] = JSON.parse(session.waves_json);
+    const planActions: PlannedAction[] = JSON.parse(session.plan_json);
+    const actionMap = new Map(planActions.map((a) => [a.resourceId, a]));
+    const allStates = this.state.getResourceStatesForApply(session.apply_id);
+    const stateMap = new Map(allStates.map((s) => [s.resource_id, s]));
+
+    for (let w = 0; w < waves.length; w++) {
+      const waveIds = waves[w];
+      const allCommitted = waveIds.every((id) => stateMap.get(id)?.state === "committed");
+      if (allCommitted) continue;
+
+      const resources: ResourceStatus[] = waveIds.map((id) => {
+        const rec = stateMap.get(id);
+        const action = actionMap.get(id);
+        const status: ResourceStatus = {
+          resourceId: id,
+          state: rec?.state ?? "pending",
+          action: action?.action ?? "create",
+          reason: action?.reason ?? "unknown",
+        };
+        if (rec?.context_json) {
+          try {
+            status.context = JSON.parse(rec.context_json);
+          } catch {}
+        }
+        return status;
+      });
+
+      const summary = {} as Record<SubAgentState, number>;
+      const allStateNames: SubAgentState[] = [
+        "pending", "dispatched", "completed", "committed",
+        "blocked", "errored", "timed_out", "rejected",
+      ];
+      for (const s of allStateNames) summary[s] = 0;
+      for (const r of resources) summary[r.state]++;
+
+      const needsAttention = resources.filter(
+        (r) => r.state === "blocked" || r.state === "errored" || r.state === "timed_out" || r.state === "rejected",
+      );
+
+      return { wave: w, resources, summary, done: false, needsAttention };
+    }
+
+    return {
+      wave: -1,
+      resources: [],
+      summary: {
+        pending: 0, dispatched: 0, completed: 0, committed: 0,
+        blocked: 0, errored: 0, timed_out: 0, rejected: 0,
+      },
+      done: true,
+      needsAttention: [],
+    };
+  }
+
+  private requireSession() {
+    const session = this.state.getActiveAgentSession();
+    if (!session) {
+      throw new Error("No active agent session. Run 'agent begin' first.");
+    }
+    return session;
   }
 
   static orchestratorInstructions(): string {
@@ -294,35 +447,80 @@ export class AgentSession {
       "You are an orchestration agent. Your job is to drive the agent CLI and",
       "dispatch sub-agents. You MUST NOT write implementation code yourself.",
       "",
-      "DO:",
-      "  - Run `agent next` to get the current wave of resources",
-      "  - Run `agent context <id>` to get the sub-agent prompt for each resource",
-      "  - Spawn a sub-agent (Agent tool) for each resource, passing it the",
-      "    systemPrompt and prompt from the context output",
-      "  - Parse the sub-agent's output for fenced code blocks with `// path:` or",
-      "    `# path:` annotations and write each file to disk",
-      "  - Run `agent note <id>` with a summary of the sub-agent's decisions",
-      "  - Run `agent commit <id>` after files are on disk",
-      "  - Run `agent next` again; repeat until done",
-      "  - Run `agent finish` to finalize the session",
+      "═══ WAVE LOOP ═══",
       "",
-      "DO NOT:",
-      "  - Write implementation code directly — every file must come from a sub-agent",
-      "  - Absorb the context prompts and generate code inline",
-      "  - Skip the sub-agent step for any resource, even simple ones",
-      "  - Modify the sub-agent's output unless it fails to compile",
+      "  1. Run `agent next` to get the current wave of resources",
+      "  2. For EACH resource in the wave, run the DISPATCH SEQUENCE (see below)",
+      "  3. After dispatching all resources, run `agent status`",
+      "  4. Inspect the `needsAttention` array and handle each item:",
       "",
-      "DISPATCH PATTERN:",
-      '  const ctx = `agent context <id>` // returns { systemPrompt, prompt }',
-      "  sub-agent = Agent({",
-      '    prompt: ctx.systemPrompt + "\\n\\n" + ctx.prompt,',
-      '    description: "Generate <resource-id>"',
-      "  })",
-      "  // Parse code blocks from sub-agent output → write to disk",
+      "     blocked → Present the `context.question` to the user. When they answer,",
+      "       run `agent dispatch <id>` again and re-spawn the sub-agent with the",
+      "       answer appended to its prompt.",
       "",
-      "Resources within the same wave are independent — dispatch them in parallel",
-      "when possible. Resources in later waves depend on earlier ones, so waves",
-      "must be processed sequentially.",
+      "     errored → Check `context.retryCount` vs `context.maxRetries`.",
+      "       If retries remain: run `agent dispatch <id>` and re-spawn with the",
+      "       error message appended to the prompt.",
+      "       If exhausted: report the error to the user and ask how to proceed.",
+      "",
+      "     rejected → Re-dispatch the sub-agent with the validation errors",
+      "       appended to its prompt so it can fix them.",
+      "",
+      "     timed_out → Report to the user.",
+      "",
+      "  5. Repeat step 3-4 until `status.done === true` or all resources in the",
+      "     wave are committed, then run `agent next` for the next wave.",
+      "  6. When `next.done === true`, run `agent finish`.",
+      "",
+      "═══ DISPATCH SEQUENCE (per resource) ═══",
+      "",
+      "  a. `agent context <id>` → returns { systemPrompt, prompt }",
+      "  b. `agent dispatch <id>` → marks state as dispatched",
+      "  c. Spawn sub-agent:",
+      '     Agent({ prompt: systemPrompt + "\\n\\n" + prompt, description: "Generate <id>" })',
+      "  d. If sub-agent succeeds (returns code blocks):",
+      "       - Parse fenced code blocks (look for `// path:` or `# path:` annotations)",
+      "       - Write each file to disk at that path (relative to project root)",
+      "       - `agent complete <id>`",
+      "       - `agent validate <id>` — if validation fails, run `agent reject <id>`",
+      "         and re-dispatch; otherwise continue",
+      "       - `agent note <id> <summary>` with a summary of the sub-agent's decisions",
+      "       - `agent commit <id>`",
+      "  e. If sub-agent fails (error, crash, bad output):",
+      "       - `agent error <id> <json>` with:",
+      '         {"errorKind":"compile|parse|runtime|unknown","message":"...","retryCount":1,"maxRetries":3}',
+      "  f. If sub-agent reports it needs a decision:",
+      "       - `agent block <id> <json>` with:",
+      '         {"reason":"...","question":"...","retryable":true}',
+      "",
+      "═══ ALL COMMANDS ═══",
+      "",
+      "  agent begin                      — start session, get plan + waves",
+      "  agent next                       — get current wave's uncommitted resources",
+      "  agent context <id>               — get systemPrompt + prompt for a resource",
+      "  agent dispatch <id>              — mark resource as dispatched (sub-agent spawned)",
+      "  agent complete <id>              — mark resource as completed (files on disk)",
+      "  agent validate <id>              — run invariant + type + declared validations",
+      "  agent note <id> <text>           — record sub-agent design decisions",
+      "  agent commit <id>                — record files to state DB, mark committed",
+      "  agent block <id> <json>          — mark blocked (needs user decision)",
+      "  agent error <id> <json>          — mark errored (sub-agent failed)",
+      "  agent reject <id> [errors-json]  — mark rejected (validation failed)",
+      "  agent timeout <id>               — mark timed out",
+      "  agent status                     — get wave summary with per-resource states",
+      "  agent finish                     — finalize session",
+      "",
+      "═══ RULES ═══",
+      "",
+      "  - NEVER write implementation code directly — every file comes from a sub-agent",
+      "  - NEVER absorb context prompts and generate code inline",
+      "  - NEVER skip the sub-agent step for any resource, even simple ones",
+      "  - NEVER modify sub-agent output unless it fails to compile",
+      "  - Resources within the same wave are independent — dispatch in parallel",
+      "  - Waves must be processed sequentially (later waves depend on earlier ones)",
+      "  - NEVER commit a resource that failed validation — use `agent block` to escalate",
+      "  - `agent commit` will REFUSE if validation failed or was not run (hard-enforced)",
+      "  - Always run `agent status` after dispatching a wave to catch failures",
       "=" .repeat(78),
     ].join("\n");
   }
@@ -330,15 +528,17 @@ export class AgentSession {
   static dispatchInstructions(resourceId: string): string {
     return [
       "=" .repeat(78),
-      "  DISPATCH INSTRUCTIONS",
+      "  DISPATCH INSTRUCTIONS FOR: " + resourceId,
       "=" .repeat(78),
       "",
       "You MUST spawn a sub-agent to generate code for this resource.",
       "Do NOT write the code yourself.",
       "",
-      "1. Combine systemPrompt + prompt into a single sub-agent prompt",
-      "2. Spawn the sub-agent using your Agent tool:",
-      `   Agent({ prompt: <combined>, description: "Generate ${resourceId}" })`,
+      "1. Run `agent dispatch ${ID}` to mark the resource as dispatched",
+      "",
+      "2. Spawn the sub-agent:",
+      `   Agent({ prompt: systemPrompt + "\\n\\n" + prompt, description: "Generate ${resourceId}" })`,
+      "",
       "3. The sub-agent will return fenced code blocks with path annotations:",
       "   ```rust",
       "   // path: src/Context/Resource.rs",
@@ -349,21 +549,41 @@ export class AgentSession {
       "   # path: Cargo.toml",
       "   <content>",
       "   ```",
-      "4. Parse each code block, extract the path from the annotation, and write",
-      "   the file to disk at that path (relative to the project root)",
-      "5. After writing all files, run `agent note` and `agent commit`",
       "",
-      "If the sub-agent's output fails to compile, you may re-dispatch with",
-      "additional context (e.g., compiler errors), but do NOT hand-edit the code.",
+      "4. Parse each code block, extract the path, write the file to disk",
+      "",
+      "5. Handle the outcome:",
+      "",
+      "   SUCCESS (code blocks parsed, files written):",
+      `     agent complete ${resourceId}`,
+      `     agent validate ${resourceId}`,
+      "     If validate.passed:",
+      `       agent note ${resourceId} <summary of sub-agent's design decisions>`,
+      `       agent commit ${resourceId}`,
+      "     If validate.errors:",
+      `       agent error ${resourceId} {"errorKind":"invariant","message":"<errors>","retryCount":1,"maxRetries":3}`,
+      "       Re-dispatch with the validation errors appended to the prompt",
+      "",
+      "   FAILURE (sub-agent crashed, returned unparseable output, compile error):",
+      `     agent error ${resourceId} {"errorKind":"<compile|parse|unknown>","message":"<error details>","retryCount":1,"maxRetries":3}`,
+      "     Re-dispatch with the error details appended to the prompt (up to maxRetries)",
+      "",
+      "   BLOCKED (sub-agent says it needs a user decision):",
+      `     agent block ${resourceId} {"reason":"<why>","question":"<question for user>","retryable":true}`,
+      "     Report the question to the user; on answer, re-dispatch with the answer",
+      "",
+      "   TIMEOUT (sub-agent did not respond in time):",
+      `     agent timeout ${resourceId}`,
+      "     Report to the user",
+      "",
+      "6. After the resource reaches committed state, move on to the next resource",
+      "   or check `agent status` to see the full wave picture.",
       "=" .repeat(78),
     ].join("\n");
   }
 
   finish(): FinishResult {
-    const session = this.state.getActiveAgentSession();
-    if (!session) {
-      throw new Error("No active agent session. Run 'agent begin' first.");
-    }
+    const session = this.requireSession();
 
     const planActions: PlannedAction[] = JSON.parse(session.plan_json);
     const committedActions = this.state.getApplyActions(session.apply_id);

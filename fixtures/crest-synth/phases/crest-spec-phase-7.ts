@@ -187,3 +187,21 @@ effects.asset("EffectsMod", {
   description: "src/Effects/mod.rs module declarations for Effects context",
   prompts: ["File path: src/Effects/mod.rs", "Declare modules for: EffectChainId, ReverbConfig, ChorusConfig, DelayConfig, EffectChain, EffectSlot, EffectProcessor, EffectChainRepository"],
 });
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 7 GUI test: display EffectChain and effect config debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 7 test'",
+    "Heading: 'Phase 7: Effects — FX Chains'",
+    "Create instances of EffectChain with 2-3 EffectSlot entries",
+    "Create instances of ReverbConfig, ChorusConfig, DelayConfig with example parameter values",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

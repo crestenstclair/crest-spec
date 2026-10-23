@@ -160,6 +160,19 @@ app.assetKind("rust-module-declaration", {
   ],
 });
 
+app.assetKind("rust-gui-test", {
+  description: "Rust cargo example binary that opens an egui window with debug text",
+  filePattern: "examples/test_gui.rs",
+  prompts: [
+    "This is a cargo example — file path must be examples/test_gui.rs",
+    "Use eframe::run_simple_native to open a window titled 'crest-synth phase test'",
+    "Use egui::CentralPanel to display debug text with ui.heading() and ui.monospace()",
+    "Create instances of the crate's own types and display them with Debug formatting",
+    "No audio playback — just construct types and show their state",
+    "The window should request close after rendering (ctx.send_viewport_cmd(egui::ViewportCommand::Close)) so it can run as a headless validation",
+  ],
+});
+
 // ── Project Assets ──────────────────────────────────────
 
 app.asset("RootCargoToml", {
@@ -169,6 +182,7 @@ app.asset("RootCargoToml", {
     "Package name: crest-synth, version 0.1.0",
     "No external dependencies needed (pure Rust)",
     "Include [[bin]] section: name = \"crest-synth\", path = \"src/main.rs\"",
+    "Dev-dependencies: eframe = \"0.29\" (for GUI test examples)",
   ],
 });
 
@@ -181,6 +195,7 @@ app.asset("BuildMakefile", {
     "check: cargo check",
     "clean: cargo clean",
     "run: cargo run",
+    "test-gui: cargo run --example test_gui",
   ],
 });
 

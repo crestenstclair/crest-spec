@@ -72,3 +72,21 @@ audio.asset("AudioMod", {
     "Declare modules for: SineVoice, AudioRenderer",
   ],
 });
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 1 GUI test: display SineVoice and kernel type debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 1 test'",
+    "Heading: 'Phase 1: Audio — SineVoice'",
+    "Create instances of NoteNumber, Velocity, AudioFrame from kernel",
+    "Create an instance of SineVoice from Audio context",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

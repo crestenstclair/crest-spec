@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS resources (
@@ -100,4 +100,15 @@ CREATE TABLE IF NOT EXISTS agent_notes (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_notes_resource ON agent_notes(resource_id);
+
+CREATE TABLE IF NOT EXISTS agent_resource_states (
+  apply_id INTEGER NOT NULL REFERENCES applies(id),
+  resource_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  context_json TEXT,
+  validation_passed INTEGER,
+  validation_errors TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (apply_id, resource_id)
+);
 `;

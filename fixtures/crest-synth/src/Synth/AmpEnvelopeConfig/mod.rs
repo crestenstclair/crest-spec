@@ -1,60 +1,25 @@
-use core::fmt;
-
-/// ADSR envelope times (seconds) and sustain level (0.0-1.0).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AmpEnvelopeConfig {
-    attack: f64,
-    decay: f64,
-    sustain: f64,
-    release: f64,
+    pub attack: f64,
+    pub decay: f64,
+    pub sustain: f64,
+    pub release: f64,
 }
 
 impl AmpEnvelopeConfig {
-    pub fn new(
-        attack: f64,
-        decay: f64,
-        sustain: f64,
-        release: f64,
-    ) -> Result<Self, AmpEnvelopeConfigError> {
-        if attack < 0.0 {
-            return Err(AmpEnvelopeConfigError::NegativeTime("attack", attack));
-        }
-        if decay < 0.0 {
-            return Err(AmpEnvelopeConfigError::NegativeTime("decay", decay));
-        }
-        if release < 0.0 {
-            return Err(AmpEnvelopeConfigError::NegativeTime("release", release));
+    pub fn new(attack: f64, decay: f64, sustain: f64, release: f64) -> Result<Self, &'static str> {
+        if attack < 0.0 || decay < 0.0 || release < 0.0 {
+            return Err("attack, decay, release must be non-negative");
         }
         if !(0.0..=1.0).contains(&sustain) {
-            return Err(AmpEnvelopeConfigError::SustainOutOfRange(sustain));
+            return Err("sustain must be 0.0-1.0");
         }
-
         Ok(Self {
             attack,
             decay,
             sustain,
             release,
         })
-    }
-
-    #[inline]
-    pub fn attack(self) -> f64 {
-        self.attack
-    }
-
-    #[inline]
-    pub fn decay(self) -> f64 {
-        self.decay
-    }
-
-    #[inline]
-    pub fn sustain(self) -> f64 {
-        self.sustain
-    }
-
-    #[inline]
-    pub fn release(self) -> f64 {
-        self.release
     }
 }
 
@@ -69,21 +34,54 @@ impl Default for AmpEnvelopeConfig {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum AmpEnvelopeConfigError {
-    NegativeTime(&'static str, f64),
-    SustainOutOfRange(f64),
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl fmt::Display for AmpEnvelopeConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NegativeTime(field, value) => {
-                write!(f, "{field} time {value} must be non-negative")
-            }
-            Self::SustainOutOfRange(value) => {
-                write!(f, "sustain level {value} is out of range [0.0, 1.0]")
-            }
-        }
+    #[test]
+    fn valid_config() {
+        let config = AmpEnvelopeConfig::new(0.01, 0.1, 0.7, 0.3).unwrap();
+        assert!((config.attack - 0.01).abs() < f64::EPSILON);
+        assert!((config.decay - 0.1).abs() < f64::EPSILON);
+        assert!((config.sustain - 0.7).abs() < f64::EPSILON);
+        assert!((config.release - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn rejects_negative_attack() {
+        assert!(AmpEnvelopeConfig::new(-0.1, 0.1, 0.7, 0.3).is_err());
+    }
+
+    #[test]
+    fn rejects_negative_decay() {
+        assert!(AmpEnvelopeConfig::new(0.01, -0.1, 0.7, 0.3).is_err());
+    }
+
+    #[test]
+    fn rejects_negative_release() {
+        assert!(AmpEnvelopeConfig::new(0.01, 0.1, 0.7, -0.3).is_err());
+    }
+
+    #[test]
+    fn rejects_sustain_below_zero() {
+        assert!(AmpEnvelopeConfig::new(0.01, 0.1, -0.1, 0.3).is_err());
+    }
+
+    #[test]
+    fn rejects_sustain_above_one() {
+        assert!(AmpEnvelopeConfig::new(0.01, 0.1, 1.1, 0.3).is_err());
+    }
+
+    #[test]
+    fn zero_times_valid() {
+        let config = AmpEnvelopeConfig::new(0.0, 0.0, 0.5, 0.0).unwrap();
+        assert!((config.attack).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn default_config() {
+        let config = AmpEnvelopeConfig::default();
+        assert!((config.attack - 0.01).abs() < f64::EPSILON);
+        assert!((config.sustain - 0.7).abs() < f64::EPSILON);
     }
 }

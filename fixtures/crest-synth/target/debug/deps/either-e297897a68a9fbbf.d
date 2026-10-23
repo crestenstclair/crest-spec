@@ -1,0 +1,7 @@
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/either-e297897a68a9fbbf.d: /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/iterator.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/into_either.rs
+
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/libeither-e297897a68a9fbbf.rmeta: /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/iterator.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/into_either.rs
+
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/lib.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/iterator.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/either-1.16.0/src/into_either.rs:

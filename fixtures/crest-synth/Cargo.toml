@@ -11,5 +11,8 @@ name = "crest-synth"
 path = "src/main.rs"
 
 [dependencies]
-cpal = "=0.15.3"
-coreaudio-sys = "=0.2.16"
+cpal = "0.15"
+
+[dev-dependencies]
+eframe = "0.29"
+midly = "0.5"

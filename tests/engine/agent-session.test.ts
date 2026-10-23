@@ -184,6 +184,86 @@ describe("AgentSession", () => {
     expect(state.getLock()).toBeNull();
   });
 
+  test("commit refuses when validation failed", () => {
+    registry.register(
+      makeResource({
+        id: "vo.K.A",
+        kind: "valueObject",
+        validations: [{ kind: "compiles", command: ["echo", "ok"] }],
+      }),
+    );
+
+    const session = makeSession();
+    const beginResult = session.begin(registry);
+
+    session.dispatch("vo.K.A");
+    session.complete("vo.K.A");
+
+    // Record a failed validation
+    state.setValidationResult(beginResult.applyId, "vo.K.A", false, ["build failed: edition2024 required"]);
+
+    expect(() =>
+      session.commit("vo.K.A", registry, new Map(), "/tmp"),
+    ).toThrow(/Cannot commit.*validation failed/);
+  });
+
+  test("commit refuses when validation was not run on resource with declared validations", () => {
+    registry.register(
+      makeResource({
+        id: "vo.K.A",
+        kind: "valueObject",
+        validations: [{ kind: "compiles", command: ["cargo", "build"] }],
+      }),
+    );
+
+    const session = makeSession();
+    session.begin(registry);
+
+    session.dispatch("vo.K.A");
+    session.complete("vo.K.A");
+
+    expect(() =>
+      session.commit("vo.K.A", registry, new Map(), "/tmp"),
+    ).toThrow(/validation has not been run/);
+  });
+
+  test("commit succeeds when validation passed", () => {
+    registry.register(
+      makeResource({
+        id: "vo.K.A",
+        kind: "valueObject",
+        validations: [{ kind: "compiles", command: ["echo", "ok"] }],
+      }),
+    );
+
+    const session = makeSession();
+    const beginResult = session.begin(registry);
+
+    session.dispatch("vo.K.A");
+    session.complete("vo.K.A");
+
+    state.setValidationResult(beginResult.applyId, "vo.K.A", true, []);
+
+    const result = session.commit("vo.K.A", registry, new Map(), "/tmp");
+    expect(result.committed).toBe(true);
+  });
+
+  test("commit succeeds when resource has no declared validations", () => {
+    registry.register(
+      makeResource({ id: "vo.K.A", kind: "valueObject" }),
+    );
+
+    const session = makeSession();
+    session.begin(registry);
+
+    session.dispatch("vo.K.A");
+    session.complete("vo.K.A");
+
+    // No validations declared, no validation run — should still commit
+    const result = session.commit("vo.K.A", registry, new Map(), "/tmp");
+    expect(result.committed).toBe(true);
+  });
+
   test("finish reports failed status when resources are uncommitted", () => {
     registry.register(makeResource({ id: "vo.K.A", kind: "valueObject" }));
 

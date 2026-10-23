@@ -192,6 +192,7 @@ export class ContextBuilder {
         ...config.meta,
       },
       dependencies,
+      validations: config.validations,
     };
     this.registry.register(descriptor);
   }

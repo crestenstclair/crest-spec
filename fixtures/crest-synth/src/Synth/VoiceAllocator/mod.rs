@@ -1,123 +1,173 @@
-// path: src/Synth/VoiceAllocator/mod.rs
+use crate::kernel::NoteId::NoteId;
+use crate::kernel::NoteNumber::NoteNumber;
+use crate::kernel::Velocity::Velocity;
+use crate::Synth::Voice::{Voice, VoiceEvent};
 
-use crate::Synth::Voice::{NoteOff, NoteOn, Voice, VoiceActivated, VoiceReleased, VoiceStolen};
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AllocationResult {
-    Allocated {
-        index: usize,
-        event: VoiceActivated,
-    },
-    Stolen {
-        index: usize,
-        stolen: VoiceStolen,
-        activated: VoiceActivated,
-    },
+pub struct VoiceAllocator {
+    voices: Vec<Voice>,
+    next_slot: usize,
 }
 
-// ---------------------------------------------------------------------------
-// VoiceAllocator
-// ---------------------------------------------------------------------------
-
-pub struct VoiceAllocator<const N: usize> {
-    voices: [Voice; N],
-    /// Monotonically increasing counter stamped on each allocation.
-    /// The voice with the lowest stamp is the oldest.
-    ages: [u64; N],
-    /// Next stamp to hand out.
-    next_stamp: u64,
-}
-
-impl<const N: usize> VoiceAllocator<N> {
-    /// Creates a pool of `N` idle voices.
-    pub fn new() -> Self {
+impl VoiceAllocator {
+    pub fn new(voice_count: usize) -> Self {
+        let mut voices = Vec::with_capacity(voice_count);
+        for _ in 0..voice_count {
+            voices.push(Voice::new());
+        }
         Self {
-            voices: core::array::from_fn(|_| Voice::new()),
-            ages: [0; N],
-            next_stamp: 1,
+            voices,
+            next_slot: 0,
         }
     }
 
-    /// Assigns `cmd` to an idle voice, or steals the oldest active voice.
-    pub fn allocate(&mut self, cmd: NoteOn) -> AllocationResult {
-        // 1. Prefer an idle voice.
-        if let Some(index) = self.find_idle() {
-            let event = self.voices[index].note_on(cmd);
-            self.stamp(index);
-            return AllocationResult::Allocated { index, event };
+    pub fn note_on(
+        &mut self,
+        note_id: NoteId,
+        note_number: NoteNumber,
+        velocity: Velocity,
+    ) -> (usize, VoiceEvent) {
+        if let Some(idx) = self.find_reclaimable() {
+            let event = self.voices[idx].note_on(note_id, note_number, velocity);
+            return (idx, event);
         }
 
-        // 2. All voices busy -- steal the oldest.
-        let index = self.find_oldest_active();
-        let (stolen, activated) = self.voices[index].steal(cmd);
-        self.stamp(index);
-        AllocationResult::Stolen {
-            index,
-            stolen,
-            activated,
-        }
+        let idx = self.steal_voice();
+        let event = self.voices[idx].note_on(note_id, note_number, velocity);
+        (idx, event)
     }
 
-    /// Releases the voice whose `note_id` matches `cmd`.
-    /// Returns `None` when no voice holds that note.
-    pub fn release(&mut self, cmd: NoteOff) -> Option<VoiceReleased> {
-        for voice in self.voices.iter_mut() {
-            if let Some(released) = voice.note_off(cmd) {
-                return Some(released);
+    pub fn note_off(&mut self, note_id: NoteId) -> Option<(usize, VoiceEvent)> {
+        for (idx, voice) in self.voices.iter_mut().enumerate() {
+            if voice.note_id() == note_id && voice.is_active() {
+                if let Some(event) = voice.note_off(note_id) {
+                    return Some((idx, event));
+                }
             }
         }
         None
     }
 
-    /// Immutable accessor for a voice by index.
-    #[inline]
-    pub fn voice(&self, index: usize) -> &Voice {
-        &self.voices[index]
+    pub fn voices(&self) -> &[Voice] {
+        &self.voices
     }
 
-    /// Mutable accessor for a voice by index.
-    #[inline]
-    pub fn voice_mut(&mut self, index: usize) -> &mut Voice {
-        &mut self.voices[index]
+    pub fn voices_mut(&mut self) -> &mut [Voice] {
+        &mut self.voices
     }
 
-    /// Number of currently active (sounding) voices.
-    pub fn active_count(&self) -> usize {
+    pub fn voice(&self, index: usize) -> Option<&Voice> {
+        self.voices.get(index)
+    }
+
+    pub fn voice_mut(&mut self, index: usize) -> Option<&mut Voice> {
+        self.voices.get_mut(index)
+    }
+
+    pub fn active_voice_count(&self) -> usize {
         self.voices.iter().filter(|v| v.is_active()).count()
     }
 
-    // -- private helpers ------------------------------------------------------
-
-    /// Returns the index of the first idle voice, if any.
-    fn find_idle(&self) -> Option<usize> {
-        self.voices.iter().position(|v| v.is_idle())
+    fn find_reclaimable(&self) -> Option<usize> {
+        self.voices.iter().position(|v| v.is_reclaimable())
     }
 
-    /// Returns the index of the oldest active voice (lowest stamp among active voices).
-    /// Panics if there are no active voices -- callers must check idle first.
-    fn find_oldest_active(&self) -> usize {
-        self.voices
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.is_active())
-            .min_by_key(|(i, _)| self.ages[*i])
-            .map(|(i, _)| i)
-            .expect("find_oldest_active called with no active voices")
-    }
-
-    /// Stamps a voice slot with the current allocation age and advances the counter.
-    fn stamp(&mut self, index: usize) {
-        self.ages[index] = self.next_stamp;
-        self.next_stamp += 1;
+    fn steal_voice(&mut self) -> usize {
+        let idx = self.next_slot % self.voices.len();
+        self.next_slot = (self.next_slot + 1) % self.voices.len();
+        idx
     }
 }
 
-impl<const N: usize> Default for VoiceAllocator<N> {
-    fn default() -> Self {
-        Self::new()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocates_to_idle_voice() {
+        let mut alloc = VoiceAllocator::new(4);
+        let (idx, event) = alloc.note_on(
+            NoteId::new(1),
+            NoteNumber::new(60).unwrap(),
+            Velocity::new(0.8).unwrap(),
+        );
+        assert_eq!(idx, 0);
+        assert!(matches!(event, VoiceEvent::VoiceActivated { .. }));
+        assert_eq!(alloc.active_voice_count(), 1);
+    }
+
+    #[test]
+    fn allocates_sequentially() {
+        let mut alloc = VoiceAllocator::new(4);
+        for i in 0..4 {
+            let (idx, _) = alloc.note_on(
+                NoteId::new(i),
+                NoteNumber::new(60 + i as u8).unwrap(),
+                Velocity::new(0.8).unwrap(),
+            );
+            assert_eq!(idx, i as usize);
+        }
+        assert_eq!(alloc.active_voice_count(), 4);
+    }
+
+    #[test]
+    fn steals_when_full() {
+        let mut alloc = VoiceAllocator::new(2);
+        alloc.note_on(NoteId::new(1), NoteNumber::new(60).unwrap(), Velocity::new(0.8).unwrap());
+        alloc.note_on(NoteId::new(2), NoteNumber::new(62).unwrap(), Velocity::new(0.8).unwrap());
+
+        let (idx, event) = alloc.note_on(
+            NoteId::new(3),
+            NoteNumber::new(64).unwrap(),
+            Velocity::new(0.8).unwrap(),
+        );
+        assert_eq!(idx, 0);
+        assert!(matches!(event, VoiceEvent::VoiceStolen { .. }));
+    }
+
+    #[test]
+    fn note_off_releases_voice() {
+        let mut alloc = VoiceAllocator::new(4);
+        alloc.note_on(NoteId::new(1), NoteNumber::new(60).unwrap(), Velocity::new(0.8).unwrap());
+
+        let result = alloc.note_off(NoteId::new(1));
+        assert!(result.is_some());
+        let (idx, event) = result.unwrap();
+        assert_eq!(idx, 0);
+        assert!(matches!(event, VoiceEvent::VoiceReleased { .. }));
+    }
+
+    #[test]
+    fn note_off_unknown_id_returns_none() {
+        let mut alloc = VoiceAllocator::new(4);
+        alloc.note_on(NoteId::new(1), NoteNumber::new(60).unwrap(), Velocity::new(0.8).unwrap());
+
+        let result = alloc.note_off(NoteId::new(99));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn reuses_finished_voice() {
+        let mut alloc = VoiceAllocator::new(2);
+        alloc.note_on(NoteId::new(1), NoteNumber::new(60).unwrap(), Velocity::new(0.8).unwrap());
+        alloc.note_on(NoteId::new(2), NoteNumber::new(62).unwrap(), Velocity::new(0.8).unwrap());
+
+        alloc.voices_mut()[0].note_off(NoteId::new(1));
+        alloc.voices_mut()[0].finish();
+
+        let (idx, event) = alloc.note_on(
+            NoteId::new(3),
+            NoteNumber::new(64).unwrap(),
+            Velocity::new(0.8).unwrap(),
+        );
+        assert_eq!(idx, 0);
+        assert!(matches!(event, VoiceEvent::VoiceActivated { .. }));
+    }
+
+    #[test]
+    fn voice_accessors() {
+        let alloc = VoiceAllocator::new(4);
+        assert_eq!(alloc.voices().len(), 4);
+        assert!(alloc.voice(0).is_some());
+        assert!(alloc.voice(4).is_none());
     }
 }

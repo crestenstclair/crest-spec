@@ -1,44 +1,60 @@
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Velocity(f64);
 
 impl Velocity {
-    pub fn new(value: f64) -> Result<Self, VelocityError> {
-        if value >= 0.0 && value <= 1.0 {
-            Ok(Self(value))
-        } else {
-            Err(VelocityError::OutOfRange(value))
+    pub fn new(value: f64) -> Result<Self, &'static str> {
+        if !(0.0..=1.0).contains(&value) {
+            return Err("Velocity must be 0.0-1.0");
         }
+        Ok(Self(value))
     }
 
-    pub fn from_midi(midi: u8) -> Result<Self, VelocityError> {
-        if midi > 127 {
-            return Err(VelocityError::InvalidMidiByte(midi));
-        }
-        Ok(Self(midi as f64 / 127.0))
-    }
-
-    #[inline]
     pub fn value(self) -> f64 {
         self.0
     }
 
-    #[inline]
-    pub fn to_midi(self) -> u8 {
-        (self.0 * 127.0).round() as u8
+    pub fn from_midi1(midi_velocity: u8) -> Self {
+        Self(midi_velocity as f64 / 127.0)
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum VelocityError {
-    OutOfRange(f64),
-    InvalidMidiByte(u8),
+impl TryFrom<f64> for Velocity {
+    type Error = &'static str;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
 }
 
-impl core::fmt::Display for VelocityError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::OutOfRange(v) => write!(f, "velocity {v} is out of range [0.0, 1.0]"),
-            Self::InvalidMidiByte(b) => write!(f, "MIDI byte {b} exceeds 127"),
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_velocity() {
+        assert!(Velocity::new(0.0).is_ok());
+        assert!(Velocity::new(0.5).is_ok());
+        assert!(Velocity::new(1.0).is_ok());
+    }
+
+    #[test]
+    fn invalid_velocity() {
+        assert!(Velocity::new(-0.1).is_err());
+        assert!(Velocity::new(1.1).is_err());
+    }
+
+    #[test]
+    fn from_midi1() {
+        let vel = Velocity::from_midi1(127);
+        assert!((vel.value() - 1.0).abs() < f64::EPSILON);
+
+        let vel = Velocity::from_midi1(0);
+        assert!((vel.value()).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn value_accessor() {
+        let vel = Velocity::new(0.75).unwrap();
+        assert!((vel.value() - 0.75).abs() < f64::EPSILON);
     }
 }

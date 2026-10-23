@@ -1,70 +1,20 @@
-use crate::kernel::Amplitude::Amplitude;
-use crate::kernel::Frequency::Frequency;
 use crate::kernel::NoteId::NoteId;
 use crate::kernel::NoteNumber::NoteNumber;
 use crate::kernel::Velocity::Velocity;
+use crate::kernel::Frequency::Frequency;
+use crate::kernel::Amplitude::Amplitude;
 use crate::Synth::EnvelopeStage::EnvelopeStage;
+use crate::Synth::FilterConfig::FilterState;
 
-// ---------------------------------------------------------------------------
-// FilterState (defined here; no pre-existing type)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct FilterState {
-    pub x1: f64,
-    pub x2: f64,
-    pub y1: f64,
-    pub y2: f64,
+#[derive(Debug, Clone)]
+pub enum VoiceEvent {
+    VoiceActivated { note_id: NoteId, note_number: NoteNumber, frequency: Frequency },
+    VoiceReleased { note_id: NoteId },
+    VoiceFinished { note_id: NoteId },
+    VoiceStolen { old_note_id: NoteId, new_note_id: NoteId },
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NoteOn {
-    pub note_id: NoteId,
-    pub note_number: NoteNumber,
-    pub velocity: Velocity,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NoteOff {
-    pub note_id: NoteId,
-}
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoiceActivated {
-    pub note_id: NoteId,
-    pub note_number: NoteNumber,
-    pub frequency: Frequency,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoiceReleased {
-    pub note_id: NoteId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoiceFinished {
-    pub note_id: NoteId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoiceStolen {
-    pub old_note_id: NoteId,
-    pub new_note_id: NoteId,
-}
-
-// ---------------------------------------------------------------------------
-// Voice aggregate
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct Voice {
     note_id: NoteId,
     note_number: NoteNumber,
@@ -78,129 +28,121 @@ pub struct Voice {
 }
 
 impl Voice {
-    /// Creates an idle voice with zeroed state.
     pub fn new() -> Self {
-        // Safe defaults: NoteId(0), NoteNumber(0), Velocity(0.0), Frequency ~8.18 Hz
-        // (A0-equivalent; irrelevant because voice is idle).
         Self {
             note_id: NoteId::new(0),
-            note_number: NoteNumber::new(0).expect("0 is a valid MIDI note"),
-            velocity: Velocity::new(0.0).expect("0.0 is a valid velocity"),
-            frequency: frequency_from_note_number(0),
+            note_number: NoteNumber::new(0).unwrap(),
+            velocity: Velocity::new(0.0).unwrap(),
+            frequency: Frequency::new(440.0).unwrap(),
             oscillator_phase: 0.0,
-            filter_state: FilterState::default(),
+            filter_state: FilterState::new(),
             envelope_stage: EnvelopeStage::Idle,
-            envelope_level: Amplitude::SILENCE,
+            envelope_level: Amplitude::silence(),
             active: false,
         }
     }
 
-    /// Activates the voice for a new note.
-    pub fn note_on(&mut self, cmd: NoteOn) -> VoiceActivated {
-        let freq = frequency_from_note_number(cmd.note_number.value());
+    pub fn note_on(&mut self, note_id: NoteId, note_number: NoteNumber, velocity: Velocity) -> VoiceEvent {
+        let old_active = self.active;
+        let old_note_id = self.note_id;
 
-        self.note_id = cmd.note_id;
-        self.note_number = cmd.note_number;
-        self.velocity = cmd.velocity;
-        self.frequency = freq;
+        let frequency = Frequency::new(note_number.to_frequency()).unwrap();
+        self.note_id = note_id;
+        self.note_number = note_number;
+        self.velocity = velocity;
+        self.frequency = frequency;
         self.oscillator_phase = 0.0;
-        self.filter_state = FilterState::default();
+        self.filter_state = FilterState::new();
         self.envelope_stage = EnvelopeStage::Attack;
-        self.envelope_level = Amplitude::SILENCE;
+        self.envelope_level = Amplitude::silence();
         self.active = true;
 
-        VoiceActivated {
-            note_id: cmd.note_id,
-            note_number: cmd.note_number,
-            frequency: freq,
+        if old_active {
+            VoiceEvent::VoiceStolen {
+                old_note_id,
+                new_note_id: note_id,
+            }
+        } else {
+            VoiceEvent::VoiceActivated {
+                note_id,
+                note_number,
+                frequency,
+            }
         }
     }
 
-    /// Begins the release phase if the note id matches.
-    /// Returns `None` when the ids do not match (the note-off is not for us).
-    pub fn note_off(&mut self, cmd: NoteOff) -> Option<VoiceReleased> {
-        if self.note_id != cmd.note_id {
+    pub fn note_off(&mut self, note_id: NoteId) -> Option<VoiceEvent> {
+        if self.note_id != note_id || !self.active {
             return None;
         }
         self.envelope_stage = EnvelopeStage::Release;
-
-        Some(VoiceReleased {
-            note_id: cmd.note_id,
-        })
+        Some(VoiceEvent::VoiceReleased { note_id })
     }
 
-    /// Whether the voice is currently sounding.
-    #[inline]
-    pub fn is_active(&self) -> bool {
-        self.active
+    pub fn finish(&mut self) -> VoiceEvent {
+        let note_id = self.note_id;
+        self.envelope_stage = EnvelopeStage::Idle;
+        self.envelope_level = Amplitude::silence();
+        self.active = false;
+        VoiceEvent::VoiceFinished { note_id }
     }
 
-    /// Whether the envelope has returned to `Idle` (voice is reclaimable).
-    #[inline]
-    pub fn is_idle(&self) -> bool {
-        self.envelope_stage == EnvelopeStage::Idle
-    }
-
-    /// Steals the voice for a new note, returning both a stolen event
-    /// (for the old note) and an activated event (for the new note).
-    pub fn steal(&mut self, cmd: NoteOn) -> (VoiceStolen, VoiceActivated) {
-        let old_note_id = self.note_id;
-        let activated = self.note_on(cmd);
-
-        let stolen = VoiceStolen {
-            old_note_id,
-            new_note_id: cmd.note_id,
-        };
-
-        (stolen, activated)
-    }
-
-    // -- accessors (read-only) ------------------------------------------------
-
-    #[inline]
     pub fn note_id(&self) -> NoteId {
         self.note_id
     }
 
-    #[inline]
     pub fn note_number(&self) -> NoteNumber {
         self.note_number
     }
 
-    #[inline]
     pub fn velocity(&self) -> Velocity {
         self.velocity
     }
 
-    #[inline]
     pub fn frequency(&self) -> Frequency {
         self.frequency
     }
 
-    #[inline]
     pub fn oscillator_phase(&self) -> f64 {
         self.oscillator_phase
     }
 
-    #[inline]
-    pub fn filter_state(&self) -> FilterState {
-        self.filter_state
+    pub fn set_oscillator_phase(&mut self, phase: f64) {
+        self.oscillator_phase = phase;
     }
 
-    #[inline]
+    pub fn filter_state(&self) -> &FilterState {
+        &self.filter_state
+    }
+
+    pub fn filter_state_mut(&mut self) -> &mut FilterState {
+        &mut self.filter_state
+    }
+
     pub fn envelope_stage(&self) -> EnvelopeStage {
         self.envelope_stage
     }
 
-    #[inline]
+    pub fn set_envelope_stage(&mut self, stage: EnvelopeStage) {
+        self.envelope_stage = stage;
+    }
+
     pub fn envelope_level(&self) -> Amplitude {
         self.envelope_level
     }
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+    pub fn set_envelope_level(&mut self, level: Amplitude) {
+        self.envelope_level = level;
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub fn is_reclaimable(&self) -> bool {
+        self.envelope_stage == EnvelopeStage::Idle
+    }
+}
 
 impl Default for Voice {
     fn default() -> Self {
@@ -208,28 +150,107 @@ impl Default for Voice {
     }
 }
 
-impl Default for NoteOn {
-    fn default() -> Self {
-        Self {
-            note_id: NoteId::new(0),
-            note_number: NoteNumber::new(0).expect("0 is valid"),
-            velocity: Velocity::new(0.0).expect("0.0 is valid"),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_note_id() -> NoteId {
+        NoteId::new(1)
+    }
+
+    fn test_note_number() -> NoteNumber {
+        NoteNumber::new(69).unwrap()
+    }
+
+    fn test_velocity() -> Velocity {
+        Velocity::new(0.8).unwrap()
+    }
+
+    #[test]
+    fn new_voice_is_idle() {
+        let voice = Voice::new();
+        assert!(!voice.is_active());
+        assert_eq!(voice.envelope_stage(), EnvelopeStage::Idle);
+        assert!(voice.is_reclaimable());
+    }
+
+    #[test]
+    fn note_on_activates() {
+        let mut voice = Voice::new();
+        let event = voice.note_on(test_note_id(), test_note_number(), test_velocity());
+
+        assert!(voice.is_active());
+        assert_eq!(voice.envelope_stage(), EnvelopeStage::Attack);
+        assert_eq!(voice.note_id(), test_note_id());
+        assert!(!voice.is_reclaimable());
+
+        match event {
+            VoiceEvent::VoiceActivated { note_id, .. } => {
+                assert_eq!(note_id, test_note_id());
+            }
+            _ => panic!("expected VoiceActivated"),
         }
     }
-}
 
-impl Default for NoteOff {
-    fn default() -> Self {
-        Self {
-            note_id: NoteId::new(0),
+    #[test]
+    fn note_on_while_active_steals() {
+        let mut voice = Voice::new();
+        voice.note_on(NoteId::new(1), test_note_number(), test_velocity());
+
+        let event = voice.note_on(NoteId::new(2), NoteNumber::new(72).unwrap(), test_velocity());
+        match event {
+            VoiceEvent::VoiceStolen { old_note_id, new_note_id } => {
+                assert_eq!(old_note_id, NoteId::new(1));
+                assert_eq!(new_note_id, NoteId::new(2));
+            }
+            _ => panic!("expected VoiceStolen"),
         }
     }
-}
 
-/// Converts a MIDI note number to Hz using equal-temperament tuning.
-/// `440.0 * 2^((note - 69) / 12)`
-#[inline]
-fn frequency_from_note_number(note: u8) -> Frequency {
-    let hz = 440.0 * 2.0_f64.powf((note as f64 - 69.0) / 12.0);
-    Frequency::new(hz).expect("MIDI note always produces positive frequency")
+    #[test]
+    fn note_off_enters_release() {
+        let mut voice = Voice::new();
+        voice.note_on(test_note_id(), test_note_number(), test_velocity());
+
+        let event = voice.note_off(test_note_id());
+        assert!(event.is_some());
+        assert_eq!(voice.envelope_stage(), EnvelopeStage::Release);
+        assert!(voice.is_active());
+    }
+
+    #[test]
+    fn note_off_wrong_id_ignored() {
+        let mut voice = Voice::new();
+        voice.note_on(NoteId::new(1), test_note_number(), test_velocity());
+
+        let event = voice.note_off(NoteId::new(99));
+        assert!(event.is_none());
+        assert_eq!(voice.envelope_stage(), EnvelopeStage::Attack);
+    }
+
+    #[test]
+    fn finish_returns_to_idle() {
+        let mut voice = Voice::new();
+        voice.note_on(test_note_id(), test_note_number(), test_velocity());
+        voice.note_off(test_note_id());
+
+        let event = voice.finish();
+        assert!(!voice.is_active());
+        assert_eq!(voice.envelope_stage(), EnvelopeStage::Idle);
+        assert!(voice.is_reclaimable());
+
+        match event {
+            VoiceEvent::VoiceFinished { note_id } => {
+                assert_eq!(note_id, test_note_id());
+            }
+            _ => panic!("expected VoiceFinished"),
+        }
+    }
+
+    #[test]
+    fn frequency_derived_from_note_number() {
+        let mut voice = Voice::new();
+        voice.note_on(test_note_id(), NoteNumber::new(69).unwrap(), test_velocity());
+        assert!((voice.frequency().value() - 440.0).abs() < 0.01);
+    }
 }

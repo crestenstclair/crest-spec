@@ -1,45 +1,48 @@
-use core::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MidiGroup(u8);
 
 impl MidiGroup {
-    pub const MIN: u8 = 0;
-    pub const MAX: u8 = 15;
-
-    #[inline]
-    pub const fn new(value: u8) -> Result<Self, u8> {
-        if value <= Self::MAX {
-            Ok(Self(value))
-        } else {
-            Err(value)
+    pub fn new(value: u8) -> Result<Self, &'static str> {
+        if value > 15 {
+            return Err("MidiGroup must be 0-15");
         }
+        Ok(Self(value))
     }
 
-    #[inline]
-    pub const fn get(self) -> u8 {
+    pub fn value(self) -> u8 {
         self.0
     }
 }
 
 impl TryFrom<u8> for MidiGroup {
-    type Error = u8;
+    type Error = &'static str;
 
-    #[inline]
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Self::new(value)
     }
 }
 
-impl From<MidiGroup> for u8 {
-    #[inline]
-    fn from(group: MidiGroup) -> u8 {
-        group.0
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl fmt::Display for MidiGroup {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+    #[test]
+    fn valid_group() {
+        for i in 0..=15 {
+            let group = MidiGroup::new(i).unwrap();
+            assert_eq!(group.value(), i);
+        }
+    }
+
+    #[test]
+    fn invalid_group() {
+        assert!(MidiGroup::new(16).is_err());
+        assert!(MidiGroup::new(255).is_err());
+    }
+
+    #[test]
+    fn try_from() {
+        let group: MidiGroup = 5u8.try_into().unwrap();
+        assert_eq!(group.value(), 5);
     }
 }

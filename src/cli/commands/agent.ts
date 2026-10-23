@@ -223,6 +223,146 @@ export async function agentCommand(
     }
   }
 
+  if (subcommand === "dispatch") {
+    const resourceId = args[0];
+    if (!resourceId) {
+      jsonError("Usage: crest-spec agent dispatch <resource-id>");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const result = session.dispatch(resourceId);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "complete") {
+    const resourceId = args[0];
+    if (!resourceId) {
+      jsonError("Usage: crest-spec agent complete <resource-id>");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const result = session.complete(resourceId);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "block") {
+    const resourceId = args[0];
+    const contextStr = args.slice(1).join(" ");
+    if (!resourceId || !contextStr) {
+      jsonError("Usage: crest-spec agent block <resource-id> <json-context>");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const context = JSON.parse(contextStr);
+      const result = session.block(resourceId, context);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "error") {
+    const resourceId = args[0];
+    const contextStr = args.slice(1).join(" ");
+    if (!resourceId || !contextStr) {
+      jsonError("Usage: crest-spec agent error <resource-id> <json-context>");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const context = JSON.parse(contextStr);
+      const result = session.error(resourceId, context);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "timeout") {
+    const resourceId = args[0];
+    if (!resourceId) {
+      jsonError("Usage: crest-spec agent timeout <resource-id>");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const result = session.timeout(resourceId);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "reject") {
+    const resourceId = args[0];
+    const errorsStr = args.slice(1).join(" ");
+    if (!resourceId) {
+      jsonError("Usage: crest-spec agent reject <resource-id> [errors-json]");
+      return 1;
+    }
+
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const errors = errorsStr ? JSON.parse(errorsStr) : [];
+      const result = session.reject(resourceId, Array.isArray(errors) ? errors : [errors]);
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
+  if (subcommand === "status") {
+    const session = buildSessionFromActive(state, modelId, projectDir);
+    if (!session) return 1;
+
+    try {
+      const result = session.status();
+      jsonOut(result);
+      return 0;
+    } catch (e) {
+      jsonError(e instanceof Error ? e.message : String(e));
+      return 1;
+    }
+  }
+
   if (subcommand === "finish") {
     const session = buildSessionFromActive(state, modelId, projectDir);
     if (!session) return 1;
@@ -237,7 +377,7 @@ export async function agentCommand(
     }
   }
 
-  jsonError(`Unknown agent subcommand: ${subcommand}. Valid: begin, next, context, validate, note, commit, finish`);
+  jsonError(`Unknown agent subcommand: ${subcommand}. Valid: begin, next, context, validate, dispatch, complete, block, error, reject, timeout, status, note, commit, finish`);
   return 1;
 }
 

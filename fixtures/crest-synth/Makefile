@@ -1,4 +1,4 @@
-.PHONY: build test check clean run
+.PHONY: build test check clean run test-gui test-midi
 
 build:
 	cargo build
@@ -14,3 +14,9 @@ clean:
 
 run:
 	cargo run
+
+test-gui:
+	cargo run --example test_gui
+
+test-midi:
+	cargo run --example midi_playback

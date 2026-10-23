@@ -1,0 +1,7 @@
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/potential_utf-0a0a42ed7beca82c.d: /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/uchar.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/ustr.rs
+
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/libpotential_utf-0a0a42ed7beca82c.rmeta: /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/uchar.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/ustr.rs
+
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/lib.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/uchar.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.75.0/registry/src/index.crates.io-1949cf8c6b5b557f/potential_utf-0.1.5/src/ustr.rs:

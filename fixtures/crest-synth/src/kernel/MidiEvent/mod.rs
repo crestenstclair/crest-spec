@@ -1,19 +1,18 @@
-use crate::kernel::MidiChannel::MidiChannel;
 use crate::kernel::MidiGroup::MidiGroup;
+use crate::kernel::MidiChannel::MidiChannel;
 use crate::kernel::NoteId::NoteId;
 use crate::kernel::NoteNumber::NoteNumber;
 use crate::kernel::Velocity::Velocity;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MidiEventKind {
     NoteOn,
     NoteOff,
     ControlChange,
     PitchBend,
-    Aftertouch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct MidiEvent {
     pub group: MidiGroup,
     pub channel: MidiChannel,
@@ -24,87 +23,82 @@ pub struct MidiEvent {
     pub value: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum MidiEventError {
-    InvalidGroup(u8),
-    InvalidChannel,
-    InvalidNoteNumber(u8),
-    InvalidVelocity(f64),
-}
-
 impl MidiEvent {
-    pub fn new(
+    pub fn note_on(
         group: MidiGroup,
         channel: MidiChannel,
         note_id: NoteId,
-        kind: MidiEventKind,
         note_number: NoteNumber,
         velocity: Velocity,
-        value: f64,
     ) -> Self {
         Self {
             group,
             channel,
             note_id,
-            kind,
+            kind: MidiEventKind::NoteOn,
             note_number,
             velocity,
-            value,
+            value: 0.0,
         }
     }
 
-    pub fn try_new(
-        group_raw: u8,
-        channel_raw: u8,
-        note_id_raw: u32,
-        kind: MidiEventKind,
-        note_number_raw: u8,
-        velocity_raw: f64,
-        value: f64,
-    ) -> Result<Self, MidiEventError> {
-        let group = MidiGroup::new(group_raw).map_err(MidiEventError::InvalidGroup)?;
-        let channel = MidiChannel::new(channel_raw).map_err(|_| MidiEventError::InvalidChannel)?;
-        let note_id = NoteId::new(note_id_raw);
-        let note_number =
-            NoteNumber::new(note_number_raw).map_err(|_| MidiEventError::InvalidNoteNumber(note_number_raw))?;
-        let velocity = Velocity::new(velocity_raw).map_err(|_| MidiEventError::InvalidVelocity(velocity_raw))?;
-
-        Ok(Self::new(
+    pub fn note_off(
+        group: MidiGroup,
+        channel: MidiChannel,
+        note_id: NoteId,
+        note_number: NoteNumber,
+    ) -> Self {
+        Self {
             group,
             channel,
             note_id,
-            kind,
+            kind: MidiEventKind::NoteOff,
             note_number,
-            velocity,
-            value,
-        ))
+            velocity: Velocity::new(0.0).unwrap(),
+            value: 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_group() -> MidiGroup {
+        MidiGroup::new(0).unwrap()
     }
 
-    pub fn group(&self) -> MidiGroup {
-        self.group
+    fn test_channel() -> MidiChannel {
+        MidiChannel::new(0).unwrap()
     }
 
-    pub fn channel(&self) -> MidiChannel {
-        self.channel
+    fn test_note_number() -> NoteNumber {
+        NoteNumber::new(60).unwrap()
     }
 
-    pub fn note_id(&self) -> NoteId {
-        self.note_id
+    #[test]
+    fn note_on_event() {
+        let event = MidiEvent::note_on(
+            test_group(),
+            test_channel(),
+            NoteId::new(1),
+            test_note_number(),
+            Velocity::new(0.8).unwrap(),
+        );
+        assert_eq!(event.kind, MidiEventKind::NoteOn);
+        assert_eq!(event.note_number.value(), 60);
+        assert!((event.velocity.value() - 0.8).abs() < f64::EPSILON);
     }
 
-    pub fn kind(&self) -> MidiEventKind {
-        self.kind
-    }
-
-    pub fn note_number(&self) -> NoteNumber {
-        self.note_number
-    }
-
-    pub fn velocity(&self) -> Velocity {
-        self.velocity
-    }
-
-    pub fn value(&self) -> f64 {
-        self.value
+    #[test]
+    fn note_off_event() {
+        let event = MidiEvent::note_off(
+            test_group(),
+            test_channel(),
+            NoteId::new(1),
+            test_note_number(),
+        );
+        assert_eq!(event.kind, MidiEventKind::NoteOff);
+        assert!((event.velocity.value()).abs() < f64::EPSILON);
     }
 }

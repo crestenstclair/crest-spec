@@ -1,12 +1,10 @@
-use std::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MidiChannel(u8);
 
 impl MidiChannel {
-    pub fn new(value: u8) -> Result<Self, MidiChannelError> {
+    pub fn new(value: u8) -> Result<Self, &'static str> {
         if value > 15 {
-            return Err(MidiChannelError::OutOfRange(value));
+            return Err("MidiChannel must be 0-15");
         }
         Ok(Self(value))
     }
@@ -17,38 +15,34 @@ impl MidiChannel {
 }
 
 impl TryFrom<u8> for MidiChannel {
-    type Error = MidiChannelError;
+    type Error = &'static str;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Self::new(value)
     }
 }
 
-impl From<MidiChannel> for u8 {
-    fn from(channel: MidiChannel) -> u8 {
-        channel.0
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl fmt::Display for MidiChannel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MidiChannelError {
-    OutOfRange(u8),
-}
-
-impl fmt::Display for MidiChannelError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MidiChannelError::OutOfRange(v) => {
-                write!(f, "MIDI channel {} is out of range (must be 0-15)", v)
-            }
+    #[test]
+    fn valid_channel() {
+        for i in 0..=15 {
+            let ch = MidiChannel::new(i).unwrap();
+            assert_eq!(ch.value(), i);
         }
     }
-}
 
-impl std::error::Error for MidiChannelError {}
+    #[test]
+    fn invalid_channel() {
+        assert!(MidiChannel::new(16).is_err());
+        assert!(MidiChannel::new(255).is_err());
+    }
+
+    #[test]
+    fn try_from() {
+        let ch: MidiChannel = 10u8.try_into().unwrap();
+        assert_eq!(ch.value(), 10);
+    }
+}

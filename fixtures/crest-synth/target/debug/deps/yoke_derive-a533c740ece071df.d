@@ -1,0 +1,7 @@
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/yoke_derive-a533c740ece071df.d: /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lifetimes.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/visitor.rs
+
+/Users/crestenstclair/workspace/krusty-spec/.worktrees/feat-subagent-cli/fixtures/crest-synth/target/debug/deps/libyoke_derive-a533c740ece071df.dylib: /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lib.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lifetimes.rs /Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/visitor.rs
+
+/Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lib.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/lifetimes.rs:
+/Users/crestenstclair/.local/share/mise/installs/rust/1.96.0/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.2/src/visitor.rs:

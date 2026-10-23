@@ -166,3 +166,40 @@ modulation.asset("ModulationMod", {
   description: "src/Modulation/mod.rs module declarations for Modulation context",
   prompts: ["File path: src/Modulation/mod.rs", "Declare modules for: PerNoteExpression, ModSourceType, ModDestinationType, LfoConfig, ModEnvelopeConfig, ModMatrix, ModRouting, ModulationProcessor"],
 });
+
+// ── Main Binary ────────────────────────────────────────
+
+app.asset("MainRs", {
+  kind: "rust-binary",
+  description: "src/main.rs — WAV-render and real-time playback demo using VoiceAllocator + AudioRenderer<impl SynthEngine>",
+  prompts: [
+    "File path: src/main.rs",
+    "Import from crate: kernel::{NoteId, NoteNumber, Velocity, SampleRate, AudioFrame}, Synth::{AudioRenderer, VoiceAllocator, SynthEngine, Voice, OscillatorConfig, FilterConfig, EnvelopeStage}, Shell::{AudioOutput, CpalAudioOutput}",
+    "Implement a concrete SynthEngine (SimpleSineEngine) that renders a sine wave using the voice's note_number for frequency. Use voice.note_on / voice.note_off / voice.envelope_stage() for lifecycle. Compute frequency as 440.0 * 2.0^((note - 69) / 12). Track phase per-voice in a side HashMap<NoteId, f64> or similar.",
+    "Build a WavWriter struct identical to the existing one (RIFF/WAV header, stereo i16 PCM).",
+    "Build run_wav_mode(): create VoiceAllocator(8), AudioRenderer::new(engine, osc_config, filter_config). Trigger C4-E4-G4 arpeggio at 44100 Hz / 256 block size / 3 seconds. Use allocator.note_on/note_off + renderer.render(allocator.voices_mut(), &mut buffer). Write tone-test.wav.",
+    "Build run_realtime_mode(): same arpeggio but output via CpalAudioOutput.open_stream / write_buffer. Sleep 3s at end.",
+    "fn main() dispatches --wav vs default to the two modes.",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build"] },
+  ],
+});
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 5 GUI test: display ModMatrix routing and expression debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 5 test'",
+    "Heading: 'Phase 5: Modulation — Routing Matrix'",
+    "Create instances of ModMatrix with a few ModRouting entries (LFO->Pitch, Envelope->Cutoff)",
+    "Create instances of LfoConfig, ModEnvelopeConfig, PerNoteExpression",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

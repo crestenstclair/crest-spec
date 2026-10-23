@@ -15,10 +15,13 @@ describe("ResourceRegistry", () => {
     expect(registry.getById("aggregate.Comp.Song")).toEqual(r);
   });
 
-  test("register throws on duplicate ID", () => {
-    const r = makeResource({ id: "aggregate.Comp.Song" });
-    registry.register(r);
-    expect(() => registry.register(r)).toThrow("Duplicate resource ID");
+  test("register upserts on duplicate ID", () => {
+    const r1 = makeResource({ id: "aggregate.Comp.Song", declaration: { version: 1 } });
+    const r2 = makeResource({ id: "aggregate.Comp.Song", declaration: { version: 2 } });
+    registry.register(r1);
+    registry.register(r2);
+    expect(registry.getById("aggregate.Comp.Song")).toEqual(r2);
+    expect(registry.getAll()).toHaveLength(1);
   });
 
   test("getById returns null for unknown ID", () => {

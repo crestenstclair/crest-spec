@@ -2,6 +2,7 @@
 
 pub mod MidiGroup;
 pub mod MidiChannel;
+pub mod ChannelAddress;
 pub mod NoteId;
 pub mod NoteNumber;
 pub mod Velocity;

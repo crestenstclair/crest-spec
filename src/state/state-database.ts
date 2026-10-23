@@ -12,6 +12,8 @@ import type {
   LockRecord,
   AgentSessionRecord,
   AgentNoteRecord,
+  AgentResourceStateRecord,
+  SubAgentState,
 } from "./types.js";
 
 export interface IStateDatabase {
@@ -56,6 +58,11 @@ export interface IStateDatabase {
   getAgentNotes(resourceId: string): AgentNoteRecord[];
   getAgentNotesForApply(resourceId: string, applyId: number): AgentNoteRecord[];
   getLatestAgentNotes(resourceId: string): AgentNoteRecord[];
+
+  setResourceState(applyId: number, resourceId: string, state: SubAgentState, contextJson?: string | null): void;
+  setValidationResult(applyId: number, resourceId: string, passed: boolean, errors: string[]): void;
+  getResourceState(applyId: number, resourceId: string): AgentResourceStateRecord | null;
+  getResourceStatesForApply(applyId: number): AgentResourceStateRecord[];
 }
 
 export class StateDatabase implements IStateDatabase {
@@ -366,5 +373,50 @@ export class StateDatabase implements IStateDatabase {
          ORDER BY n.created_at`,
       )
       .all(resourceId, resourceId) as AgentNoteRecord[];
+  }
+
+  setResourceState(applyId: number, resourceId: string, state: SubAgentState, contextJson?: string | null): void {
+    this.db
+      .query(
+        `INSERT INTO agent_resource_states (apply_id, resource_id, state, context_json, updated_at)
+         VALUES ($apply_id, $resource_id, $state, $context_json, $updated_at)
+         ON CONFLICT(apply_id, resource_id) DO UPDATE SET
+           state = $state, context_json = $context_json, updated_at = $updated_at`,
+      )
+      .run({
+        $apply_id: applyId,
+        $resource_id: resourceId,
+        $state: state,
+        $context_json: contextJson ?? null,
+        $updated_at: new Date().toISOString(),
+      });
+  }
+
+  setValidationResult(applyId: number, resourceId: string, passed: boolean, errors: string[]): void {
+    this.db
+      .query(
+        `UPDATE agent_resource_states
+         SET validation_passed = $passed, validation_errors = $errors, updated_at = $updated_at
+         WHERE apply_id = $apply_id AND resource_id = $resource_id`,
+      )
+      .run({
+        $apply_id: applyId,
+        $resource_id: resourceId,
+        $passed: passed ? 1 : 0,
+        $errors: errors.length > 0 ? JSON.stringify(errors) : null,
+        $updated_at: new Date().toISOString(),
+      });
+  }
+
+  getResourceState(applyId: number, resourceId: string): AgentResourceStateRecord | null {
+    return this.db
+      .query("SELECT * FROM agent_resource_states WHERE apply_id = ? AND resource_id = ?")
+      .get(applyId, resourceId) as AgentResourceStateRecord | null;
+  }
+
+  getResourceStatesForApply(applyId: number): AgentResourceStateRecord[] {
+    return this.db
+      .query("SELECT * FROM agent_resource_states WHERE apply_id = ? ORDER BY resource_id")
+      .all(applyId) as AgentResourceStateRecord[];
   }
 }

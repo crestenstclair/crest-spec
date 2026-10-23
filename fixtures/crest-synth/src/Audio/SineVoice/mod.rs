@@ -1,56 +1,35 @@
-use std::f64::consts::PI;
-
-use crate::kernel::AudioFrame::AudioFrame;
 use crate::kernel::NoteId::NoteId;
 use crate::kernel::NoteNumber::NoteNumber;
 use crate::kernel::Velocity::Velocity;
+use crate::kernel::AudioFrame::AudioFrame;
+use crate::kernel::SampleRate::SampleRate;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SineVoiceError {
-    FrequencyNotPositive,
-    VoiceAlreadyActive { note_id: NoteId },
-    VoiceNotActive { note_id: NoteId },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SineVoiceEvent {
-    VoiceStarted { note_id: NoteId, frequency: f64 },
-    VoiceStopped { note_id: NoteId },
-}
-
-#[derive(Debug, Clone)]
-pub struct NoteOnCommand {
-    pub note_id: NoteId,
-    pub note_number: NoteNumber,
-    pub velocity: Velocity,
-}
-
-#[derive(Debug, Clone)]
-pub struct NoteOffCommand {
-    pub note_id: NoteId,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SineVoice {
     note_id: NoteId,
     note_number: NoteNumber,
     frequency: f64,
     phase: f64,
+    amplitude: f64,
     active: bool,
-    sample_rate: f64,
-    velocity: f64,
+}
+
+#[derive(Debug, Clone)]
+pub enum SineVoiceEvent {
+    VoiceStarted { note_id: NoteId, frequency: f64 },
+    VoiceStopped { note_id: NoteId },
 }
 
 impl SineVoice {
-    pub fn new(sample_rate: f64) -> Self {
+    pub fn new(note_id: NoteId, note_number: NoteNumber, velocity: Velocity) -> Self {
+        let frequency = note_number.to_frequency();
         Self {
-            note_id: NoteId::new(0),
-            note_number: NoteNumber::new(0).unwrap(),
-            frequency: 440.0,
+            note_id,
+            note_number,
+            frequency,
             phase: 0.0,
-            active: false,
-            sample_rate,
-            velocity: 0.0,
+            amplitude: velocity.value(),
+            active: true,
         }
     }
 
@@ -58,90 +37,104 @@ impl SineVoice {
         self.note_id
     }
 
-    pub fn frequency(&self) -> f64 {
-        self.frequency
+    pub fn note_number(&self) -> NoteNumber {
+        self.note_number
     }
 
-    pub fn phase(&self) -> f64 {
-        self.phase
+    pub fn frequency(&self) -> f64 {
+        self.frequency
     }
 
     pub fn is_active(&self) -> bool {
         self.active
     }
 
-    pub fn sample_rate(&self) -> f64 {
-        self.sample_rate
-    }
-
-    pub fn handle_note_on(
-        &mut self,
-        cmd: NoteOnCommand,
-    ) -> Result<Vec<SineVoiceEvent>, SineVoiceError> {
-        if self.active && self.note_id == cmd.note_id {
-            return Err(SineVoiceError::VoiceAlreadyActive {
-                note_id: cmd.note_id,
-            });
-        }
-
-        let note_number_raw = cmd.note_number.value() as f64;
-        let frequency = 440.0 * 2.0_f64.powf((note_number_raw - 69.0) / 12.0);
-
-        if frequency <= 0.0 {
-            return Err(SineVoiceError::FrequencyNotPositive);
-        }
-
-        self.note_id = cmd.note_id;
-        self.note_number = cmd.note_number;
-        self.frequency = frequency;
-        self.phase = 0.0;
-        self.active = true;
-        self.velocity = cmd.velocity.value();
-
-        Ok(vec![SineVoiceEvent::VoiceStarted {
-            note_id: cmd.note_id,
-            frequency,
-        }])
-    }
-
-    pub fn handle_note_off(
-        &mut self,
-        cmd: NoteOffCommand,
-    ) -> Result<Vec<SineVoiceEvent>, SineVoiceError> {
-        if !self.active || self.note_id != cmd.note_id {
-            return Err(SineVoiceError::VoiceNotActive {
-                note_id: cmd.note_id,
-            });
-        }
-
+    pub fn note_off(&mut self) -> SineVoiceEvent {
         self.active = false;
-        let stopped_id = self.note_id;
-
-        Ok(vec![SineVoiceEvent::VoiceStopped {
-            note_id: stopped_id,
-        }])
+        SineVoiceEvent::VoiceStopped { note_id: self.note_id }
     }
 
-    #[inline]
-    pub fn render_sample(&mut self) -> AudioFrame {
+    pub fn render(&mut self, sample_rate: SampleRate) -> AudioFrame {
         if !self.active {
-            return AudioFrame {
-                left: 0.0,
-                right: 0.0,
-            };
+            return AudioFrame::silence();
         }
 
-        let sample = (self.phase.sin() * self.velocity) as f32;
-
-        let phase_increment = 2.0 * PI * self.frequency / self.sample_rate;
-        self.phase += phase_increment;
-        if self.phase >= 2.0 * PI {
-            self.phase -= 2.0 * PI;
+        let sample = (self.phase * 2.0 * std::f64::consts::PI).sin() * self.amplitude;
+        self.phase += self.frequency / sample_rate.value() as f64;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
         }
 
-        AudioFrame {
-            left: sample,
-            right: sample,
+        let s = sample as f32;
+        AudioFrame::new(s, s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_voice() -> SineVoice {
+        SineVoice::new(
+            NoteId::new(1),
+            NoteNumber::new(69).unwrap(),
+            Velocity::new(1.0).unwrap(),
+        )
+    }
+
+    #[test]
+    fn new_voice_is_active() {
+        let voice = make_voice();
+        assert!(voice.is_active());
+        assert_eq!(voice.note_id(), NoteId::new(1));
+        assert!((voice.frequency() - 440.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn note_off_deactivates() {
+        let mut voice = make_voice();
+        let event = voice.note_off();
+        assert!(!voice.is_active());
+        match event {
+            SineVoiceEvent::VoiceStopped { note_id } => {
+                assert_eq!(note_id, NoteId::new(1));
+            }
+            _ => panic!("expected VoiceStopped"),
         }
+    }
+
+    #[test]
+    fn render_produces_nonzero_output() {
+        let mut voice = make_voice();
+        let sr = SampleRate::new(44100).unwrap();
+        let mut has_nonzero = false;
+        for _ in 0..100 {
+            let frame = voice.render(sr);
+            if frame.left.abs() > 0.001 {
+                has_nonzero = true;
+                break;
+            }
+        }
+        assert!(has_nonzero);
+    }
+
+    #[test]
+    fn render_silence_when_inactive() {
+        let mut voice = make_voice();
+        voice.note_off();
+        let sr = SampleRate::new(44100).unwrap();
+        let frame = voice.render(sr);
+        assert_eq!(frame.left, 0.0);
+        assert_eq!(frame.right, 0.0);
+    }
+
+    #[test]
+    fn phase_wraps() {
+        let mut voice = make_voice();
+        let sr = SampleRate::new(44100).unwrap();
+        for _ in 0..44100 {
+            voice.render(sr);
+        }
+        assert!(voice.phase >= 0.0 && voice.phase < 1.0);
     }
 }

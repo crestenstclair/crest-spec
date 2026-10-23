@@ -64,6 +64,21 @@ export interface ContextRelationship {
   direction?: "upstream" | "downstream" | "both";
 }
 
+export interface ValidationAssertion {
+  kind: "exit_code" | "file_exists" | "file_not_empty" | "stdout_contains" | "stderr_empty" | "file_matches";
+  expected?: number;
+  path?: string;
+  pattern?: string;
+  regex?: string;
+}
+
+export interface ValidationDeclaration {
+  kind: "compiles" | "test" | "integration" | "custom";
+  command: string[];
+  description?: string;
+  assertions?: ValidationAssertion[];
+}
+
 export interface ResourceDescriptor {
   id: string;
   kind: ResourceKind;
@@ -76,6 +91,7 @@ export interface ResourceDescriptor {
   commands?: CommandDescriptor[];
   events?: EventDescriptor[];
   invariants?: string[];
+  validations?: ValidationDeclaration[];
 }
 
 export interface ProjectConfig {
@@ -174,5 +190,6 @@ export interface AssetDeclaration {
   targets?: ResourceRef[];
   prompts?: string[];
   references?: string[];
+  validations?: ValidationDeclaration[];
   meta?: Meta;
 }

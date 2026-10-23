@@ -230,6 +230,7 @@ app.asset("RootCargoToml", {
   prompts: [
     "Package name: crest-synth, version 0.1.0",
     "Dependencies likely needed: cpal (audio output), midir (MIDI input), eframe/egui (GUI), gilrs (gamepad), fundsp (effects DSP), serde + serde_json (preset serialization)",
+    "eframe is already a regular dependency; no separate dev-dependency needed for examples",
   ],
 });
 
@@ -285,4 +286,22 @@ app.asset("SerdePresetCodecAdapter", {
   kind: "rust-module-declaration",
   description: "SerdePresetCodec adapter: JSON/bincode preset serialization",
   prompts: ["File path: src/adapters/serde_preset_codec.rs", "Implement PresetCodec port using serde_json and bincode"],
+});
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 9 GUI test: display gamepad navigation and full engine state debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 9 test'",
+    "Heading: 'Phase 9: Shell — Gamepad UX'",
+    "Create instances of GamepadAction, ControllerGlyph from Shell context",
+    "Create a Patch instance with a ModMatrix and an EffectChain showing full signal path",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
 });

@@ -156,6 +156,7 @@ app.asset("RootCargoToml", {
     "Package name: crest-synth, version 0.1.0",
     "Dependencies: cpal (audio output — cross-platform via CoreAudio/WASAPI/ALSA)",
     "Include [[bin]] section: name = \"crest-synth\", path = \"src/main.rs\"",
+    "Dev-dependencies: eframe = \"0.29\" (for GUI test examples)",
   ],
 });
 
@@ -213,5 +214,23 @@ app.asset("ToneTestMain", {
     "  - Keep the existing behavior: render to memory and write tone-test.wav",
     "  - Use the pure-Rust WAV writer (no external crates)",
     "Parse args with std::env::args (no clap dependency needed)",
+  ],
+});
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 3 GUI test: display RealTime boundary types debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 3 test'",
+    "Heading: 'Phase 3: RealTime — Lock-Free Boundary'",
+    "Create instances of BoundaryMessage, ParameterSnapshot from RealTime",
+    "Create instances of OscillatorConfig, FilterConfig, AmpEnvelopeConfig to populate the snapshot",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
   ],
 });

@@ -150,3 +150,21 @@ synth.asset("SynthMod", {
     "Declare modules for: EnvelopeStage, OscillatorConfig, FilterConfig, AmpEnvelopeConfig, Voice, SynthEngine, VoiceAllocator, AudioRenderer",
   ],
 });
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 2 GUI test: display polyphonic Voice and synth config debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 2 test'",
+    "Heading: 'Phase 2: Synth — Polyphonic Engine'",
+    "Create instances of OscillatorConfig, FilterConfig, AmpEnvelopeConfig, EnvelopeStage from Synth",
+    "Create a Voice instance showing active polyphony state",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
+});

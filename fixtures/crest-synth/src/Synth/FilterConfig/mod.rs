@@ -1,52 +1,32 @@
-use std::fmt;
-
 use crate::kernel::Frequency::Frequency;
 
-const MIN_AUDIBLE_HZ: f64 = 20.0;
-const MAX_AUDIBLE_HZ: f64 = 20_000.0;
-
-/// Resonant filter type selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterType {
     LowPass,
     HighPass,
     BandPass,
 }
 
-impl fmt::Display for FilterType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LowPass => write!(f, "LowPass"),
-            Self::HighPass => write!(f, "HighPass"),
-            Self::BandPass => write!(f, "BandPass"),
-        }
+impl Default for FilterType {
+    fn default() -> Self {
+        FilterType::LowPass
     }
 }
 
-/// Resonant filter parameters.
-///
-/// Invariants:
-/// - `resonance` must be in `[0.0, 1.0]`
-/// - `cutoff` must be within the audible range (20 Hz - 20 kHz)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilterConfig {
-    cutoff: Frequency,
-    resonance: f64,
-    filter_type: FilterType,
+    pub cutoff: Frequency,
+    pub resonance: f64,
+    pub filter_type: FilterType,
 }
 
 impl FilterConfig {
-    pub fn new(
-        cutoff: Frequency,
-        resonance: f64,
-        filter_type: FilterType,
-    ) -> Result<Self, FilterConfigError> {
-        let hz = cutoff.value();
-        if hz < MIN_AUDIBLE_HZ || hz > MAX_AUDIBLE_HZ {
-            return Err(FilterConfigError::CutoffOutOfAudibleRange(hz));
+    pub fn new(cutoff: Frequency, resonance: f64, filter_type: FilterType) -> Result<Self, &'static str> {
+        if !(0.0..=1.0).contains(&resonance) {
+            return Err("resonance must be 0.0-1.0");
         }
-        if resonance < 0.0 || resonance > 1.0 {
-            return Err(FilterConfigError::ResonanceOutOfRange(resonance));
+        if cutoff.value() < 20.0 || cutoff.value() > 20000.0 {
+            return Err("cutoff must be within audible range");
         }
         Ok(Self {
             cutoff,
@@ -54,27 +34,6 @@ impl FilterConfig {
             filter_type,
         })
     }
-
-    #[inline]
-    pub fn cutoff(self) -> Frequency {
-        self.cutoff
-    }
-
-    #[inline]
-    pub fn resonance(self) -> f64 {
-        self.resonance
-    }
-
-    #[inline]
-    pub fn filter_type(self) -> FilterType {
-        self.filter_type
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum FilterConfigError {
-    ResonanceOutOfRange(f64),
-    CutoffOutOfAudibleRange(f64),
 }
 
 impl Default for FilterConfig {
@@ -82,20 +41,77 @@ impl Default for FilterConfig {
         Self {
             cutoff: Frequency::new(1000.0).unwrap(),
             resonance: 0.0,
-            filter_type: FilterType::LowPass,
+            filter_type: FilterType::default(),
         }
     }
 }
 
-impl fmt::Display for FilterConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ResonanceOutOfRange(v) => {
-                write!(f, "resonance {v} is out of range [0.0, 1.0]")
-            }
-            Self::CutoffOutOfAudibleRange(hz) => {
-                write!(f, "cutoff {hz} Hz is outside audible range [20.0, 20000.0]")
-            }
-        }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterState {
+    pub y1: f64,
+    pub y2: f64,
+}
+
+impl FilterState {
+    pub fn new() -> Self {
+        Self { y1: 0.0, y2: 0.0 }
+    }
+}
+
+impl Default for FilterState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_config() {
+        let cutoff = Frequency::new(1000.0).unwrap();
+        let config = FilterConfig::new(cutoff, 0.5, FilterType::LowPass).unwrap();
+        assert!((config.resonance - 0.5).abs() < f64::EPSILON);
+        assert_eq!(config.filter_type, FilterType::LowPass);
+    }
+
+    #[test]
+    fn rejects_resonance_below_zero() {
+        let cutoff = Frequency::new(1000.0).unwrap();
+        assert!(FilterConfig::new(cutoff, -0.1, FilterType::LowPass).is_err());
+    }
+
+    #[test]
+    fn rejects_resonance_above_one() {
+        let cutoff = Frequency::new(1000.0).unwrap();
+        assert!(FilterConfig::new(cutoff, 1.1, FilterType::LowPass).is_err());
+    }
+
+    #[test]
+    fn rejects_cutoff_below_audible() {
+        let cutoff = Frequency::new(10.0).unwrap();
+        assert!(FilterConfig::new(cutoff, 0.5, FilterType::LowPass).is_err());
+    }
+
+    #[test]
+    fn rejects_cutoff_above_audible() {
+        let cutoff = Frequency::new(25000.0).unwrap();
+        assert!(FilterConfig::new(cutoff, 0.5, FilterType::LowPass).is_err());
+    }
+
+    #[test]
+    fn default_config() {
+        let config = FilterConfig::default();
+        assert!((config.cutoff.value() - 1000.0).abs() < f64::EPSILON);
+        assert!((config.resonance).abs() < f64::EPSILON);
+        assert_eq!(config.filter_type, FilterType::LowPass);
+    }
+
+    #[test]
+    fn filter_state_default() {
+        let state = FilterState::new();
+        assert!((state.y1).abs() < f64::EPSILON);
+        assert!((state.y2).abs() < f64::EPSILON);
     }
 }

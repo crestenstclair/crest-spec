@@ -252,6 +252,7 @@ app.asset("RootCargoToml", {
   prompts: [
     "Package name: crest-synth, version 0.1.0",
     "Dependencies likely needed: cpal (audio output), midir (MIDI input), eframe/egui (GUI), gilrs (gamepad), fundsp (effects DSP), serde + serde_json (preset serialization), nih-plug (plugin hosting framework)",
+    "eframe is already a regular dependency; no separate dev-dependency needed for examples",
   ],
 });
 
@@ -271,4 +272,22 @@ plugin.asset("PluginMod", {
   kind: "rust-module-declaration",
   description: "src/Plugin/mod.rs module declarations for Plugin context",
   prompts: ["File path: src/Plugin/mod.rs", "Declare modules for: PluginFormat, ParameterId, ParameterRange, PluginHost, PluginInstance, PluginParameter, PluginShell"],
+});
+
+// ── GUI Test ───────────────────────────────────────────
+
+app.asset("PhaseTestGui", {
+  kind: "rust-gui-test",
+  description: "Phase 10 GUI test: display Plugin parameter mapping debug info",
+  prompts: [
+    "File path: examples/test_gui.rs",
+    "Window title: 'crest-synth phase 10 test'",
+    "Heading: 'Phase 10: Plugin — CLAP/VST3 Wrapper'",
+    "Create instances of PluginInstance, PluginParameter, ParameterRange, PluginFormat from Plugin context",
+    "Show a parameter mapping table with 3-4 parameters (gain, cutoff, resonance, attack)",
+    "Display each with Debug formatting using ui.monospace(format!(\"{:#?}\", value))",
+  ],
+  validations: [
+    { kind: "compiles", command: ["cargo", "build", "--example", "test_gui"] },
+  ],
 });
